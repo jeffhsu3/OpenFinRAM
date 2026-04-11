@@ -235,7 +235,55 @@ bool run_spice_simulation_verification(
 }
 
 void consolidate_output_artifacts(uint64_t test_num_bits, uint64_t num_stacked_rows, uint64_t num_mux) {
-    consolidate_output_artifacts(test_num_bits, num_stacked_rows, num_mux);
+    // Make directory for results
+    std::string results_dir = "results";
+    if (!directory_exists(results_dir) && !create_directory(results_dir, nullptr)) {
+        LOGW << "Failed to create results directory: " << results_dir;
+    } else {
+        LOGI << "Results directory created: " << results_dir;
+    }
+
+    // Move tmp/innovus/ctrl_decode.gds.tmp to results/{timestamp}/sramx{}.gds
+    std::string timestamp = get_current_timestamp();
+    std::string output_gds_path = join_path("tmp/innovus", "ctrl_decode.gds.tmp");
+    std::string final_gds_name = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows) + "x" + std::to_string(num_mux) + ".gds";
+    std::string final_gds_path = join_path(join_path(results_dir, timestamp), final_gds_name);
+    if (!directory_exists(join_path(results_dir, timestamp)) && !create_directory(join_path(results_dir, timestamp), nullptr)) {
+        LOGW << "Failed to create timestamped results directory: " << join_path(results_dir, timestamp);
+    } else {
+        if (std::rename(output_gds_path.c_str(), final_gds_path.c_str()) != 0) {
+            LOGW << "Failed to move generated GDS file to final location: " << final_gds_path;
+        } else {
+            LOGI << "Generated GDS file moved to: " << final_gds_path;
+        }
+    }
+
+    // ========================================================================
+    // 展開 SRAM SPICE netlist 的 .inc/.include，輸出為 sram_flat.sp
+    // ========================================================================
+    {
+        const std::string input_sp = join_path(get_current_dir_name(), "sram.sp");
+        const std::string output_sp = join_path(get_current_dir_name(), "sram_flat.sp");
+        std::string error;
+
+        LOGI << "Expanding SPICE includes: " << input_sp << " -> " << output_sp;
+
+        if (!SpiceIncludeResolver::resolve_to_file(input_sp, output_sp, error)) {
+            LOGW << "Failed to expand SPICE includes: " << error;
+        } else {
+            LOGI << "Successfully generated flat SPICE netlist: " << output_sp;
+        }
+    }
+
+    // Move sram_flat.sp to results/{timestamp}/sramx{}.sp
+    std::string output_sp_path = "sram_flat.sp";
+    std::string final_sp_name = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows) + "x" + std::to_string(num_mux) + ".sp";
+    std::string final_sp_path = join_path(join_path(results_dir, timestamp), final_sp_name);
+    if (std::rename(output_sp_path.c_str(), final_sp_path.c_str()) != 0) {
+        LOGW << "Failed to move generated SP file to final location: " << final_sp_path;
+    } else {
+        LOGI << "Generated SP file moved to: " << final_sp_path;
+    }
 }
 }  // namespace
 
@@ -4891,55 +4939,7 @@ int main(int argc, char **argv) {
         LOGW << "Failed to read GDS file or no cells found";
     }
 
-    // Make directory for results
-    std::string results_dir = "results";
-    if (!directory_exists(results_dir) && !create_directory(results_dir, nullptr)) {
-        LOGW << "Failed to create results directory: " << results_dir;
-    } else {
-        LOGI << "Results directory created: " << results_dir;
-    }
-
-    // Move tmp/innovus/ctrl_decode.gds.tmp to results/{timestamp}/sramx{}.gds
-    std::string timestamp = get_current_timestamp();
-    std::string output_gds_path = join_path("tmp/innovus", "ctrl_decode.gds.tmp");
-    std::string final_gds_name = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows) + "x" + std::to_string(num_mux) + ".gds";
-    std::string final_gds_path = join_path(join_path(results_dir, timestamp), final_gds_name);
-    if (!directory_exists(join_path(results_dir, timestamp)) && !create_directory(join_path(results_dir, timestamp), nullptr)) {
-        LOGW << "Failed to create timestamped results directory: " << join_path(results_dir, timestamp);
-    } else {
-        if (std::rename(output_gds_path.c_str(), final_gds_path.c_str()) != 0) {
-            LOGW << "Failed to move generated GDS file to final location: " << final_gds_path;
-        } else {
-            LOGI << "Generated GDS file moved to: " << final_gds_path;
-        }
-    }
-
-    // ========================================================================
-    // 展開 SRAM SPICE netlist 的 .inc/.include，輸出為 sram_flat.sp
-    // ========================================================================
-    {
-        const std::string input_sp = join_path(get_current_dir_name(), "sram.sp");
-        const std::string output_sp = join_path(get_current_dir_name(), "sram_flat.sp");
-        std::string error;
-
-        LOGI << "Expanding SPICE includes: " << input_sp << " -> " << output_sp;
-
-        if (!SpiceIncludeResolver::resolve_to_file(input_sp, output_sp, error)) {
-            LOGW << "Failed to expand SPICE includes: " << error;
-        } else {
-            LOGI << "Successfully generated flat SPICE netlist: " << output_sp;
-        }
-    }
-
-    // Move sram_flat.sp to results/{timestamp}/sramx{}.sp
-    std::string output_sp_path = "sram_flat.sp";
-    std::string final_sp_name = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows) + "x" + std::to_string(num_mux) + ".sp";
-    std::string final_sp_path = join_path(join_path(results_dir, timestamp), final_sp_name);
-    if (std::rename(output_sp_path.c_str(), final_sp_path.c_str()) != 0) {
-        LOGW << "Failed to move generated SP file to final location: " << final_sp_path;
-    } else {
-        LOGI << "Generated SP file moved to: " << final_sp_path;
-    }
+    consolidate_output_artifacts(test_num_bits, num_stacked_rows, num_mux);
 
     // // ========================================================================
     // // Run LVS (create lvs folder, generate _run_control.svrf, run calibre)
