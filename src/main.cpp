@@ -96,6 +96,27 @@ bool remove_directory_recursive(const std::string& path, std::string* error) {
     return true;
 }
 
+bool update_bisection_on_failure(
+    uint64_t base_delay_cnt,
+    uint64_t max_buffer_cnt,
+    uint64_t best_pass_buffer,
+    uint64_t& low_buffer,
+    uint64_t high_buffer,
+    bool& force_best_run,
+    const char* failure_reason) {
+    if (base_delay_cnt >= max_buffer_cnt && best_pass_buffer == 0) {
+        LOGE << "Bisection failed: max_buffer_cnt=" << max_buffer_cnt << " also failed";
+        return false;
+    }
+
+    low_buffer = base_delay_cnt + 1;
+    if (low_buffer > high_buffer && best_pass_buffer > 0) {
+        force_best_run = true;
+    }
+    LOGW << "Bisection update: " << failure_reason << ", new range = [" << low_buffer << ", " << high_buffer << "]";
+    return true;
+}
+
 bool run_spice_simulation_verification(
     bool run_verification,
     bool use_random_mode,
@@ -2973,15 +2994,16 @@ int main(int argc, char **argv) {
             num_wl);
 
         if (run_verification && !verification_passed) {
-            if (base_delay_cnt >= max_buffer_cnt && best_pass_buffer == 0) {
-                LOGE << "Bisection failed: max_buffer_cnt=" << max_buffer_cnt << " also failed";
+            if (!update_bisection_on_failure(
+                    base_delay_cnt,
+                    max_buffer_cnt,
+                    best_pass_buffer,
+                    low_buffer,
+                    high_buffer,
+                    force_best_run,
+                    "verification failed")) {
                 return 1;
             }
-            low_buffer = base_delay_cnt + 1;
-            if (low_buffer > high_buffer && best_pass_buffer > 0) {
-                force_best_run = true;
-            }
-            LOGW << "Bisection update: verification failed, new range = [" << low_buffer << ", " << high_buffer << "]";
             continue;
         }
 
@@ -2994,15 +3016,16 @@ int main(int argc, char **argv) {
         bool sis_ok = run_siliconsmart_and_check(attempt, test_num_bits, num_stacked_rows, addr_width);
         if (!sis_ok) {
             LOGW << "SiliconSmart reported errors (found 'Error:   Task' in log).";
-            if (base_delay_cnt >= max_buffer_cnt && best_pass_buffer == 0) {
-                LOGE << "Bisection failed: max_buffer_cnt=" << max_buffer_cnt << " also failed";
+            if (!update_bisection_on_failure(
+                    base_delay_cnt,
+                    max_buffer_cnt,
+                    best_pass_buffer,
+                    low_buffer,
+                    high_buffer,
+                    force_best_run,
+                    "SiliconSmart failed")) {
                 return 1;
             }
-            low_buffer = base_delay_cnt + 1;
-            if (low_buffer > high_buffer && best_pass_buffer > 0) {
-                force_best_run = true;
-            }
-            LOGW << "Bisection update: SiliconSmart failed, new range = [" << low_buffer << ", " << high_buffer << "]";
             continue;
         }
 
