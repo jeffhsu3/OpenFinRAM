@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 
+#include "cell_utils.hpp"
 #include "gdstk/gdstk.hpp"
 #include "layermap.hpp"
 
@@ -92,3 +93,16 @@ void create_and_add_sram_filler_cells(
     gdstk::Library& sram_filler_lib,
     uint64_t test_num_bits,
     const OpenFinRAM::LayerMap& layer_map);
+
+void run_sram_gds_integration_and_writeback(
+    gdstk::Library& gds_lib,
+    const std::string& gds_path,
+    gdstk::Cell* sram_array,
+    gdstk::Cell* filler_cgedge,
+    gdstk::Cell* io_colgrp,
+    const OpenFinRAM::CellSize& sram_cell_size,
+    uint64_t test_num_bits,
+    uint64_t num_stacked_rows,
+    uint64_t addr_width,
+    uint64_t num_mux,
+    const OpenFinRAM::LayerMap& g_layer_map);
