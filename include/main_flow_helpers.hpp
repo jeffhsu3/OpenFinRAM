@@ -1,6 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+
+#include "gdstk/gdstk.hpp"
+#include "layermap.hpp"
 
 bool decide_base_delay_count(
     bool run_verification,
@@ -50,3 +54,31 @@ bool run_or_predict_pex(
     bool run_actual_pex,
     uint64_t test_num_bits,
     uint64_t num_stacked_rows);
+
+void run_synthesis_stage(
+    uint64_t attempt,
+    uint64_t addr_width,
+    uint64_t test_num_bits,
+    uint64_t num_mux,
+    uint64_t delay_prech_cnt,
+    uint64_t base_delay_cnt,
+    uint64_t num_stacked_rows,
+    bool run_verification,
+    uint64_t low_buffer,
+    uint64_t high_buffer,
+    bool pex_success);
+
+void run_spice_conversion_stage();
+
+void run_innovus_stage(
+    gdstk::Cell* stacked_colgrp,
+    uint64_t test_num_bits,
+    uint64_t addr_width,
+    uint64_t num_mux,
+    const OpenFinRAM::LayerMap& layer_map);
+
+void run_sram_integration_stage(
+    uint64_t addr_width,
+    uint64_t num_stacked_rows,
+    uint64_t test_num_bits,
+    uint64_t num_mux);

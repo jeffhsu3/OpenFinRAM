@@ -1,9 +1,14 @@
 #include "main_flow_helpers.hpp"
 
+#include "cell_utils.hpp"
+#include "innovus_tcl_generator.hpp"
 #include "pex_runner.hpp"
 #include "siliconsmart_generator.hpp"
+#include "spice_converter.hpp"
 #include "spice_include_resolver.hpp"
+#include "spice_integrator.hpp"
 #include "spice_simulator.hpp"
+#include "synthesis_manager.hpp"
 #include "utils.hpp"
 
 #include "plog/Log.h"
@@ -408,6 +413,277 @@ bool run_siliconsmart_and_check(
     }
 
     return !sis_has_error;
+}
+
+void run_synthesis_stage(
+    uint64_t attempt,
+    uint64_t addr_width,
+    uint64_t test_num_bits,
+    uint64_t num_mux,
+    uint64_t delay_prech_cnt,
+    uint64_t base_delay_cnt,
+    uint64_t num_stacked_rows,
+    bool run_verification,
+    uint64_t low_buffer,
+    uint64_t high_buffer,
+    bool pex_success) {
+    LOGI << "\n========================================";
+    LOGI << "Starting Design Compiler Synthesis";
+    LOGI << "Attempt: " << attempt;
+    LOGI << "  delay_prech_cnt = " << delay_prech_cnt;
+    LOGI << "  delay_wl_cnt    = " << base_delay_cnt;
+    LOGI << "  delay_sense_cnt = " << base_delay_cnt;
+    LOGI << "  delay_write_cnt = " << base_delay_cnt;
+    if (run_verification) {
+        LOGI << "  bisection range = [" << low_buffer << ", " << high_buffer << "]";
+        LOGI << "  bisection mid   = " << base_delay_cnt;
+    }
+    LOGI << "========================================\n";
+
+    SynthesisConfig synth_config(
+        addr_width,
+        test_num_bits,
+        num_mux,
+        delay_prech_cnt,
+        base_delay_cnt,
+        base_delay_cnt,
+        base_delay_cnt);
+
+    synth_config.verilog_path = join_path(get_current_dir_name(), "tech/verilog");
+    synth_config.syn_path = join_path(get_current_dir_name(), "tmp/verilog");
+    synth_config.output_path = join_path(get_current_dir_name(), "tmp/verilog");
+
+    SynthesisManager synth_manager(synth_config);
+
+    if (pex_success) {
+        std::string rep_file = "pex/rep.txt";
+
+        LOGI << "\n========================================";
+        LOGI << "Loading Capacitance from PEX Results";
+        LOGI << "========================================\n";
+        LOGI << "Rep file: " << rep_file;
+
+        if (synth_manager.load_capacitance_from_pex(rep_file)) {
+            LOGI << "Successfully loaded capacitance data from PEX";
+            LOGI << "Synthesis will use PEX-extracted load values";
+        } else {
+            LOGW << "Failed to load PEX capacitance data";
+            LOGW << "Falling back to statistical prediction...";
+
+            if (synth_manager.predict_capacitance(test_num_bits * 2, num_stacked_rows)) {
+                LOGI << "Successfully predicted capacitance using regression model";
+            } else {
+                LOGW << "Failed to predict capacitance, synthesis will use default values";
+            }
+        }
+    } else {
+        LOGI << "\n========================================";
+        LOGI << "Using Statistical Capacitance Prediction";
+        LOGI << "========================================\n";
+
+        int bit_num = test_num_bits * 2;
+        int stacked = num_stacked_rows;
+
+        LOGI << "Configuration for prediction:";
+        LOGI << "  bit_num = " << bit_num << " (test_num_bits=" << test_num_bits << " * 2)";
+        LOGI << "  stacked = " << stacked;
+
+        if (synth_manager.predict_capacitance(bit_num, stacked)) {
+            LOGI << "\n✓ Successfully predicted capacitance using regression model";
+            LOGI << "  Model accuracy: R² > 0.87 for all signals";
+            LOGI << "  Synthesis will use predicted load values";
+            LOGI << "\nNote: For most accurate results, consider running actual PEX";
+            LOGI << "      and updating the regression model with new data points.";
+        } else {
+            LOGW << "Failed to predict capacitance";
+            LOGW << "Synthesis will proceed with default load values";
+        }
+    }
+
+    LOGI << "\n========================================";
+    LOGI << "Running Design Compiler Synthesis";
+    LOGI << "========================================\n";
+
+    if (!synth_manager.run_synthesis()) {
+        LOGW << "Synthesis flow completed with warnings/errors. Check logs for details.";
+    } else {
+        LOGI << "Synthesis flow completed successfully!";
+    }
+}
+
+void run_spice_conversion_stage() {
+    LOGI << "\n========================================";
+    LOGI << "Starting Verilog to SPICE Conversion";
+    LOGI << "========================================\n";
+
+    SpiceConversionConfig conv_config(
+        join_path(get_current_dir_name(), "tmp/verilog"),
+        join_path(get_current_dir_name(), "tmp/verilog"));
+
+    conv_config.netlist_v = join_path(get_current_dir_name(), "tmp/verilog/netlist.v");
+    conv_config.netlist_sp = join_path(get_current_dir_name(), "tmp/verilog/netlist.sp");
+    conv_config.cdl_file = join_path(get_current_dir_name(), "tech/cdl/asap7sc7p5t_28_R.cdl");
+
+    SpiceConverter converter(conv_config);
+    if (!converter.convert_to_spice()) {
+        LOGW << "SPICE conversion flow completed with warnings/errors. Check logs for details.";
+    } else {
+        LOGI << "SPICE conversion flow completed successfully!";
+    }
+}
+
+void run_innovus_stage(
+    gdstk::Cell* stacked_colgrp,
+    uint64_t test_num_bits,
+    uint64_t addr_width,
+    uint64_t num_mux,
+    const OpenFinRAM::LayerMap& layer_map) {
+    if (stacked_colgrp != nullptr) {
+        LOGI << "";
+        LOGI << "========================================================================";
+        LOGI << "Generating Innovus TCL Script for Control Logic P&R";
+        LOGI << "========================================================================";
+
+        OpenFinRAM::CellSize stacked_size = OpenFinRAM::get_cell_size(stacked_colgrp, layer_map);
+
+        if (!stacked_size.valid) {
+            LOGW << "Cannot get stacked_colgrp size from BOUNDARY, using bounding box";
+            gdstk::Vec2 bb_min, bb_max;
+            stacked_colgrp->bounding_box(bb_min, bb_max);
+            stacked_size.min = bb_min;
+            stacked_size.max = bb_max;
+            stacked_size.width = bb_max.x - bb_min.x;
+            stacked_size.height = bb_max.y - bb_min.y;
+            stacked_size.valid = true;
+        }
+
+        double sram_width = stacked_size.width - 0.054 * 2;
+        LOGI << "SRAM (stacked_colgrp) width (w. margin): " << sram_width << " um";
+        LOGI << "SRAM (stacked_colgrp) height: " << stacked_size.height << " um";
+
+        OpenFinRAM::InnovusTclGenerator tcl_gen;
+
+        tcl_gen.set_design_name("ctrl_decode");
+        tcl_gen.set_site_name("asap7sc7p5t");
+        tcl_gen.set_site_height(0.27);
+        tcl_gen.set_cpu_count(8, 0);
+
+        std::string qor_file = join_path(get_current_dir_name(), "tmp/verilog/qor_report.txt");
+        bool qor_parsed = tcl_gen.parse_qor_report(qor_file);
+
+        if (qor_parsed) {
+            std::string output_tcl = join_path(get_current_dir_name(), "tmp/innovus/ctrl_run.tcl");
+            int num_ysel = 4;
+
+            if (tcl_gen.generate_run_tcl(sram_width, 0.0, output_tcl,
+                                         test_num_bits, test_num_bits, num_ysel, addr_width, num_mux)) {
+                LOGI << "";
+                LOGI << "✓ Successfully generated Innovus TCL script: " << output_tcl;
+                LOGI << "  Design: ctrl_decode";
+                LOGI << "  Floorplan width: " << sram_width << " um (matches stacked_colgrp)";
+
+                const OpenFinRAM::QoRReport& qor = tcl_gen.get_qor_report();
+                double calculated_height = tcl_gen.calculate_floorplan_height(sram_width);
+                LOGI << "  Floorplan height: " << calculated_height << " um (auto-calculated)";
+                LOGI << "  Cell area: " << qor.cell_area << " um^2";
+                LOGI << "  Utilization: " << (qor.cell_area / (sram_width * calculated_height) * 100.0) << " %";
+                LOGI << "";
+
+                LOGI << "========================================================================";
+                LOGI << "Running Innovus for Place & Route...";
+                LOGI << "========================================================================";
+
+                std::string work_dir = join_path(get_current_dir_name(), "tmp/innovus");
+                std::string log_file = "ctrl_decode_innovus.log";
+
+                if (tcl_gen.run_innovus(output_tcl, work_dir, log_file)) {
+                    LOGI << "";
+                    LOGI << "✓ Innovus execution completed successfully";
+                    LOGI << "  Check output files in: " << work_dir;
+                    LOGI << "  Log file: " << work_dir << "/" << log_file;
+                    LOGI << "";
+
+                    LOGI << "========================================================================";
+                    LOGI << "Running v2lvs for Verilog to SPICE conversion...";
+                    LOGI << "========================================================================";
+
+                    if (tcl_gen.run_v2lvs(work_dir)) {
+                        LOGI << "";
+                        LOGI << "✓ v2lvs execution completed successfully";
+                        LOGI << "  Generated SPICE netlist: " << work_dir << "/netlist_for_lvs.sp";
+                        LOGI << "";
+
+                        LOGI << "========================================================================";
+                        LOGI << "Post-processing SPICE netlist...";
+                        LOGI << "========================================================================";
+
+                        std::string cdl_file = join_path(get_current_dir_name(), "tech/cdl/asap7sc7p5t_28_R.cdl");
+
+                        if (tcl_gen.post_process_netlist(work_dir, "netlist_for_lvs.sp", cdl_file)) {
+                            LOGI << "";
+                            LOGI << "✓ Netlist post-processing completed successfully";
+                            LOGI << "  Processed netlist: " << work_dir << "/netlist_for_lvs.sp";
+                            LOGI << "  - Merged continuation lines";
+                            LOGI << "  - Added VDD VSS to SUBCKT definitions";
+                            LOGI << "  - Expanded $PINS format";
+                            LOGI << "  - Processed .CONNECT directives";
+                            LOGI << "";
+                        } else {
+                            LOGW << "Netlist post-processing failed";
+                            LOGW << "The netlist may not be properly formatted for LVS";
+                        }
+                    } else {
+                        LOGW << "v2lvs execution failed";
+                        LOGW << "Please check if netlist_for_lvs.v exists in: " << work_dir;
+                    }
+                } else {
+                    LOGW << "Innovus execution failed";
+                    LOGW << "Please check log file: " << work_dir << "/" << log_file;
+                }
+            } else {
+                LOGW << "Failed to generate Innovus TCL script";
+            }
+        } else {
+            LOGW << "QoR report not found or invalid: " << qor_file;
+            LOGW << "Skipping Innovus TCL generation";
+            LOGW << "Please run synthesis first to generate QoR report";
+        }
+
+        LOGI << "========================================================================";
+        LOGI << "";
+    } else {
+        LOGW << "Stacked colgrp not created, skipping Innovus TCL generation";
+    }
+}
+
+void run_sram_integration_stage(
+    uint64_t addr_width,
+    uint64_t num_stacked_rows,
+    uint64_t test_num_bits,
+    uint64_t num_mux) {
+    LOGI << "\n========================================";
+    LOGI << "Starting SRAM Integration";
+    LOGI << "========================================\n";
+
+    SramIntegrationConfig integ_config(
+        addr_width,
+        num_stacked_rows,
+        test_num_bits,
+        num_mux);
+
+    integ_config.ctrl_netlist = join_path(get_current_dir_name(), "tmp/innovus/netlist_for_lvs.sp");
+    integ_config.datapath_netlist = "./sram_colgrp.sp";
+    integ_config.output_netlist = "./sram.sp";
+
+    SpiceIntegrator integrator(integ_config);
+    std::string integrated_sram = integrator.integrate_sram("sram.sp");
+
+    if (integrated_sram.empty()) {
+        LOGW << "SRAM integration completed with warnings/errors. Check logs for details.";
+    } else {
+        LOGI << "SRAM integration completed successfully!";
+        LOGI << "Generated integrated SRAM netlist: " << integrated_sram;
+    }
 }
 
 bool run_or_predict_pex(

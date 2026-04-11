@@ -2219,288 +2219,33 @@ int main(int argc, char **argv) {
 
         // delay_prech_cnt = std::max<uint64_t>(1, base_delay_cnt / 10);  // 10 倍差距
 
+        run_synthesis_stage(
+            attempt,
+            addr_width,
+            test_num_bits,
+            num_mux,
+            delay_prech_cnt,
+            base_delay_cnt,
+            num_stacked_rows,
+            run_verification,
+            low_buffer,
+            high_buffer,
+            pex_success);
 
-        LOGI << "\n========================================";
-        LOGI << "Starting Design Compiler Synthesis";
-        LOGI << "Attempt: " << attempt;
-        LOGI << "  delay_prech_cnt = " << delay_prech_cnt;
-        LOGI << "  delay_wl_cnt    = " << base_delay_cnt;
-        LOGI << "  delay_sense_cnt = " << base_delay_cnt;
-        LOGI << "  delay_write_cnt = " << base_delay_cnt;
-        if (run_verification) {
-            LOGI << "  bisection range = [" << low_buffer << ", " << high_buffer << "]";
-            LOGI << "  bisection mid   = " << base_delay_cnt;
-        }
-        LOGI << "========================================\n";
+        run_spice_conversion_stage();
 
-        // 建立合成配置
-        SynthesisConfig synth_config(
-            addr_width,                     // ADDR_WIDTH (動態計算)
-            test_num_bits,                  // NUM_WLT (adjusted based on test_num_bits)
-            num_mux,                        // MUX_RATIO
-            delay_prech_cnt,                // delay_prech_cnt
-            base_delay_cnt,                 // delay_wl_cnt
-            base_delay_cnt,                 // delay_sense_cnt
-            base_delay_cnt                  // delay_write_cnt
-        );
+        run_innovus_stage(
+            stacked_colgrp,
+            test_num_bits,
+            addr_width,
+            num_mux,
+            g_layer_map);
 
-        // 設定路徑
-        synth_config.verilog_path = join_path(get_current_dir_name(), "tech/verilog");
-        synth_config.syn_path = join_path(get_current_dir_name(), "tmp/verilog");
-        synth_config.output_path = join_path(get_current_dir_name(), "tmp/verilog");
-
-        // 建立合成管理器
-        SynthesisManager synth_manager(synth_config);
-
-        // ========================================================================
-        // 載入電容值: PEX vs 統計預測
-        // ========================================================================
-        if (pex_success) {
-            // 方案 A: 從實際 PEX 結果載入電容值（最精確）
-            std::string rep_file = "pex/rep.txt";
-
-            LOGI << "\n========================================";
-            LOGI << "Loading Capacitance from PEX Results";
-            LOGI << "========================================\n";
-            LOGI << "Rep file: " << rep_file;
-
-            if (synth_manager.load_capacitance_from_pex(rep_file)) {
-                LOGI << "Successfully loaded capacitance data from PEX";
-                LOGI << "Synthesis will use PEX-extracted load values";
-            } else {
-                LOGW << "Failed to load PEX capacitance data";
-                LOGW << "Falling back to statistical prediction...";
-
-                // PEX 載入失敗，改用統計預測
-                if (synth_manager.predict_capacitance(test_num_bits * 2, num_stacked_rows)) {
-                    LOGI << "Successfully predicted capacitance using regression model";
-                } else {
-                    LOGW << "Failed to predict capacitance, synthesis will use default values";
-                }
-            }
-        } else {
-            // 方案 B: 使用統計回歸模型預測電容值（快速）
-            LOGI << "\n========================================";
-            LOGI << "Using Statistical Capacitance Prediction";
-            LOGI << "========================================\n";
-
-            // 參數說明:
-            // - bit_num: test_num_bits * 2 (因為有 2 bits per column)
-            // - stacked: num_stacked_rows (垂直堆疊層數)
-            int bit_num = test_num_bits * 2;
-            int stacked = num_stacked_rows;
-
-            LOGI << "Configuration for prediction:";
-            LOGI << "  bit_num = " << bit_num << " (test_num_bits=" << test_num_bits << " * 2)";
-            LOGI << "  stacked = " << stacked;
-
-            if (synth_manager.predict_capacitance(bit_num, stacked)) {
-                LOGI << "\n✓ Successfully predicted capacitance using regression model";
-                LOGI << "  Model accuracy: R² > 0.87 for all signals";
-                LOGI << "  Synthesis will use predicted load values";
-                LOGI << "\nNote: For most accurate results, consider running actual PEX";
-                LOGI << "      and updating the regression model with new data points.";
-            } else {
-                LOGW << "Failed to predict capacitance";
-                LOGW << "Synthesis will proceed with default load values";
-            }
-        }
-
-        // 執行合成
-        LOGI << "\n========================================";
-        LOGI << "Running Design Compiler Synthesis";
-        LOGI << "========================================\n";
-
-        if (!synth_manager.run_synthesis()) {
-            LOGW << "Synthesis flow completed with warnings/errors. Check logs for details.";
-        } else {
-            LOGI << "Synthesis flow completed successfully!";
-        }
-
-        // ========================================================================
-        // 開始 Verilog 到 SPICE 轉換流程
-        // ========================================================================
-        LOGI << "\n========================================";
-        LOGI << "Starting Verilog to SPICE Conversion";
-        LOGI << "========================================\n";
-
-        // 建立轉換配置
-        SpiceConversionConfig conv_config(
-            join_path(get_current_dir_name(), "tmp/verilog"),
-            join_path(get_current_dir_name(), "tmp/verilog")
-        );
-
-        conv_config.netlist_v = join_path(get_current_dir_name(), "tmp/verilog/netlist.v");
-        conv_config.netlist_sp = join_path(get_current_dir_name(), "tmp/verilog/netlist.sp");
-        conv_config.cdl_file = join_path(get_current_dir_name(), "tech/cdl/asap7sc7p5t_28_R.cdl");
-
-        // 建立轉換器並執行
-        SpiceConverter converter(conv_config);
-        if (!converter.convert_to_spice()) {
-            LOGW << "SPICE conversion flow completed with warnings/errors. Check logs for details.";
-        } else {
-            LOGI << "SPICE conversion flow completed successfully!";
-        }
-
-        // ========================================================================
-        // 產生 Innovus TCL Script（用於 control logic P&R）
-        // ========================================================================
-        if (stacked_colgrp != nullptr) {
-            LOGI << "";
-            LOGI << "========================================================================";
-            LOGI << "Generating Innovus TCL Script for Control Logic P&R";
-            LOGI << "========================================================================";
-            
-            // 取得 stacked_colgrp 寬度
-            OpenFinRAM::CellSize stacked_size = OpenFinRAM::get_cell_size(stacked_colgrp, g_layer_map);
-            
-            if (!stacked_size.valid) {
-                LOGW << "Cannot get stacked_colgrp size from BOUNDARY, using bounding box";
-                gdstk::Vec2 bb_min, bb_max;
-                stacked_colgrp->bounding_box(bb_min, bb_max);
-                stacked_size.min = bb_min;
-                stacked_size.max = bb_max;
-                stacked_size.width = bb_max.x - bb_min.x;
-                stacked_size.height = bb_max.y - bb_min.y;
-                stacked_size.valid = true;
-            }
-            
-            double sram_width = stacked_size.width - 0.054 * 2;  // 減去兩側 54 nm 的 margin
-            LOGI << "SRAM (stacked_colgrp) width (w. margin): " << sram_width << " um";
-            LOGI << "SRAM (stacked_colgrp) height: " << stacked_size.height << " um";
-            
-            // 建立 Innovus TCL Generator
-            OpenFinRAM::InnovusTclGenerator tcl_gen;
-            
-            tcl_gen.set_design_name("ctrl_decode");
-            tcl_gen.set_site_name("asap7sc7p5t");
-            tcl_gen.set_site_height(0.27);
-            tcl_gen.set_cpu_count(8, 0);
-            
-            // 解析 QoR report（如果存在）
-            std::string qor_file = join_path(get_current_dir_name(), "tmp/verilog/qor_report.txt");
-            bool qor_parsed = tcl_gen.parse_qor_report(qor_file);
-            
-            if (qor_parsed) {
-                // 產生 run.tcl（高度自動計算）
-                std::string output_tcl = join_path(get_current_dir_name(), "tmp/innovus/ctrl_run.tcl");
-                
-                // ysel 有 4 根（yselt[0-3], yseltn[0-3], yselb[0-3], yselbn[0-3]）
-                int num_ysel = 4;
-                
-                if (tcl_gen.generate_run_tcl(sram_width, 0.0, output_tcl, 
-                                            test_num_bits, test_num_bits, num_ysel, addr_width, num_mux)) {
-                    LOGI << "";
-                    LOGI << "✓ Successfully generated Innovus TCL script: " << output_tcl;
-                    LOGI << "  Design: ctrl_decode";
-                    LOGI << "  Floorplan width: " << sram_width << " um (matches stacked_colgrp)";
-                    
-                    const OpenFinRAM::QoRReport& qor = tcl_gen.get_qor_report();
-                    double calculated_height = tcl_gen.calculate_floorplan_height(sram_width);
-                    LOGI << "  Floorplan height: " << calculated_height << " um (auto-calculated)";
-                    LOGI << "  Cell area: " << qor.cell_area << " um^2";
-                    LOGI << "  Utilization: " << (qor.cell_area / (sram_width * calculated_height) * 100.0) << " %";
-                    LOGI << "";
-                    
-                    // 執行 Innovus
-                    LOGI << "========================================================================";
-                    LOGI << "Running Innovus for Place & Route...";
-                    LOGI << "========================================================================";
-                    
-                    std::string work_dir = join_path(get_current_dir_name(), "tmp/innovus");
-                    std::string log_file = "ctrl_decode_innovus.log";
-                    
-                    if (tcl_gen.run_innovus(output_tcl, work_dir, log_file)) {
-                        LOGI << "";
-                        LOGI << "✓ Innovus execution completed successfully";
-                        LOGI << "  Check output files in: " << work_dir;
-                        LOGI << "  Log file: " << work_dir << "/" << log_file;
-                        LOGI << "";
-                        
-                        // 執行 v2lvs 將 Verilog netlist 轉換為 SPICE
-                        LOGI << "========================================================================";
-                        LOGI << "Running v2lvs for Verilog to SPICE conversion...";
-                        LOGI << "========================================================================";
-                        
-                        if (tcl_gen.run_v2lvs(work_dir)) {
-                            LOGI << "";
-                            LOGI << "✓ v2lvs execution completed successfully";
-                            LOGI << "  Generated SPICE netlist: " << work_dir << "/netlist_for_lvs.sp";
-                            LOGI << "";
-                            
-                            // 執行 netlist 後處理
-                            LOGI << "========================================================================";
-                            LOGI << "Post-processing SPICE netlist...";
-                            LOGI << "========================================================================";
-                            
-                            std::string cdl_file = join_path(get_current_dir_name(), "tech/cdl/asap7sc7p5t_28_R.cdl");
-                            
-                            if (tcl_gen.post_process_netlist(work_dir, "netlist_for_lvs.sp", cdl_file)) {
-                                LOGI << "";
-                                LOGI << "✓ Netlist post-processing completed successfully";
-                                LOGI << "  Processed netlist: " << work_dir << "/netlist_for_lvs.sp";
-                                LOGI << "  - Merged continuation lines";
-                                LOGI << "  - Added VDD VSS to SUBCKT definitions";
-                                LOGI << "  - Expanded $PINS format";
-                                LOGI << "  - Processed .CONNECT directives";
-                                LOGI << "";
-                            } else {
-                                LOGW << "Netlist post-processing failed";
-                                LOGW << "The netlist may not be properly formatted for LVS";
-                            }
-                        } else {
-                            LOGW << "v2lvs execution failed";
-                            LOGW << "Please check if netlist_for_lvs.v exists in: " << work_dir;
-                        }
-                    } else {
-                        LOGW << "Innovus execution failed";
-                        LOGW << "Please check log file: " << work_dir << "/" << log_file;
-                    }
-                } else {
-                    LOGW << "Failed to generate Innovus TCL script";
-                }
-            } else {
-                LOGW << "QoR report not found or invalid: " << qor_file;
-                LOGW << "Skipping Innovus TCL generation";
-                LOGW << "Please run synthesis first to generate QoR report";
-            }
-            
-            LOGI << "========================================================================";
-            LOGI << "";
-        } else {
-            LOGW << "Stacked colgrp not created, skipping Innovus TCL generation";
-        }
-
-        // ========================================================================
-        // 開始 SRAM 集成流程
-        // ========================================================================
-        LOGI << "\n========================================";
-        LOGI << "Starting SRAM Integration";
-        LOGI << "========================================\n";
-
-        // 建立集成配置
-        SramIntegrationConfig integ_config(
-            addr_width,                              // addr_width
-            num_stacked_rows,                 // data_width
-            test_num_bits,          // num_wordlines
-            num_mux                                 // mux_ratio
-        );
-
-        integ_config.ctrl_netlist = join_path(get_current_dir_name(), "tmp/innovus/netlist_for_lvs.sp");
-        // integ_config.ctrl_netlist = "./verilog/netlist.sp";
-        integ_config.datapath_netlist = "./sram_colgrp.sp";
-        integ_config.output_netlist = "./sram.sp";
-
-        // 建立集成器並執行
-        SpiceIntegrator integrator(integ_config);
-        std::string integrated_sram = integrator.integrate_sram("sram.sp");
-
-        if (integrated_sram.empty()) {
-            LOGW << "SRAM integration completed with warnings/errors. Check logs for details.";
-        } else {
-            LOGI << "SRAM integration completed successfully!";
-            LOGI << "Generated integrated SRAM netlist: " << integrated_sram;
-        }
+        run_sram_integration_stage(
+            addr_width,
+            num_stacked_rows,
+            test_num_bits,
+            num_mux);
 
         // ========================================================================
         // 開始 SPICE Simulation 驗證流程
