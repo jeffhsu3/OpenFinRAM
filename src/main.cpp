@@ -96,6 +96,37 @@ bool remove_directory_recursive(const std::string& path, std::string* error) {
     return true;
 }
 
+bool decide_base_delay_count(
+    bool run_verification,
+    bool& force_best_run,
+    uint64_t low_buffer,
+    uint64_t high_buffer,
+    uint64_t best_pass_buffer,
+    uint64_t min_buffer_cnt,
+    uint64_t max_buffer_cnt,
+    uint64_t& base_delay_cnt) {
+    if (run_verification) {
+        if (force_best_run) {
+            base_delay_cnt = best_pass_buffer;
+        } else if (low_buffer > high_buffer) {
+            if (best_pass_buffer > 0) {
+                force_best_run = true;
+                base_delay_cnt = best_pass_buffer;
+                LOGI << "Bisection complete. Re-running with best buffer count = " << best_pass_buffer;
+            } else {
+                LOGE << "Bisection failed: no passing buffer count in [" << min_buffer_cnt << ", " << max_buffer_cnt << "]";
+                return false;
+            }
+        } else {
+            base_delay_cnt = low_buffer + (high_buffer - low_buffer) / 2;
+        }
+    } else {
+        base_delay_cnt = 10;
+    }
+
+    return true;
+}
+
 bool update_bisection_on_failure(
     uint64_t base_delay_cnt,
     uint64_t max_buffer_cnt,
@@ -2697,23 +2728,16 @@ int main(int argc, char **argv) {
         LOGW << "Verification and SiliconSmart are disabled (run_verification=0).";
     }
     while (!sis_passed) {
-        if (run_verification) {
-            if (force_best_run) {
-                base_delay_cnt = best_pass_buffer;
-            } else if (low_buffer > high_buffer) {
-                if (best_pass_buffer > 0) {
-                    force_best_run = true;
-                    base_delay_cnt = best_pass_buffer;
-                    LOGI << "Bisection complete. Re-running with best buffer count = " << best_pass_buffer;
-                } else {
-                    LOGE << "Bisection failed: no passing buffer count in [" << min_buffer_cnt << ", " << max_buffer_cnt << "]";
-                    return 1;
-                }
-            } else {
-                base_delay_cnt = low_buffer + (high_buffer - low_buffer) / 2;
-            }
-        } else {
-            base_delay_cnt = 10;
+        if (!decide_base_delay_count(
+                run_verification,
+                force_best_run,
+                low_buffer,
+                high_buffer,
+                best_pass_buffer,
+                min_buffer_cnt,
+                max_buffer_cnt,
+                base_delay_cnt)) {
+            return 1;
         }
 
         if (attempt > 3) {
