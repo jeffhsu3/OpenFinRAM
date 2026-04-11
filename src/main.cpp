@@ -95,6 +95,148 @@ bool remove_directory_recursive(const std::string& path, std::string* error) {
 
     return true;
 }
+
+bool run_spice_simulation_verification(
+    bool run_verification,
+    bool use_random_mode,
+    bool use_parallel_mode,
+    double random_test_percentage,
+    uint64_t random_seed,
+    uint64_t addr_width,
+    uint64_t num_stacked_rows,
+    uint64_t num_wl) {
+    bool verification_passed = false;
+
+    if (run_verification) {
+        LOGI << "\n========================================";
+        LOGI << "Starting SPICE Simulation Verification";
+        LOGI << "========================================\n";
+
+        // 建立 simulation 配置 (使用與合成相同的 addr_width 計算)
+        OpenFinRAM::SpiceSimConfig sim_config;
+        sim_config.addr_bits = addr_width;  // 使用計算得到的 addr_width
+        sim_config.data_bits = num_stacked_rows;
+        sim_config.num_wordlines = num_wl * 2;  // 總 wordline 數 = WLT + WLB
+        sim_config.sram_netlist = "./sram.sp";
+        sim_config.output_dir = ".";
+        sim_config.t_clk = 10.0;
+
+        // 建立 simulator
+        OpenFinRAM::SpiceSimulator simulator(sim_config);
+
+        verification_passed = false;
+        if (use_random_mode) {
+            // 隨機測試模式：測試指定百分比的隨機地址
+            LOGI << "Using random BIST mode";
+            LOGI << "Test coverage: " << random_test_percentage << "% of memory";
+            LOGI << "Total addresses: " << (1UL << addr_width);
+            LOGI << "Addresses to test: " << static_cast<uint64_t>((1UL << addr_width) * random_test_percentage / 100.0);
+            LOGI << "Random seed: " << (random_seed == 0 ? "auto-generated" : std::to_string(random_seed)) << "\n";
+
+            std::string random_tb_file = sim_config.output_dir + "/sram_bist_tb_random.sp";
+
+            if (simulator.generate_random_testbench(random_tb_file, random_test_percentage, random_seed)) {
+                LOGI << "\n✓ Generated random testbench: " << random_tb_file;
+                LOGI << "Running simulation...";
+
+                if (simulator.run_simulation(random_tb_file, 8)) {
+                    std::string mt0_file = random_tb_file;
+                    if (mt0_file.size() > 3 && mt0_file.substr(mt0_file.size() - 3) == ".sp") {
+                        mt0_file = mt0_file.substr(0, mt0_file.size() - 3);
+                    }
+                    mt0_file += ".mt0";
+
+                    auto measurements = simulator.parse_measurements(mt0_file);
+                    verification_passed = simulator.verify_results(measurements);
+                } else {
+                    LOGE << "Simulation failed";
+                    verification_passed = false;
+                }
+            } else {
+                LOGE << "Failed to generate random testbench";
+                verification_passed = false;
+            }
+        } else if (use_parallel_mode) {
+            // 並行測試模式：生成多個小型 testbench，每個測試一個 address bit
+            LOGI << "Using parallel BIST mode - generating per-bit testbenches";
+            LOGI << "This will generate " << addr_width << " testbenches (one per address bit)";
+            LOGI << "Each testbench tests only 2 addresses for faster simulation";
+            LOGI << "You can run these in parallel for maximum speed\n";
+
+            // 生成並行測試文件
+            std::vector<std::string> testbench_files = simulator.generate_parallel_testbenches();
+
+            if (testbench_files.empty()) {
+                LOGE << "Failed to generate parallel testbenches";
+                verification_passed = false;
+            } else {
+                LOGI << "\n✓ Generated " << testbench_files.size() << " testbench files:";
+                for (const auto& tb_file : testbench_files) {
+                    LOGI << "  - " << tb_file;
+                }
+
+                LOGI << "\nTo run simulations in parallel, use:";
+                LOGI << "  Option 1: Run all sequentially:";
+                for (size_t i = 0; i < testbench_files.size(); ++i) {
+                    LOGI << "    finesim -np 8 -w " << testbench_files[i]
+                         << " -o sram_bist_tb_bit" << i;
+                }
+                LOGI << "\n  Option 2: Run in parallel (example with GNU parallel):";
+                LOGI << "    parallel -j 4 'finesim -np 8 -w {} -o {.}' ::: sram_bist_tb_bit*.sp";
+
+                LOGI << "\n  Option 3: Run first testbench only as a quick check:";
+                LOGI << "    finesim -np 8 -w " << testbench_files[0]
+                     << " -o sram_bist_tb_bit0";
+
+                // 執行第一個 testbench 作為示例
+                LOGI << "\nRunning first testbench (bit 0) as verification sample...";
+                if (simulator.run_simulation(testbench_files[0], 8)) {
+                    std::string mt0_file = testbench_files[0];
+                    if (mt0_file.size() > 3 && mt0_file.substr(mt0_file.size() - 3) == ".sp") {
+                        mt0_file = mt0_file.substr(0, mt0_file.size() - 3);
+                    }
+                    mt0_file += ".mt0";
+
+                    auto measurements = simulator.parse_measurements(mt0_file);
+                    verification_passed = simulator.verify_results(measurements);
+
+                    if (verification_passed) {
+                        LOGI << "✓ Sample testbench (bit 0) PASSED";
+                        LOGI << "  All " << testbench_files.size()
+                             << " testbenches are ready for parallel execution";
+                    } else {
+                        LOGW << "✗ Sample testbench (bit 0) FAILED";
+                    }
+                }
+            }
+        } else {
+            // 快速測試模式：只測試幾個代表性地址
+            LOGI << "Using quick BIST mode (testing 4 addresses)...";
+            verification_passed = simulator.run_bist_verification(true);  // true = quick mode
+        }
+    } else {
+        LOGW << "Skipping SPICE Simulation Verification (run_verification=0).";
+        verification_passed = true;
+    }
+
+    if (run_verification) {
+        LOGI << "\n========================================";
+        if (verification_passed) {
+            LOGI << "✓ SRAM verification PASSED - functional correctness confirmed!";
+        } else {
+            LOGW << "✗ SRAM verification FAILED - check simulation results";
+        }
+        LOGI << "========================================";
+    } else {
+        LOGW << "SRAM verification skipped (run_verification=0).";
+    }
+
+    return verification_passed;
+}
+
+void consolidate_output_artifacts(uint64_t test_num_bits, uint64_t num_stacked_rows, uint64_t num_mux) {
+    consolidate_output_artifacts(test_num_bits, num_stacked_rows, num_mux);
+}
 }  // namespace
 
 // ============================================================================
@@ -2695,129 +2837,15 @@ int main(int argc, char **argv) {
         // ========================================================================
         // 開始 SPICE Simulation 驗證流程
         // ========================================================================
-        if (run_verification) {
-        LOGI << "\n========================================";
-        LOGI << "Starting SPICE Simulation Verification";
-        LOGI << "========================================\n";
-
-        // 建立 simulation 配置 (使用與合成相同的 addr_width 計算)
-        OpenFinRAM::SpiceSimConfig sim_config;
-        sim_config.addr_bits = addr_width;  // 使用計算得到的 addr_width
-        sim_config.data_bits = num_stacked_rows;
-        sim_config.num_wordlines = num_wl * 2;  // 總 wordline 數 = WLT + WLB
-        sim_config.sram_netlist = "./sram.sp";
-        sim_config.output_dir = ".";
-        sim_config.t_clk = 10.0;
-
-        // 建立 simulator
-        OpenFinRAM::SpiceSimulator simulator(sim_config);
-
-        verification_passed = false;
-        if (use_random_mode) {
-        // 隨機測試模式：測試指定百分比的隨機地址
-        LOGI << "Using random BIST mode";
-        LOGI << "Test coverage: " << random_test_percentage << "% of memory";
-        LOGI << "Total addresses: " << (1UL << addr_width);
-        LOGI << "Addresses to test: " << static_cast<uint64_t>((1UL << addr_width) * random_test_percentage / 100.0);
-        LOGI << "Random seed: " << (random_seed == 0 ? "auto-generated" : std::to_string(random_seed)) << "\n";
-        
-        std::string random_tb_file = sim_config.output_dir + "/sram_bist_tb_random.sp";
-        
-        if (simulator.generate_random_testbench(random_tb_file, random_test_percentage, random_seed)) {
-            LOGI << "\n✓ Generated random testbench: " << random_tb_file;
-            LOGI << "Running simulation...";
-            
-            if (simulator.run_simulation(random_tb_file, 8)) {
-                std::string mt0_file = random_tb_file;
-                if (mt0_file.size() > 3 && mt0_file.substr(mt0_file.size() - 3) == ".sp") {
-                    mt0_file = mt0_file.substr(0, mt0_file.size() - 3);
-                }
-                mt0_file += ".mt0";
-                
-                auto measurements = simulator.parse_measurements(mt0_file);
-                verification_passed = simulator.verify_results(measurements);
-            } else {
-                LOGE << "Simulation failed";
-                verification_passed = false;
-            }
-        } else {
-            LOGE << "Failed to generate random testbench";
-            verification_passed = false;
-        }
-        } else if (use_parallel_mode) {
-        // 並行測試模式：生成多個小型 testbench，每個測試一個 address bit
-        LOGI << "Using parallel BIST mode - generating per-bit testbenches";
-        LOGI << "This will generate " << addr_width << " testbenches (one per address bit)";
-        LOGI << "Each testbench tests only 2 addresses for faster simulation";
-        LOGI << "You can run these in parallel for maximum speed\n";
-        
-        // 生成並行測試文件
-        std::vector<std::string> testbench_files = simulator.generate_parallel_testbenches();
-        
-        if (testbench_files.empty()) {
-            LOGE << "Failed to generate parallel testbenches";
-            verification_passed = false;
-        } else {
-            LOGI << "\n✓ Generated " << testbench_files.size() << " testbench files:";
-            for (const auto& tb_file : testbench_files) {
-                LOGI << "  - " << tb_file;
-            }
-            
-            LOGI << "\nTo run simulations in parallel, use:";
-            LOGI << "  Option 1: Run all sequentially:";
-            for (size_t i = 0; i < testbench_files.size(); ++i) {
-                LOGI << "    finesim -np 8 -w " << testbench_files[i] 
-                     << " -o sram_bist_tb_bit" << i;
-            }
-            LOGI << "\n  Option 2: Run in parallel (example with GNU parallel):";
-            LOGI << "    parallel -j 4 'finesim -np 8 -w {} -o {.}' ::: sram_bist_tb_bit*.sp";
-            
-            LOGI << "\n  Option 3: Run first testbench only as a quick check:";
-            LOGI << "    finesim -np 8 -w " << testbench_files[0] 
-                 << " -o sram_bist_tb_bit0";
-            
-            // 執行第一個 testbench 作為示例
-            LOGI << "\nRunning first testbench (bit 0) as verification sample...";
-            if (simulator.run_simulation(testbench_files[0], 8)) {
-                std::string mt0_file = testbench_files[0];
-                if (mt0_file.size() > 3 && mt0_file.substr(mt0_file.size() - 3) == ".sp") {
-                    mt0_file = mt0_file.substr(0, mt0_file.size() - 3);
-                }
-                mt0_file += ".mt0";
-                
-                auto measurements = simulator.parse_measurements(mt0_file);
-                verification_passed = simulator.verify_results(measurements);
-                
-                if (verification_passed) {
-                    LOGI << "✓ Sample testbench (bit 0) PASSED";
-                    LOGI << "  All " << testbench_files.size() 
-                         << " testbenches are ready for parallel execution";
-                } else {
-                    LOGW << "✗ Sample testbench (bit 0) FAILED";
-                }
-            }
-        }
-        } else {
-        // 快速測試模式：只測試幾個代表性地址
-        LOGI << "Using quick BIST mode (testing 4 addresses)...";
-        verification_passed = simulator.run_bist_verification(true);  // true = quick mode
-    }
-    } else {
-        LOGW << "Skipping SPICE Simulation Verification (run_verification=0).";
-        verification_passed = true;
-    }
-    
-        if (run_verification) {
-        LOGI << "\n========================================";
-        if (verification_passed) {
-            LOGI << "✓ SRAM verification PASSED - functional correctness confirmed!";
-        } else {
-            LOGW << "✗ SRAM verification FAILED - check simulation results";
-        }
-        LOGI << "========================================";
-        } else {
-            LOGW << "SRAM verification skipped (run_verification=0).";
-        }
+        verification_passed = run_spice_simulation_verification(
+            run_verification,
+            use_random_mode,
+            use_parallel_mode,
+            random_test_percentage,
+            random_seed,
+            addr_width,
+            num_stacked_rows,
+            num_wl);
 
         if (run_verification && !verification_passed) {
             if (base_delay_cnt >= max_buffer_cnt && best_pass_buffer == 0) {
