@@ -1,0 +1,34 @@
+/*
+This file includes SVRF/TVF Technology licensed by Mentor Graphics
+Corporation. “SVRF/TVF Technology” means Mentor Graphics’ Standard
+Verification Rule Format (“SVRF”) and Tcl Verification Format (“TVF”)
+proprietary syntaxes for expressing process rules. SVRF/TVF Technology
+constitutes or contains trade secrets and confidential information of
+Mentor Graphics Corporation and any use is subject to the terms and
+conditions of the Mentor Graphics End-User License Agreement, which may be
+viewed at http://www.mentor.com/terms_conditions/enduser. SVRF/TVF
+Technology may be used solely with Mentor Graphics’ Calibre® software
+products, by your company’s employees and on-site contractors, excluding
+Mentor Graphics competitors, who are under obligations of confidentiality
+and whose job performance requires access for your internal business
+purposes.
+*/
+LAYOUT PRIMARY "mytopcell"
+LAYOUT PATH "design/mytopcell.gds"
+LAYOUT SYSTEM GDSII
+SOURCE PRIMARY "mytopcell"
+SOURCE PATH "design/mytopcell.src.net"
+SOURCE SYSTEM SPICE
+PEX NETLIST "netlist.sp" HSPICE SOURCENAMES
+PEX REPORT FS3 svdb
+PEX EXTRACT EXCLUDE SOURCENAMES VDD VSS
+PEX EXTRACT TEMPERATURE 27
+PEX REDUCE ANALOG YES
+UNIT CAPACITANCE fF 
+INCLUDE $PDK_DIR/calibre/ruledirs/rcx/rcxRules_calibre_asap7.C
+INCLUDE $PDK_DIR/calibre/ruledirs/rcx/rcxRules_calibre_asap7.R
+INCLUDE $PDK_DIR/calibre/ruledirs/rcx/rcxRules_calibre_asap7.xact
+INCLUDE $PDK_DIR/calibre/ruledirs/lvs/lvsRules_calibre_asap7.rul
+INCLUDE $PDK_DIR/calibre/ruledirs/rcx/pexMap_calibre_asap7.rul
+MASK SVDB DIRECTORY "/tmp/svdb" QUERY XACT
+PEX REPORT NETSUMMARY "rep.txt" FULL DETAIL SCALE 1 COLUMNS BASIC

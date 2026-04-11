@@ -1,0 +1,9 @@
+[submodule "third_party/googletest"]
+	path = third_party/googletest
+	url = https://github.com/google/googletest.git
+[submodule "third_party/plog"]
+	path = third_party/plog
+	url = https://github.com/SergiusTheBest/plog.git
+[submodule "third_party/gdstk"]
+	path = third_party/gdstk
+	url = https://github.com/heitzmann/gdstk.git

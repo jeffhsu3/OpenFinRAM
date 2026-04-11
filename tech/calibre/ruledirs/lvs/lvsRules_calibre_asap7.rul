@@ -1,0 +1,220 @@
+/*
+———————————————————————————————————————————————————————————————————————————
+Description		: ASAP7 Calibre LVS Deck
+Last Modified On 	: August 19, 2016
+———————————————————————————————————————————————————————————————————————————
+*/
+/*
+This file includes SVRF/TVF Technology licensed by Mentor Graphics
+Corporation. “SVRF/TVF Technology” means Mentor Graphics’ Standard
+Verification Rule Format (“SVRF”) and Tcl Verification Format (“TVF”)
+proprietary syntaxes for expressing process rules. SVRF/TVF Technology
+constitutes or contains trade secrets and confidential information of
+Mentor Graphics Corporation and any use is subject to the terms and
+conditions of the Mentor Graphics End-User License Agreement, which may be
+viewed at http://www.mentor.com/terms_conditions/enduser. SVRF/TVF
+Technology may be used solely with Mentor Graphics’ Calibre® software
+products, by your company’s employees and on-site contractors, excluding
+Mentor Graphics competitors, who are under obligations of confidentiality
+and whose job performance requires access for your internal business
+purposes.
+*/
+TITLE   "LVS Rule File for ASAP7 PDK"
+LVS POWER NAME  "vdd!" "VDD!"
+LVS GROUND NAME  "VSS!" "vss!"
+LVS REDUCE PARALLEL MOS yes[ 
+EFFECTIVE  W,L, nfin
+W = sum(W)
+L = min(L)
+checkForZero = sum(nfin)
+if (checkForZero == 0)
+nfin = 1
+else
+nfin = sum(nfin)
+]
+LVS REDUCE SPLIT GATES YES SEMI ALSO
+[
+EFFECTIVE  W,L, nfin
+W = sum(W)
+L = min(L)
+checkForZero = sum(nfin)
+if (checkForZero == 0)
+nfin = 1
+else
+nfin = sum(nfin)
+]
+LVS FILTER UNUSED MOS NO
+LVS RECOGNIZE GATES NONE
+LVS COMPONENT TYPE PROPERTY element
+LVS COMPONENT SUBTYPE PROPERTY model
+LVS IGNORE PORTS 	NO
+LVS CHECK PORT NAMES	YES
+LVS REPORT mask.lvs.rep
+LVS REPORT OPTION N
+LVS REPORT MAXIMUM 100
+MASK RESULTS DATABASE maskdb
+layer Active 11
+layer fin 2
+layer well 1
+layer P_SUB 3
+layer p_substrate 102
+layer Gcut 10
+layer Nselect 12
+layer Pselect 13
+layer SLVT 97
+layer LVT 98
+layer Gate 7
+layer Dummy 8
+layer LISD 17
+layer LIG 16
+layer V0 18
+layer M1 19
+layer V1 21
+layer M2 20
+layer M3 30
+layer M4 40
+layer M5 50
+layer M6 60
+layer M7 70
+layer M8 80
+layer M9 90
+layer V2 25
+layer V3 35
+layer V4 45
+layer V5 55
+layer V6 65
+layer V7 75
+layer V8 85
+layer V9 95
+layer pad 96 
+layer SRAMDRC 99
+layer SRAMVT 110
+layer SDT 88
+precision 4000
+resolution 250
+TEXT LAYER well_PIN P_SUB_PIN M1_PIN M2_PIN M3_PIN M4_PIN M5_PIN M6_PIN M7_PIN M8_PIN M9_PIN PAD_pin 
+PORT LAYER TEXT well_PIN P_SUB_PIN M1_PIN M2_PIN M3_PIN M4_PIN M5_PIN M6_PIN M7_PIN M8_PIN M9_PIN PAD_pin 
+PORT DEPTH PRIMARY
+LAYER well_PIN 17251 
+LAYER MAP 1 TEXTTYPE == 251 17251
+LAYER P_SUB_PIN 18251 
+LAYER MAP 3 TEXTTYPE == 251 18251
+LAYER M1_PIN 19251 
+LAYER MAP 19 TEXTTYPE == 251 19251
+LAYER M2_PIN 2251
+LAYER MAP 20 TEXTTYPE == 251 2251
+LAYER M3_PIN 3251
+LAYER MAP 30 TEXTTYPE == 251 3251
+LAYER M4_PIN 4251
+LAYER MAP 40 TEXTTYPE == 251 4251
+LAYER M5_PIN 5251
+LAYER MAP 50 TEXTTYPE == 251 5251
+LAYER M6_PIN 6251
+LAYER MAP 60 TEXTTYPE == 251 6251
+LAYER M7_PIN 7251
+LAYER MAP 70 TEXTTYPE == 251 7251
+LAYER M8_PIN 8251
+LAYER MAP 80 TEXTTYPE == 251 8251
+LAYER M9_PIN 9251
+LAYER MAP 90 TEXTTYPE == 251 9251
+LAYER PAD_PIN 10251
+LAYER MAP 96 TEXTTYPE == 251 10251
+ATTACH M1_PIN M1
+ATTACH M2_PIN M2
+ATTACH M3_PIN M3
+ATTACH M4_PIN M4
+ATTACH M5_PIN M5
+ATTACH M6_PIN M6
+ATTACH M7_PIN M7
+ATTACH M8_PIN M8
+ATTACH M9_PIN M9
+ATTACH PAD_PIN pad
+ATTACH P_SUB_PIN psub
+ATTACH well_PIN nsub
+V0LIG = V0 and LIG
+V0LISD = V0 and LISD
+connect LIG M1 by V0LIG
+connect LISD M1 by V0LISD
+connect M1  M2 by V1
+connect M2  M3 by V2
+connect M3  M4 by V3
+connect M4  M5 by V4
+connect M5  M6 by V5
+connect M6  M7 by V6
+connect M7  M8 by V7
+connect M8  M9 by V8
+connect M9  pad by V9
+DIFF2SDT = Active and SDT
+P_DIF = Active and Pselect 
+N_DIF = Active and Nselect
+Gate_1 = Gate NOT GCut  
+N_GATE_1 = Gate_1 and N_DIF
+P_GATE_1 = Gate_1 and P_DIF
+N_GATE_2 = N_GATE_1 NOT Dummy
+P_GATE_2 = P_GATE_1 NOT Dummy
+N_GATE_DEV1 = N_GATE_2 not interact LVT
+N_GATE_DEV2 = N_GATE_DEV1 not interact SLVT
+N_GATE = N_GATE_DEV2 not interact SRAMVT  
+P_GATE_DEV1 = P_GATE_2 not interact LVT
+P_GATE_DEV2 = P_GATE_DEV1 not interact SLVT
+P_GATE = P_GATE_DEV2 not interact SRAMVT 
+N_GATE_sram = N_GATE_2 and SRAMVT 
+P_GATE_sram = P_GATE_2 and SRAMVT 
+N_GATE_lvt = N_GATE_2 and LVT 
+P_GATE_lvt = P_GATE_2 and LVT 
+N_GATE_slvt = N_GATE_2 and SLVT 
+P_GATE_slvt = P_GATE_2 and SLVT 
+N_src_drn = N_DIF not N_GATE_2 
+P_src_drn = P_DIF not P_GATE_2 
+bulk = extent 
+nsub = bulk and well
+psub = bulk not well
+connect LISD N_src_drn by SDT 
+connect LISD P_src_drn by SDT
+connect LIG Gate_1
+connect LIG LISD
+mp_cont = P_src_drn and psub
+mn_cont = N_src_drn and nsub
+connect P_src_drn psub by mp_cont 
+connect N_src_drn nsub by mn_cont 
+n_cont = Active not interact Pselect 
+p_cont = Active not interact Nselect 
+n_cont_1 = n_cont and nsub
+p_cont_1 = p_cont and psub
+connect LISD n_cont_1 by SDT
+connect LISD p_cont_1 by SDT
+connect n_cont_1 nsub
+connect p_cont_1 psub
+device mp (pmos_rvt) P_GATE Gate_1 (G) P_src_drn (S) P_src_drn (D) nsub (B)  CMACRO MOS_PROPERTIES P_GATE nsub
+device mn (nmos_rvt) N_GATE Gate_1 (G) N_src_drn (S) N_src_drn (D) psub (B)  CMACRO MOS_PROPERTIES N_GATE psub
+device mp (pmos_sram) P_GATE_sram Gate_1 (G) P_src_drn (S) P_src_drn (D) nsub (B)  CMACRO MOS_PROPERTIES P_GATE_sram nsub
+device mn (nmos_sram) N_GATE_sram Gate_1 (G) N_src_drn (S) N_src_drn (D) psub (B)  CMACRO MOS_PROPERTIES N_GATE_sram psub
+device mp (pmos_lvt) P_GATE_lvt Gate_1 (G) P_src_drn (S) P_src_drn (D) nsub (B)  CMACRO MOS_PROPERTIES P_GATE_lvt nsub
+device mn (nmos_lvt) N_GATE_lvt Gate_1 (G) N_src_drn (S) N_src_drn (D) psub (B)  CMACRO MOS_PROPERTIES N_GATE_lvt psub
+device mp (pmos_slvt) P_GATE_slvt Gate_1 (G) P_src_drn (S) P_src_drn (D) nsub (B)  CMACRO MOS_PROPERTIES P_GATE_slvt nsub
+device mn (nmos_slvt) N_GATE_slvt Gate_1 (G) N_src_drn (S) N_src_drn (D) psub (B)  CMACRO MOS_PROPERTIES N_GATE_slvt psub
+DMACRO MOS_PROPERTIES seed well
+{
+[
+PROPERTY W,L,nfin
+W = ((perim_co(seed,S) + perim_co(seed,D) ) * 0.5) 
+nfin = ((perim_co(seed,S) + perim_co(seed, D)) * 0.5)/27e-09 
+L = (perim(seed) - perim_co(seed,S) - perim_in(seed,S) - perim_co(seed,D) - perim_in(seed,D) ) * 0.5 
+]
+}
+VARIABLE delta 0
+VARIABLE nfin_delta 0
+DMACRO MOS_TRACE device_type device_name
+{
+TRACE PROPERTY device_type(device_name) l l delta ABSOLUTE
+TRACE PROPERTY device_type(device_name) w w delta ABSOLUTE
+TRACE PROPERTY device_type(device_name) nfin nfin nfin_delta ABSOLUTE
+}
+CMACRO MOS_TRACE MN nmos_rvt
+CMACRO MOS_TRACE MP pmos_rvt
+CMACRO MOS_TRACE MN nmos_sram
+CMACRO MOS_TRACE MP pmos_sram
+CMACRO MOS_TRACE MN nmos_lvt
+CMACRO MOS_TRACE MP pmos_lvt
+CMACRO MOS_TRACE MN nmos_slvt
+CMACRO MOS_TRACE MP pmos_slvt

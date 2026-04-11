@@ -1,0 +1,23 @@
+/*
+This file includes SVRF/TVF Technology licensed by Mentor Graphics
+Corporation. “SVRF/TVF Technology” means Mentor Graphics’ Standard
+Verification Rule Format (“SVRF”) and Tcl Verification Format (“TVF”)
+proprietary syntaxes for expressing process rules. SVRF/TVF Technology
+constitutes or contains trade secrets and confidential information of
+Mentor Graphics Corporation and any use is subject to the terms and
+conditions of the Mentor Graphics End-User License Agreement, which may be
+viewed at http://www.mentor.com/terms_conditions/enduser. SVRF/TVF
+Technology may be used solely with Mentor Graphics’ Calibre® software
+products, by your company’s employees and on-site contractors, excluding
+Mentor Graphics competitors, who are under obligations of confidentiality
+and whose job performance requires access for your internal business
+purposes.
+*/
+PEX MAP Active N_src_drn
+PEX MAP Active P_src_drn
+PEX MAP Gate Gate_1
+PEX MAP Active n_cont_1 
+PEX MAP Active p_cont_1 
+LAYER FGATE 499
+CONNECT FGATE
+PEX MAP FGATE Gate 
