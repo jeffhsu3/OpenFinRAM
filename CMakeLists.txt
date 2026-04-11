@@ -46,3 +46,11 @@ add_custom_command(TARGET OpenFinRAM POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:OpenFinRAM>/tech
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/tech $<TARGET_FILE_DIR:OpenFinRAM>/tech
 )
+
+add_custom_target(verify_golden
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/verify_golden.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    DEPENDS OpenFinRAM gds_comparator
+    COMMENT "Run two-case golden regression checks"
+    USES_TERMINAL
+)
