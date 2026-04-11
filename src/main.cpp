@@ -285,6 +285,83 @@ void consolidate_output_artifacts(uint64_t test_num_bits, uint64_t num_stacked_r
         LOGI << "Generated SP file moved to: " << final_sp_path;
     }
 }
+
+bool run_siliconsmart_and_check(
+    uint64_t attempt,
+    uint64_t test_num_bits,
+    uint64_t num_stacked_rows,
+    uint64_t addr_width) {
+    // ========================================================================
+    // 展開 SRAM SPICE netlist 的 .inc/.include，輸出為 sram_flat.sp
+    // ========================================================================
+    {
+        const std::string input_sp = "./sram.sp";
+        const std::string output_sp = "./sram_flat.sp";
+        std::string error;
+
+        LOGI << "Expanding SPICE includes: " << input_sp << " -> " << output_sp;
+
+        if (!SpiceIncludeResolver::resolve_to_file(input_sp, output_sp, error)) {
+            LOGW << "Failed to expand SPICE includes: " << error;
+        } else {
+            LOGI << "Successfully generated flat SPICE netlist: " << output_sp;
+        }
+    }
+
+    // ========================================================================
+    // 產生 SiliconSmart (SIS) 所需檔案
+    // ========================================================================
+    const std::string sis_dir = "./sis" + std::stoi(attempt < 10 ? "0" : "") + std::to_string(attempt);
+    if (path_exists(sis_dir)) {
+        LOGI << "Removing existing SiliconSmart directory: " << sis_dir;
+        std::string remove_error;
+        if (!remove_directory_recursive(sis_dir, &remove_error)) {
+            LOGW << "Failed to remove SiliconSmart directory: " << remove_error;
+        }
+    }
+
+    std::string sram_cell_name = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows);
+
+    OpenFinRAM::SiliconSmartConfig sis_config;
+    sis_config.cell_name = sram_cell_name;
+    sis_config.addr_width = addr_width;
+    sis_config.data_width = num_stacked_rows;
+    sis_config.sis_dir = sis_dir;
+    sis_config.flat_spice_path = "./sram_flat.sp";
+    sis_config.configure_template_path = sis_dir + "/configure.tcl";
+
+    OpenFinRAM::SiliconSmartGenerator sis_gen;
+    bool sis_ok = sis_gen.generate(sis_config);
+    if (!sis_ok) {
+        LOGW << "Failed to generate SiliconSmart files";
+    } else {
+        sis_ok = sis_gen.run_siliconsmart(sis_config);
+        if (!sis_ok) {
+            LOGW << "Failed to run SiliconSmart";
+        }
+    }
+
+    // ========================================================================
+    // 檢查 SiliconSmart log 是否有錯誤
+    // ========================================================================
+    bool sis_has_error = !sis_ok;
+    const std::string sis_log_path = sis_dir + "/testcase/sis.log";
+    std::ifstream sis_log(sis_log_path);
+    if (!sis_log.is_open()) {
+        LOGW << "Cannot open SiliconSmart log: " << sis_log_path;
+        sis_has_error = true;
+    } else {
+        std::string line;
+        while (std::getline(sis_log, line)) {
+            if (line.find("Error:   Task") != std::string::npos) {
+                sis_has_error = true;
+                break;
+            }
+        }
+    }
+
+    return !sis_has_error;
+}
 }  // namespace
 
 // ============================================================================
@@ -2914,78 +2991,8 @@ int main(int argc, char **argv) {
             break;
         }
 
-    // ========================================================================
-    // 展開 SRAM SPICE netlist 的 .inc/.include，輸出為 sram_flat.sp
-    // ========================================================================
-    {
-        const std::string input_sp = "./sram.sp";
-        const std::string output_sp = "./sram_flat.sp";
-        std::string error;
-
-        LOGI << "Expanding SPICE includes: " << input_sp << " -> " << output_sp;
-
-        if (!SpiceIncludeResolver::resolve_to_file(input_sp, output_sp, error)) {
-            LOGW << "Failed to expand SPICE includes: " << error;
-        } else {
-            LOGI << "Successfully generated flat SPICE netlist: " << output_sp;
-        }
-    }
-
-    // ========================================================================
-    // 產生 SiliconSmart (SIS) 所需檔案
-    // ========================================================================
-    if (run_verification) {
-        // If the folder named sis exists, delete it first
-        const std::string sis_dir = "./sis" + std::stoi(attempt < 10 ? "0" : "") + std::to_string(attempt);
-        if (path_exists(sis_dir)) {
-            LOGI << "Removing existing SiliconSmart directory: " << sis_dir;
-            std::string remove_error;
-            if (!remove_directory_recursive(sis_dir, &remove_error)) {
-                LOGW << "Failed to remove SiliconSmart directory: " << remove_error;
-            }
-        }
-
-        std::string sram_cell_name = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows);
-
-        OpenFinRAM::SiliconSmartConfig sis_config;
-        sis_config.cell_name = sram_cell_name;
-        sis_config.addr_width = addr_width;
-        sis_config.data_width = num_stacked_rows;
-        sis_config.sis_dir = sis_dir;
-        sis_config.flat_spice_path = "./sram_flat.sp";
-        sis_config.configure_template_path = sis_dir + "/configure.tcl";
-
-        OpenFinRAM::SiliconSmartGenerator sis_gen;
-        bool sis_ok = sis_gen.generate(sis_config);
+        bool sis_ok = run_siliconsmart_and_check(attempt, test_num_bits, num_stacked_rows, addr_width);
         if (!sis_ok) {
-            LOGW << "Failed to generate SiliconSmart files";
-        } else {
-            sis_ok = sis_gen.run_siliconsmart(sis_config);
-            if (!sis_ok) {
-                LOGW << "Failed to run SiliconSmart";
-            }
-        }
-
-        // ========================================================================
-        // 檢查 SiliconSmart log 是否有錯誤
-        // ========================================================================
-        bool sis_has_error = !sis_ok;
-        const std::string sis_log_path = sis_dir + "/testcase/sis.log";
-        std::ifstream sis_log(sis_log_path);
-        if (!sis_log.is_open()) {
-            LOGW << "Cannot open SiliconSmart log: " << sis_log_path;
-            sis_has_error = true;
-        } else {
-            std::string line;
-            while (std::getline(sis_log, line)) {
-                if (line.find("Error:   Task") != std::string::npos) {
-                    sis_has_error = true;
-                    break;
-                }
-            }
-        }
-
-        if (sis_has_error) {
             LOGW << "SiliconSmart reported errors (found 'Error:   Task' in log).";
             if (base_delay_cnt >= max_buffer_cnt && best_pass_buffer == 0) {
                 LOGE << "Bisection failed: max_buffer_cnt=" << max_buffer_cnt << " also failed";
@@ -3020,7 +3027,6 @@ int main(int argc, char **argv) {
         }
 
         continue;
-    }
     }
 
     // ========================================================================
