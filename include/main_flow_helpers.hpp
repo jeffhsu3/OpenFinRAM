@@ -82,3 +82,13 @@ void run_sram_integration_stage(
     uint64_t num_stacked_rows,
     uint64_t test_num_bits,
     uint64_t num_mux);
+
+void add_ctrl_decode_gate_fin_wrappers(
+    gdstk::Library& gds_lib,
+    const OpenFinRAM::LayerMap& layer_map);
+
+void create_and_add_sram_filler_cells(
+    gdstk::Library& gds_lib,
+    gdstk::Library& sram_filler_lib,
+    uint64_t test_num_bits,
+    const OpenFinRAM::LayerMap& layer_map);

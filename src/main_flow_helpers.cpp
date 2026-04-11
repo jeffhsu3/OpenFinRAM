@@ -1,6 +1,7 @@
 #include "main_flow_helpers.hpp"
 
 #include "cell_utils.hpp"
+#include "filler_generator.hpp"
 #include "innovus_tcl_generator.hpp"
 #include "pex_runner.hpp"
 #include "siliconsmart_generator.hpp"
@@ -15,6 +16,7 @@
 
 #include <cstdio>
 #include <cerrno>
+#include <cmath>
 #include <cstring>
 #include <dirent.h>
 #include <fstream>
@@ -683,6 +685,412 @@ void run_sram_integration_stage(
     } else {
         LOGI << "SRAM integration completed successfully!";
         LOGI << "Generated integrated SRAM netlist: " << integrated_sram;
+    }
+}
+
+void add_ctrl_decode_gate_fin_wrappers(
+    gdstk::Library& gds_lib,
+    const OpenFinRAM::LayerMap& layer_map) {
+    gdstk::Cell* ctrl_decode_cell = gds_lib.get_cell("ctrl_decode");
+
+    if (ctrl_decode_cell == nullptr) {
+        LOGW << "ctrl_decode cell not found, using first cell";
+        ctrl_decode_cell = gds_lib.cell_array[0];
+    }
+
+    LOGI << "Working with cell: " << ctrl_decode_cell->name;
+
+    OpenFinRAM::CellSize cell_size = OpenFinRAM::get_cell_size(ctrl_decode_cell, layer_map);
+
+    if (!cell_size.valid) {
+        LOGW << "Cannot get cell size from BOUNDARY, using bounding box";
+        gdstk::Vec2 bb_min, bb_max;
+        ctrl_decode_cell->bounding_box(bb_min, bb_max);
+        cell_size.min = bb_min;
+        cell_size.max = bb_max;
+        cell_size.width = bb_max.x - bb_min.x;
+        cell_size.height = bb_max.y - bb_min.y;
+        cell_size.valid = true;
+    }
+
+    LOGI << "========================================================================";
+    LOGI << "Core Boundary Information:";
+    LOGI << "  Lower-left corner (min):  (" << cell_size.min.x << ", " << cell_size.min.y << ")";
+    LOGI << "  Upper-right corner (max): (" << cell_size.max.x << ", " << cell_size.max.y << ")";
+    LOGI << "  Width:  " << cell_size.width;
+    LOGI << "  Height: " << cell_size.height;
+    LOGI << "========================================================================";
+
+    LOGI << "========================================================================";
+    LOGI << "Creating parameterized Gate polygons on left and right sides";
+    LOGI << "========================================================================";
+
+    const OpenFinRAM::LayerDef* gate_layer = layer_map.get_layer("Gate", OpenFinRAM::LayerPurpose::Drawing);
+
+    if (gate_layer == nullptr) {
+        LOGW << "Cannot find Gate drawing layer definition, skipping Gate polygon creation";
+    } else {
+        LOGI << "Found Gate layer: layer=" << gate_layer->layer_number
+             << ", datatype=" << gate_layer->datatype;
+
+        const char* new_cell_name = "ctrl_decode_with_filler";
+
+        if (gds_lib.get_cell(new_cell_name) != nullptr) {
+            LOGW << "Cell '" << new_cell_name << "' already exists, removing it first";
+            for (uint64_t i = 0; i < gds_lib.cell_array.count; i++) {
+                if (std::strcmp(gds_lib.cell_array[i]->name, new_cell_name) == 0) {
+                    gds_lib.cell_array[i]->free_all();
+                    gds_lib.cell_array.remove(i);
+                    break;
+                }
+            }
+        }
+
+        LOGI << "Creating new cell: " << new_cell_name;
+        gdstk::Cell* gate_wrapper_cell = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
+        gate_wrapper_cell->init(new_cell_name);
+
+        LOGI << "Adding reference to original ctrl_decode cell...";
+        gdstk::Reference* ctrl_ref = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
+        ctrl_ref->init(ctrl_decode_cell);
+        ctrl_ref->origin = {0.0, 0.0};
+        ctrl_ref->magnification = 1.0;
+        gate_wrapper_cell->reference_array.append(ctrl_ref);
+
+        const double gate_spacing = 0.017;
+        const double gate_width = 0.020;
+
+        LOGI << "Gate polygon parameters:";
+        LOGI << "  Spacing from core: " << gate_spacing << " um";
+        LOGI << "  Gate width: " << gate_width << " um";
+        LOGI << "  Gate height: " << cell_size.height << " um (matches core height)";
+
+        LOGI << "Creating left Gate polygon...";
+        gdstk::Polygon* left_gate = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+
+        gdstk::Vec2 left_points[4] = {
+            {cell_size.min.x - gate_spacing - gate_width, cell_size.min.y},
+            {cell_size.min.x - gate_spacing, cell_size.min.y},
+            {cell_size.min.x - gate_spacing, cell_size.max.y},
+            {cell_size.min.x - gate_spacing - gate_width, cell_size.max.y}
+        };
+
+        left_gate->point_array.extend({.capacity = 0, .count = 4, .items = left_points});
+        left_gate->tag = gate_layer->tag();
+        gate_wrapper_cell->polygon_array.append(left_gate);
+
+        LOGI << "  Left gate position: x=["
+             << (cell_size.min.x - gate_spacing - gate_width) << ", "
+             << (cell_size.min.x - gate_spacing) << "]";
+
+        LOGI << "Creating right Gate polygon...";
+        gdstk::Polygon* right_gate = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+
+        gdstk::Vec2 right_points[4] = {
+            {cell_size.max.x + gate_spacing, cell_size.min.y},
+            {cell_size.max.x + gate_spacing + gate_width, cell_size.min.y},
+            {cell_size.max.x + gate_spacing + gate_width, cell_size.max.y},
+            {cell_size.max.x + gate_spacing, cell_size.max.y}
+        };
+
+        right_gate->point_array.extend({.capacity = 0, .count = 4, .items = right_points});
+        right_gate->tag = gate_layer->tag();
+        gate_wrapper_cell->polygon_array.append(right_gate);
+
+        LOGI << "  Right gate position: x=["
+             << (cell_size.max.x + gate_spacing) << ", "
+             << (cell_size.max.x + gate_spacing + gate_width) << "]";
+
+        LOGI << "========================================================================";
+        LOGI << "Adding Fin polygons on left and right sides";
+        LOGI << "========================================================================";
+
+        const OpenFinRAM::LayerDef* fin_layer = layer_map.get_layer("fin", OpenFinRAM::LayerPurpose::Drawing);
+
+        if (fin_layer == nullptr) {
+            LOGW << "Cannot find fin drawing layer definition, skipping Fin polygon creation";
+        } else {
+            LOGI << "Found fin layer: layer=" << fin_layer->layer_number
+                 << ", datatype=" << fin_layer->datatype;
+
+            const double fin_start_y = 0.010;
+            const double fin_spacing = 0.027;
+            const double fin_height = 0.007;
+            const double fin_width = 0.054;
+
+            double available_height = cell_size.max.y - fin_start_y;
+            uint64_t num_fins = (uint64_t)std::floor(available_height / fin_spacing) + 1;
+
+            LOGI << "Fin polygon parameters:";
+            LOGI << "  Start Y position: " << fin_start_y << " um";
+            LOGI << "  Fin spacing: " << fin_spacing << " um";
+            LOGI << "  Fin height: " << fin_height << " um";
+            LOGI << "  Fin width: " << fin_width << " um";
+            LOGI << "  Number of fins: " << num_fins;
+
+            LOGI << "Creating left fin polygons...";
+            for (uint64_t i = 0; i < num_fins; i++) {
+                double fin_y_start = fin_start_y + i * fin_spacing;
+                double fin_y_end = fin_y_start + fin_height;
+
+                if (fin_y_end > cell_size.max.y) {
+                    break;
+                }
+
+                gdstk::Polygon* left_fin = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+
+                gdstk::Vec2 left_fin_points[4] = {
+                    {cell_size.min.x - fin_width, fin_y_start},
+                    {cell_size.min.x, fin_y_start},
+                    {cell_size.min.x, fin_y_end},
+                    {cell_size.min.x - fin_width, fin_y_end}
+                };
+
+                left_fin->point_array.extend({.capacity = 0, .count = 4, .items = left_fin_points});
+                left_fin->tag = fin_layer->tag();
+                gate_wrapper_cell->polygon_array.append(left_fin);
+            }
+
+            LOGI << "  Created " << num_fins << " left fin polygons";
+
+            LOGI << "Creating right fin polygons...";
+            for (uint64_t i = 0; i < num_fins; i++) {
+                double fin_y_start = fin_start_y + i * fin_spacing;
+                double fin_y_end = fin_y_start + fin_height;
+
+                if (fin_y_end > cell_size.max.y) {
+                    break;
+                }
+
+                gdstk::Polygon* right_fin = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+
+                gdstk::Vec2 right_fin_points[4] = {
+                    {cell_size.max.x, fin_y_start},
+                    {cell_size.max.x + fin_width, fin_y_start},
+                    {cell_size.max.x + fin_width, fin_y_end},
+                    {cell_size.max.x, fin_y_end}
+                };
+
+                right_fin->point_array.extend({.capacity = 0, .count = 4, .items = right_fin_points});
+                right_fin->tag = fin_layer->tag();
+                gate_wrapper_cell->polygon_array.append(right_fin);
+            }
+
+            LOGI << "  Created " << num_fins << " right fin polygons";
+            LOGI << "Fin polygons created successfully";
+        }
+
+        LOGI << "========================================================================";
+        LOGI << "Adding Gate filler rows on top and bottom";
+        LOGI << "========================================================================";
+
+        const double gate_filler_height = 0.8;
+        const double gate_filler_width = 0.02;
+        const double gate_filler_spacing = 0.034;
+
+        double row_start_x = cell_size.min.x - gate_spacing - gate_width;
+        double row_end_x = cell_size.max.x + gate_spacing + gate_width;
+        double row_width = row_end_x - row_start_x;
+
+        double pitch = gate_filler_width + gate_filler_spacing;
+        uint64_t num_gates = (uint64_t)std::ceil(row_width / pitch);
+
+        LOGI << "Gate filler parameters:";
+        LOGI << "  Gate height: " << gate_filler_height << " um";
+        LOGI << "  Gate width: " << gate_filler_width << " um";
+        LOGI << "  Gate spacing: " << gate_filler_spacing << " um";
+        LOGI << "  Row start X: " << row_start_x << " um (left gate)";
+        LOGI << "  Row end X: " << row_end_x << " um (right gate)";
+        LOGI << "  Number of gates per row: " << num_gates;
+
+        LOGI << "Creating bottom gate row...";
+        for (uint64_t i = 0; i < num_gates; i++) {
+            double gate_x_start = row_start_x + i * pitch;
+            double gate_x_end = gate_x_start + gate_filler_width;
+
+            if (gate_x_end > row_end_x) {
+                gate_x_end = row_end_x;
+                if (gate_x_end <= gate_x_start) {
+                    break;
+                }
+            }
+
+            gdstk::Polygon* bottom_gate = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+
+            gdstk::Vec2 bottom_gate_points[4] = {
+                {gate_x_start, cell_size.min.y - gate_filler_height},
+                {gate_x_end, cell_size.min.y - gate_filler_height},
+                {gate_x_end, cell_size.min.y + 0.02},
+                {gate_x_start, cell_size.min.y + 0.02}
+            };
+
+            bottom_gate->point_array.extend({.capacity = 0, .count = 4, .items = bottom_gate_points});
+            bottom_gate->tag = gate_layer->tag();
+            gate_wrapper_cell->polygon_array.append(bottom_gate);
+        }
+
+        LOGI << "  Created " << num_gates << " bottom gate polygons";
+
+        LOGI << "Creating top gate row...";
+        for (uint64_t i = 0; i < num_gates; i++) {
+            double gate_x_start = row_start_x + i * pitch;
+            double gate_x_end = gate_x_start + gate_filler_width;
+
+            if (gate_x_end > row_end_x) {
+                gate_x_end = row_end_x;
+                if (gate_x_end <= gate_x_start) {
+                    break;
+                }
+            }
+
+            gdstk::Polygon* top_gate = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+
+            gdstk::Vec2 top_gate_points[4] = {
+                {gate_x_start, cell_size.max.y - 0.02},
+                {gate_x_end, cell_size.max.y - 0.02},
+                {gate_x_end, cell_size.max.y + gate_filler_height},
+                {gate_x_start, cell_size.max.y + gate_filler_height}
+            };
+
+            top_gate->point_array.extend({.capacity = 0, .count = 4, .items = top_gate_points});
+            top_gate->tag = gate_layer->tag();
+            gate_wrapper_cell->polygon_array.append(top_gate);
+        }
+
+        LOGI << "  Created " << num_gates << " top gate polygons";
+        LOGI << "Gate filler rows created successfully";
+
+        LOGI << "========================================================================";
+        LOGI << "Adding Fin rows on top and bottom";
+        LOGI << "========================================================================";
+
+        if (fin_layer == nullptr) {
+            LOGW << "Cannot find fin drawing layer definition, skipping top/bottom Fin creation";
+        } else {
+            const double fin_height = 0.007;
+            const double fin_spacing = 0.020;
+            const double fin_row_width = cell_size.width + 0.054 * 2;
+            const double fin_row_start_x = cell_size.min.x - 0.054;
+            const double fin_row_end_x = cell_size.max.x + 0.054;
+
+            LOGI << "Fin row parameters:";
+            LOGI << "  Fin row width: " << fin_row_width << " um";
+            LOGI << "  Fin row X range: [" << fin_row_start_x << ", " << fin_row_end_x << "]";
+            LOGI << "  Fin height: " << fin_height << " um";
+            LOGI << "  Fin spacing: " << fin_spacing << " um";
+
+            LOGI << "Creating bottom fin rows...";
+            double base_y = cell_size.min.y - 3 * fin_spacing - 0.011;
+            for (int i = 0; i < 3; i++) {
+                double fin_y_start = base_y + i * (fin_height + fin_spacing);
+                double fin_y_end = fin_y_start + fin_height;
+
+                gdstk::Polygon* bottom_fin = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+
+                gdstk::Vec2 bottom_fin_points[4] = {
+                    {fin_row_start_x, fin_y_start},
+                    {fin_row_end_x, fin_y_start},
+                    {fin_row_end_x, fin_y_end},
+                    {fin_row_start_x, fin_y_end}
+                };
+
+                bottom_fin->point_array.extend({.capacity = 0, .count = 4, .items = bottom_fin_points});
+                bottom_fin->tag = fin_layer->tag();
+                gate_wrapper_cell->polygon_array.append(bottom_fin);
+            }
+
+            LOGI << "  Created 3 bottom fin rows";
+
+            LOGI << "Creating top fin rows...";
+            double base_top_y = cell_size.max.y + 0.01;
+            for (int i = 0; i < 3; i++) {
+                double fin_y_start = base_top_y + i * (fin_height + fin_spacing);
+                double fin_y_end = fin_y_start + fin_height;
+
+                gdstk::Polygon* top_fin = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+
+                gdstk::Vec2 top_fin_points[4] = {
+                    {fin_row_start_x, fin_y_start},
+                    {fin_row_end_x, fin_y_start},
+                    {fin_row_end_x, fin_y_end},
+                    {fin_row_start_x, fin_y_end}
+                };
+
+                top_fin->point_array.extend({.capacity = 0, .count = 4, .items = top_fin_points});
+                top_fin->tag = fin_layer->tag();
+                gate_wrapper_cell->polygon_array.append(top_fin);
+            }
+
+            LOGI << "  Created 3 top fin rows";
+            LOGI << "Top and bottom fin rows created successfully";
+        }
+
+        gds_lib.cell_array.append(gate_wrapper_cell);
+        LOGI << "Added new cell to library: " << new_cell_name;
+        LOGI << "Gate and Fin polygons created successfully";
+    }
+}
+
+void create_and_add_sram_filler_cells(
+    gdstk::Library& gds_lib,
+    gdstk::Library& sram_filler_lib,
+    uint64_t test_num_bits,
+    const OpenFinRAM::LayerMap& layer_map) {
+    LOGI << "========================================================================";
+    LOGI << "Creating SRAM Filler Cells (Top and Bottom)";
+    LOGI << "========================================================================";
+
+    OpenFinRAM::FillerCellLibrary filler_lib;
+    if (OpenFinRAM::load_filler_cells_from_library(sram_filler_lib, filler_lib)) {
+        LOGI << "Successfully loaded filler cells from library";
+
+        gdstk::Cell* ctrl_decode_for_filler = gds_lib.get_cell("ctrl_decode");
+        double filler_ctrl_width = 1.782;
+        double filler_ctrl_height = 0.297;
+
+        if (ctrl_decode_for_filler != nullptr) {
+            OpenFinRAM::CellSize ctrl_size = OpenFinRAM::get_cell_size(ctrl_decode_for_filler, layer_map);
+            if (ctrl_size.valid) {
+                filler_ctrl_width = ctrl_size.width;
+                filler_ctrl_height = ctrl_size.height;
+            } else {
+                gdstk::Vec2 bb_min, bb_max;
+                ctrl_decode_for_filler->bounding_box(bb_min, bb_max);
+                filler_ctrl_width = bb_max.x - bb_min.x;
+                filler_ctrl_height = bb_max.y - bb_min.y;
+            }
+        }
+
+        LOGI << "Filler configuration:";
+        LOGI << "  test_num_bits: " << test_num_bits;
+        LOGI << "  ctrl_decode width: " << filler_ctrl_width;
+        LOGI << "  ctrl_decode height: " << filler_ctrl_height;
+
+        OpenFinRAM::FillerConfig filler_config;
+        filler_config.test_num_bits = test_num_bits;
+        filler_config.ctrl_decode_width = filler_ctrl_width + 0.054 * 2;
+        filler_config.ctrl_decode_height = filler_ctrl_height;
+
+        filler_config.is_top = true;
+        gdstk::Cell* filler_top = OpenFinRAM::create_filler_top(filler_lib, filler_config, layer_map);
+
+        filler_config.is_top = false;
+        gdstk::Cell* filler_bottom = OpenFinRAM::create_filler_bottom(filler_lib, filler_config, layer_map);
+
+        if (filler_top != nullptr || filler_bottom != nullptr) {
+            OpenFinRAM::add_filler_cells_to_library(gds_lib, filler_top, filler_bottom, filler_lib);
+
+            LOGI << "========================================================================";
+            LOGI << "Filler cells created successfully!";
+            if (filler_top) LOGI << "  - " << filler_top->name;
+            if (filler_bottom) LOGI << "  - " << filler_bottom->name;
+            LOGI << "========================================================================";
+        } else {
+            LOGW << "Failed to create filler cells";
+        }
+    } else {
+        LOGW << "Failed to load filler cells from library";
+        LOGW << "Skipping filler cell generation";
     }
 }
 
