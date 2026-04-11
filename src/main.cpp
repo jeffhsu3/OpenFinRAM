@@ -117,6 +117,35 @@ bool update_bisection_on_failure(
     return true;
 }
 
+bool update_bisection_on_success(
+    uint64_t base_delay_cnt,
+    uint64_t low_buffer,
+    bool force_best_run,
+    uint64_t& best_pass_buffer,
+    uint64_t& high_buffer) {
+    LOGI << "SiliconSmart log check passed (no 'Error:   Task').";
+    best_pass_buffer = base_delay_cnt;
+
+    if (force_best_run) {
+        LOGI << "Bisection complete: minimal passing buffer count = " << best_pass_buffer;
+        return false;
+    }
+
+    if (base_delay_cnt == 0) {
+        high_buffer = 0;
+    } else {
+        high_buffer = base_delay_cnt - 1;
+    }
+    LOGI << "Bisection update: pass, new range = [" << low_buffer << ", " << high_buffer << "]";
+
+    if (low_buffer > high_buffer) {
+        LOGI << "Bisection complete: minimal passing buffer count = " << best_pass_buffer;
+        return false;
+    }
+
+    return true;
+}
+
 bool run_spice_simulation_verification(
     bool run_verification,
     bool use_random_mode,
@@ -3029,22 +3058,12 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        LOGI << "SiliconSmart log check passed (no 'Error:   Task').";
-        best_pass_buffer = base_delay_cnt;
-        if (force_best_run) {
-            LOGI << "Bisection complete: minimal passing buffer count = " << best_pass_buffer;
-            sis_passed = true;
-            break;
-        }
-        if (base_delay_cnt == 0) {
-            high_buffer = 0;
-        } else {
-            high_buffer = base_delay_cnt - 1;
-        }
-        LOGI << "Bisection update: pass, new range = [" << low_buffer << ", " << high_buffer << "]";
-
-        if (low_buffer > high_buffer) {
-            LOGI << "Bisection complete: minimal passing buffer count = " << best_pass_buffer;
+        if (!update_bisection_on_success(
+                base_delay_cnt,
+                low_buffer,
+                force_best_run,
+                best_pass_buffer,
+                high_buffer)) {
             sis_passed = true;
             break;
         }
