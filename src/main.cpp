@@ -7,7 +7,6 @@
 #include "spice_converter.hpp"
 #include "spice_integrator.hpp"
 #include "spice_include_resolver.hpp"
-#include "pex_runner.hpp"
 #include "spice_simulator.hpp"
 #include "innovus_tcl_generator.hpp"
 #include "siliconsmart_generator.hpp"
@@ -2165,61 +2164,7 @@ int main(int argc, char **argv) {
     // 設定為 true 則執行實際 PEX（耗時但精確）
     // 設定為 false 則使用統計回歸預測（快速但基於歷史數據）
     bool run_actual_pex = false;
-    bool pex_success = false;
-    
-    if (run_actual_pex) {
-        LOGI << "";
-        LOGI << "========================================================================";
-        LOGI << "Starting PEX (Parasitic Extraction) - Actual Run";
-        LOGI << "========================================================================";
-        
-        // 配置 PEX
-        OpenFinRAM::PEXRunner::Config pex_config;
-        pex_config.gds_path = "../sram_array_test.gds";
-        pex_config.spice_path = "../sram_colgrp.sp";
-        
-        // Cell 名稱: stacked_colgrp_x{num_bits*2}x{num_stacked_rows}
-        char pex_cell_name[128];
-        snprintf(pex_cell_name, sizeof(pex_cell_name), 
-                 "stacked_colgrp_x%lux%lu", 
-                 (unsigned long)(test_num_bits * 2), 
-                 (unsigned long)num_stacked_rows / 2);
-        pex_config.cell_name = pex_cell_name;
-        pex_config.output_dir = ".";  // 在當前目錄下創建 run_{cell_name}
-        pex_config.turbo_count = 8;   // 多線程加速
-        
-        // 創建 PEX runner 並執行
-        OpenFinRAM::PEXRunner pex_runner(pex_config);
-        
-        LOGI << "PEX Configuration:";
-        LOGI << "  Cell: " << pex_config.cell_name;
-        LOGI << "  GDS: " << pex_config.gds_path;
-        LOGI << "  SPICE: " << pex_config.spice_path;
-        LOGI << "  Output Dir: " << pex_config.output_dir;
-        
-        pex_success = pex_runner.run();
-        
-        if (pex_success) {
-            LOGI << "";
-            LOGI << "========================================================================";
-            LOGI << "PEX completed successfully!";
-            LOGI << "PEX Netlist: " << pex_runner.get_pex_netlist_path();
-            LOGI << "========================================================================";
-        } else {
-            LOGE << "";
-            LOGE << "========================================================================";
-            LOGE << "PEX failed! Check log files for details.";
-            LOGE << "========================================================================";
-        }
-    } else {
-        LOGI << "";
-        LOGI << "========================================================================";
-        LOGI << "Skipping actual PEX - Using statistical prediction";
-        LOGI << "========================================================================";
-        LOGI << "PEX is time-consuming. Using regression-based capacitance estimation.";
-        LOGI << "To run actual PEX, set run_actual_pex = true in main.cpp";
-        pex_success = false;  // 標記為不使用 PEX 結果
-    }
+    bool pex_success = run_or_predict_pex(run_actual_pex, test_num_bits, num_stacked_rows);
 
     // ========================================================================
     // 開始合成流程 (Design Compiler synthesis with parameterized design)

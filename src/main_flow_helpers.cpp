@@ -1,5 +1,6 @@
 #include "main_flow_helpers.hpp"
 
+#include "pex_runner.hpp"
 #include "siliconsmart_generator.hpp"
 #include "spice_include_resolver.hpp"
 #include "spice_simulator.hpp"
@@ -7,6 +8,7 @@
 
 #include "plog/Log.h"
 
+#include <cstdio>
 #include <cerrno>
 #include <cstring>
 #include <dirent.h>
@@ -406,4 +408,64 @@ bool run_siliconsmart_and_check(
     }
 
     return !sis_has_error;
+}
+
+bool run_or_predict_pex(
+    bool run_actual_pex,
+    uint64_t test_num_bits,
+    uint64_t num_stacked_rows) {
+    bool pex_success = false;
+
+    if (run_actual_pex) {
+        LOGI << "";
+        LOGI << "========================================================================";
+        LOGI << "Starting PEX (Parasitic Extraction) - Actual Run";
+        LOGI << "========================================================================";
+
+        OpenFinRAM::PEXRunner::Config pex_config;
+        pex_config.gds_path = "../sram_array_test.gds";
+        pex_config.spice_path = "../sram_colgrp.sp";
+
+        char pex_cell_name[128];
+        std::snprintf(pex_cell_name, sizeof(pex_cell_name),
+                      "stacked_colgrp_x%lux%lu",
+                      static_cast<unsigned long>(test_num_bits * 2),
+                      static_cast<unsigned long>(num_stacked_rows / 2));
+        pex_config.cell_name = pex_cell_name;
+        pex_config.output_dir = ".";
+        pex_config.turbo_count = 8;
+
+        OpenFinRAM::PEXRunner pex_runner(pex_config);
+
+        LOGI << "PEX Configuration:";
+        LOGI << "  Cell: " << pex_config.cell_name;
+        LOGI << "  GDS: " << pex_config.gds_path;
+        LOGI << "  SPICE: " << pex_config.spice_path;
+        LOGI << "  Output Dir: " << pex_config.output_dir;
+
+        pex_success = pex_runner.run();
+
+        if (pex_success) {
+            LOGI << "";
+            LOGI << "========================================================================";
+            LOGI << "PEX completed successfully!";
+            LOGI << "PEX Netlist: " << pex_runner.get_pex_netlist_path();
+            LOGI << "========================================================================";
+        } else {
+            LOGE << "";
+            LOGE << "========================================================================";
+            LOGE << "PEX failed! Check log files for details.";
+            LOGE << "========================================================================";
+        }
+    } else {
+        LOGI << "";
+        LOGI << "========================================================================";
+        LOGI << "Skipping actual PEX - Using statistical prediction";
+        LOGI << "========================================================================";
+        LOGI << "PEX is time-consuming. Using regression-based capacitance estimation.";
+        LOGI << "To run actual PEX, set run_actual_pex = true in main.cpp";
+        pex_success = false;
+    }
+
+    return pex_success;
 }

@@ -45,3 +45,8 @@ bool run_siliconsmart_and_check(
     uint64_t test_num_bits,
     uint64_t num_stacked_rows,
     uint64_t addr_width);
+
+bool run_or_predict_pex(
+    bool run_actual_pex,
+    uint64_t test_num_bits,
+    uint64_t num_stacked_rows);
