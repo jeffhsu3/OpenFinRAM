@@ -13,6 +13,7 @@
 #include "siliconsmart_generator.hpp"
 #include "lvs_runner.hpp"
 #include "lef_extractor.hpp"
+#include "main_config_helpers.hpp"
 #include "main_flow_helpers.hpp"
 #include "utils.hpp"
 #include "plog/Appenders/ColorConsoleAppender.h"
@@ -1768,47 +1769,11 @@ int main(int argc, char **argv) {
 
     LOGI << "Starting OpenFinRAM application";
 
-    // ========================================================================
-    // Parse command line arguments
-    // ========================================================================
-    uint64_t test_num_bits = 2;        // Default: 2 bits
-    uint64_t num_stacked_rows = 2;     // Default: 2 stacked rows
-    uint64_t num_mux = 1;
-    bool run_verification = true;      // Default: run verification (SPICE + SIS)
-    
-    if (argc >= 2) {
-        test_num_bits = std::stoull(argv[1]);
-        LOGI << "Using test_num_bits from command line: " << test_num_bits;
-    } else {
-        LOGI << "Using default test_num_bits: " << test_num_bits;
-    }
-    
-    if (argc >= 3) {
-        num_stacked_rows = std::stoull(argv[2]);
-        LOGI << "Using num_stacked_rows from command line: " << num_stacked_rows;
-    } else {
-        LOGI << "Using default num_stacked_rows: " << num_stacked_rows;
-    }
-
-    if (argc >= 4) {
-        num_mux = std::stoull(argv[3]);
-        LOGI << "Using num_mux from command line: " << num_mux;
-    } else {
-        LOGI << "Using default num_mux: " << num_mux;
-    }
-    
-    if (argc >= 5) {
-        uint64_t verify_arg = std::stoull(argv[4]);
-        run_verification = (verify_arg != 0);
-        LOGI << "Using run_verification from command line: " << (run_verification ? "1 (enabled)" : "0 (disabled)");
-    } else {
-        LOGI << "Using default run_verification: 1 (enabled)";
-    }
-    
-    LOGI << "Configuration: test_num_bits=" << test_num_bits 
-         << ", num_stacked_rows=" << num_stacked_rows
-         << ", num_mux=" << num_mux
-         << ", run_verification=" << (run_verification ? 1 : 0);
+    MainCliOptions cli_options = parse_main_cli_options(argc, argv);
+    uint64_t test_num_bits = cli_options.test_num_bits;
+    uint64_t num_stacked_rows = cli_options.num_stacked_rows;
+    uint64_t num_mux = cli_options.num_mux;
+    bool run_verification = cli_options.run_verification;
 
     // ========================================================================
     // Initialize ASAP7 Layer Map (hardcoded)
@@ -2082,32 +2047,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    // 計算正確的 addr_width
-    // WLT/WLB 各有 test_num_bits 條
-    uint64_t num_wl = test_num_bits;  // 每個 WLT 或 WLB 的數量
-    uint64_t wl_addr_bits = 0;
-    uint64_t temp = num_wl;
-    while (temp > 1) {
-        wl_addr_bits++;
-        temp >>= 1;
-    }
-    // MUX 選擇位數 (num_mux=1 -> 0 bits)
-    uint64_t mux_addr_bits = 0;
-    temp = num_mux;
-    while (temp > 1) {
-        mux_addr_bits++;
-        temp >>= 1;
-    }
-    // 總地址位 = WL選擇位 + top/bottom位(1) + ysel位(2) + mux位
-    uint64_t addr_width = wl_addr_bits + 1 + 2 + mux_addr_bits;
-    
-    LOGI << "Address width calculation:";
-    LOGI << "  WLT/WLB count: " << num_wl;
-    LOGI << "  WL address bits: " << wl_addr_bits;
-    LOGI << "  Top/Bottom bit: 1";
-    LOGI << "  YSel bits: 2";
-    LOGI << "  MUX bits: " << mux_addr_bits;
-    LOGI << "  Total addr_width: " << addr_width;
+    RuntimeDerivedParams derived_params = derive_runtime_params(test_num_bits, num_mux);
+    uint64_t num_wl = derived_params.num_wl;
+    uint64_t addr_width = derived_params.addr_width;
+    log_runtime_derived_params(derived_params);
 
     // ========================================================================
     // 輸出 SRAM column, SRAM array 和 colgrp 到同一個 GDS 檔案
