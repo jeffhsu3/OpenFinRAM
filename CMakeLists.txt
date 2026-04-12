@@ -30,6 +30,7 @@ set(SOURCES
     src/lef_extractor.cpp
     src/main_config_helpers.cpp
     src/main_flow_helpers.cpp
+    src/main_layout_helpers.cpp
     src/utils.cpp
 )
 
