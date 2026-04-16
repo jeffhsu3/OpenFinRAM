@@ -7,3 +7,6 @@
 [submodule "third_party/gdstk"]
 	path = third_party/gdstk
 	url = https://github.com/heitzmann/gdstk.git
+[submodule "third_party/argparse"]
+	path = third_party/argparse
+	url = https://github.com/p-ranav/argparse.git
