@@ -1,7 +1,11 @@
 #include "spice_generator.hpp"
-#include "plog/Log.h"
+
 #include <sstream>
 #include <iomanip>
+
+#include "plog/Log.h"
+
+#include "utils.hpp"
 
 namespace OpenFinRAM {
 
@@ -20,11 +24,50 @@ M5 VDD Q QB VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
 .ENDS)";
 }
 
+std::string SpiceTemplates::get_cell_8t() {
+    return R"(.SUBCKT sram_cell_8t WLA WLB BLA BLAN BLB BLBN VDD VSS
+M0 Q  QB VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M1 QB Q  VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M2 Q  QB VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
+M3 QB Q  VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
+M4 Q  WLA BLA  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M5 QB WLA BLAN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M6 Q  WLB BLB  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M7 QB WLB BLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+.ENDS)";
+}
+
+std::string SpiceTemplates::get_replica_cell_8t() {
+    return R"(.SUBCKT replica_cell_8t WLA WLB RBLA RBLAN RBLB RBLBN VDD VSS
+M0 VSS VDD VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M1 VDD VSS VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M2 VSS VDD VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
+M3 VDD VSS VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
+M4 VSS WLA RBLA VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M5 VDD WLA RBLAN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M6 VSS WLB RBLB VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M7 VDD WLB RBLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+.ENDS)";
+}
+
 std::string SpiceTemplates::get_dummy_cell() {
     return R"(.SUBCKT dummy_sram_6t122 BLN VDD VSS
 M0 QB VSS bln VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2
 M1 Q VDD VSS VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2
 M2 Q VDD VDD VDD pmos_rvt L=2e-08 W=2.7e-08 nfin=1
+.ENDS)";
+}
+
+std::string SpiceTemplates::get_dummy_cell_8t() {
+    return R"(.SUBCKT dummy_cell_8t BLA BLAN BLB BLBN VDD VSS
+M0 VSS VDD VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M1 VDD VSS VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M2 VSS VDD VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
+M3 VDD VSS VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
+M4 VSS VSS BLA  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M5 VDD VSS BLAN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M6 VSS VSS BLB  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M7 VDD VSS BLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
 .ENDS)";
 }
 
@@ -55,6 +98,26 @@ M5 sa yseln bl VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
 .ENDS)";
 }
 
+std::string SpiceTemplates::get_prech_8t_v1() {
+    return R"(.SUBCKT sram_prech_ymux_8t_v1
++ blprechn_A yseln_A ysel_A san_A sa_A bln_A bl_A
++ blprechn_B yseln_B ysel_B san_B sa_B bln_B bl_B
++ VDD VSS
+M0  bln_A ysel_A san_A VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M1  bl_A  ysel_A sa_A  VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M2  bln_A blprechn_A VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M3  bl_A  blprechn_A VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M4  san_A yseln_A bln_A VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M5  sa_A  yseln_A bl_A  VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M6  bln_B ysel_B san_B VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M7  bl_B  ysel_B sa_B  VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M8  bln_B blprechn_B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M9  bl_B  blprechn_B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M10 san_B yseln_B bln_B VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M11 sa_B  yseln_B bl_B  VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+.ENDS)";
+}
+
 std::string SpiceTemplates::get_prech_v2() {
     return R"(.SUBCKT sram_prech_ymux_6t112_v2 blprechn yseln ysel san sa bln bl VDD VSS
 M0 bl ysel sa VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
@@ -66,6 +129,26 @@ M5 san yseln bln VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
 .ENDS)";
 }
 
+std::string SpiceTemplates::get_prech_8t_v2() {
+    return R"(.SUBCKT sram_prech_ymux_8t_v2
++ blprechn_A yseln_A ysel_A san_A sa_A bln_A bl_A
++ blprechn_B yseln_B ysel_B san_B sa_B bln_B bl_B
++ VDD VSS
+M0  bln_A ysel_A san_A VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M1  bl_A  ysel_A sa_A  VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M2  bln_A blprechn_A VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M3  bl_A  blprechn_A VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M4  san_A yseln_A bln_A VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M5  sa_A  yseln_A bl_A  VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M6  bln_B ysel_B san_B VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M7  bl_B  ysel_B sa_B  VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M8  bln_B blprechn_B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M9  bl_B  blprechn_B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M10 san_B yseln_B bln_B VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M11 sa_B  yseln_B bl_B  VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+.ENDS)";
+}
+
 std::string SpiceTemplates::get_prech_ymux() {
     return R"(.SUBCKT wrasst_prech_ymux_x4_sram_6t122_v2 bln[0] bln[1] bln[2] bln[3] bl[0] bl[1] bl[2] bl[3] yseln[0] yseln[1]
 + yseln[2] yseln[3] ysel[0] ysel[1] ysel[2] ysel[3] san sa blprechn VDD 
@@ -74,6 +157,82 @@ X0 blprechn yseln[0] ysel[0] san sa bln[0] bl[0] VDD VSS sram_prech_ymux_6t112_v
 X1 blprechn yseln[1] ysel[1] san sa bln[1] bl[1] VDD VSS sram_prech_ymux_6t112_v1
 X2 blprechn yseln[2] ysel[2] san sa bln[2] bl[2] VDD VSS sram_prech_ymux_6t112_v2
 X3 blprechn yseln[3] ysel[3] san sa bln[3] bl[3] VDD VSS sram_prech_ymux_6t112_v2
+.ENDS)";
+}
+
+std::string SpiceTemplates::get_wrasst_prech_ymux_x8_sram_8t() {
+    return R"(.SUBCKT wrasst_prech_ymux_x8_sram_8t
++ bln_A[0] bln_A[1] bln_A[2] bln_A[3]
++ bl_A[0]  bl_A[1]  bl_A[2]  bl_A[3]
++ bln_B[0] bln_B[1] bln_B[2] bln_B[3]
++ bl_B[0]  bl_B[1]  bl_B[2]  bl_B[3]
++ yseln_A[0] yseln_A[1] yseln_A[2] yseln_A[3]
++ ysel_A[0]  ysel_A[1]  ysel_A[2]  ysel_A[3]
++ yseln_B[0] yseln_B[1] yseln_B[2] yseln_B[3]
++ ysel_B[0]  ysel_B[1]  ysel_B[2]  ysel_B[3]
++ san_A sa_A san_B sa_B
++ blprechn_A blprechn_B
++ VDD VSS
+X0 blprechn_A yseln_A[0] ysel_A[0] san_A sa_A bln_A[0] bl_A[0] blprechn_B yseln_B[0] ysel_B[0] san_B sa_B bln_B[0] bl_B[0] VDD VSS sram_prech_ymux_8t_v1
+X1 blprechn_A yseln_A[1] ysel_A[1] san_A sa_A bln_A[1] bl_A[1] blprechn_B yseln_B[1] ysel_B[1] san_B sa_B bln_B[1] bl_B[1] VDD VSS sram_prech_ymux_8t_v1
+X2 blprechn_A yseln_A[2] ysel_A[2] san_A sa_A bln_A[2] bl_A[2] blprechn_B yseln_B[2] ysel_B[2] san_B sa_B bln_B[2] bl_B[2] VDD VSS sram_prech_ymux_8t_v2
+X3 blprechn_A yseln_A[3] ysel_A[3] san_A sa_A bln_A[3] bl_A[3] blprechn_B yseln_B[3] ysel_B[3] san_B sa_B bln_B[3] bl_B[3] VDD VSS sram_prech_ymux_8t_v2
+.ENDS)";
+}
+
+std::string SpiceTemplates::get_write_driver() {
+    return R"(.SUBCKT write_driver_sram D wrena wrenan wdo wdon vdd vss
+* Data inverter: 53 = ~D
+M35 vdd D  53  vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M15 vss D  53  vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+* Cross-coupled write data latch (node 50 = D side, node 51 = ~D side)
+* M24/M26 intentionally nfin=1 (ratioed latch — do not change)
+M26 50  51  vdd vdd pmos_rvt L=2e-08 W=2.7e-08 nfin=1
+M24 vdd 50  51  vdd pmos_rvt L=2e-08 W=2.7e-08 nfin=1
+M4  50  51  vss vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M2  vss 50  51  vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+* Load D and ~D into latch on write enable
+M10 D   wrenan 50  vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M11 53  wrenan 51  vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+* Write enable drivers: assert latch data onto wdo/wdon (NMOS pull-down + PMOS pull-up)
+M6  wdo  wrena  50   vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M0  51   wrena  wdon vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M28 wdo  wrenan 50   vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M22 51   wrenan wdon vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+.ENDS)";
+}
+
+std::string SpiceTemplates::get_sense_amp() {
+    return R"(.SUBCKT sense_amp_sram sa san SAE SAPRECHN qa qan vdd vss
+* SAPRECHN precharge chain: pulls qa and qan to VDD before sensing
+M27 qan SAPRECHN vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+M29 59  SAPRECHN qan vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+M30 qa  SAPRECHN 59  vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+M31 vdd SAPRECHN qa  vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+* PMOS cross-coupled latch load
+M25 vdd qa  qan vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+M32 qa  qan vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+* Differential input NMOS pair (sa = BL side, san = BLN side)
+M5  52  sa  57  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
+M9  58  san 52  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
+* NMOS cross-coupled latch
+M3  57  qa  qan vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
+M12 qa  qan 58  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
+* SAE tail: enables differential sensing
+M7  vss SAE 52  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
+M8  52  SAE vss vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
+* Dummy FinFET devices (layout matching, gate tied to supply — always OFF)
+M1  qan vss vss vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
+M13 vss vss qa  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
+M23 qan vdd vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+M33 vdd vdd qa  vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+.ENDS)";
+}
+
+std::string SpiceTemplates::get_skewed_inv() {
+    return R"(.SUBCKT skewed_inv_sram in out VDD VSS
+MP out in VDD VDD pmos_rvt L=2e-08 W=1.08e-07 nfin=4
+MN out in VSS VSS nmos_rvt L=2e-08 W=1.08e-07  nfin=4
 .ENDS)";
 }
 
@@ -149,7 +308,7 @@ X46 48 oeb_out oe_out vdd vss Q TBUF_INV
 // SPICE Generator Implementation
 // ============================================================================
 
-SpiceGenerator::SpiceGenerator(const SpiceConfig& config)
+SpiceGenerator::SpiceGenerator(const MainCliOptions& config)
     : config_(config)
 {
 }
@@ -186,7 +345,7 @@ std::string SpiceGenerator::generate_cell_row() {
     std::vector<std::string> ports;
     
     // WL ports
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         ports.push_back("WL[" + std::to_string(i) + "]");
     }
     ports.push_back("BLN");
@@ -196,10 +355,10 @@ std::string SpiceGenerator::generate_cell_row() {
     
     // Instances
     std::stringstream instances;
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         instances << "X" << i << " WL[" << i << "] BLN BL VDD VSS sram_cell_6t_122\n";
     }
-    instances << "X" << config_.num_wordlines << " BLN VDD VSS dummy_sram_6t122\n";
+    instances << "X" << config_.num_wls << " BLN VDD VSS dummy_sram_6t122\n";
     
     return create_subckt("sram_cell_row", ports, instances.str());
 }
@@ -208,7 +367,7 @@ std::string SpiceGenerator::generate_sramcol() {
     std::vector<std::string> ports;
     
     // WL ports
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         ports.push_back("WL[" + std::to_string(i) + "]");
     }
     ports.push_back("BLN");
@@ -222,12 +381,12 @@ std::string SpiceGenerator::generate_sramcol() {
     instances << "M1 70 VDD VSS VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2\n";
     instances << "M2 70 VDD VDD VDD pmos_rvt L=2e-08 W=2.7e-08 nfin=1\n";
     instances << "X1 ";
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         instances << "WL[" << i << "] ";
     }
     instances << "BLN BL VDD VSS sram_cell_row\n";
     
-    std::string cell_name = "sramcol_x" + std::to_string(config_.num_wordlines) + "_sram_6t122";
+    std::string cell_name = "sramcol_x" + std::to_string(config_.num_wls) + "_sram_6t122";
     return create_subckt(cell_name, ports, instances.str());
 }
 
@@ -235,7 +394,7 @@ std::string SpiceGenerator::generate_array() {
     std::vector<std::string> ports;
     
     // WL ports
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         ports.push_back("WL[" + std::to_string(i) + "]");
     }
     
@@ -257,7 +416,7 @@ std::string SpiceGenerator::generate_array() {
     
     for (int i = 0; i < 4; ++i) {
         instances << "X" << (4 + i) << " ";
-        for (int j = 0; j < config_.num_wordlines; ++j) {
+        for (int j = 0; j < config_.num_wls; ++j) {
             instances << "WL[" << j << "] ";
         }
         instances << "BLN[" << i << "] BL[" << i << "] VDD VSS sram_cell_row\n";
@@ -270,10 +429,10 @@ std::string SpiceGenerator::generate_colgrp() {
     std::vector<std::string> ports;
     
     // WLT and WLB ports
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         ports.push_back("WLT[" + std::to_string(i) + "]");
     }
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         ports.push_back("WLB[" + std::to_string(i) + "]");
     }
     
@@ -298,14 +457,14 @@ std::string SpiceGenerator::generate_colgrp() {
     
     // Top array
     instances << "X0 ";
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         instances << "WLT[" << i << "] ";
     }
     instances << "BLTN[0] BLTN[1] BLTN[2] BLTN[3] BLT[0] BLT[1] BLT[2] BLT[3] VDD VSS array_sram_6t122\n";
     
     // Bottom array
     instances << "X1 ";
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         instances << "WLB[" << i << "] ";
     }
     instances << "BLBN[0] BLBN[1] BLBN[2] BLBN[3] BLB[0] BLB[1] BLB[2] BLB[3] VDD VSS array_sram_6t122\n";
@@ -325,10 +484,10 @@ std::string SpiceGenerator::generate_stacked_colgrp() {
     std::vector<std::string> ports;
     
     // WLT and WLB ports
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         ports.push_back("WLT[" + std::to_string(i) + "]");
     }
-    for (int i = 0; i < config_.num_wordlines; ++i) {
+    for (int i = 0; i < config_.num_wls; ++i) {
         ports.push_back("WLB[" + std::to_string(i) + "]");
     }
     
@@ -342,10 +501,10 @@ std::string SpiceGenerator::generate_stacked_colgrp() {
     ports.insert(ports.end(), ysel_ports.begin(), ysel_ports.end());
     
     // Data ports
-    for (int i = 0; i < config_.data_bits; ++i) {
+    for (int i = 0; i < config_.num_data_bits; ++i) {
         ports.push_back("D[" + std::to_string(i) + "]");
     }
-    for (int i = 0; i < config_.data_bits; ++i) {
+    for (int i = 0; i < config_.num_data_bits; ++i) {
         ports.push_back("Q[" + std::to_string(i) + "]");
     }
     
@@ -358,12 +517,12 @@ std::string SpiceGenerator::generate_stacked_colgrp() {
     
     // Instances
     std::stringstream instances;
-    for (int bit = 0; bit < config_.data_bits; ++bit) {
+    for (int bit = 0; bit < config_.num_data_bits; ++bit) {
         instances << "X" << bit << " ";
-        for (int i = 0; i < config_.num_wordlines; ++i) {
+        for (int i = 0; i < config_.num_wls; ++i) {
             instances << "WLT[" << i << "] ";
         }
-        for (int i = 0; i < config_.num_wordlines; ++i) {
+        for (int i = 0; i < config_.num_wls; ++i) {
             instances << "WLB[" << i << "] ";
         }
         for (const auto& ysel : ysel_ports) {
@@ -374,28 +533,28 @@ std::string SpiceGenerator::generate_stacked_colgrp() {
         instances << "colgrp_sram_6t122\n";
     }
     
-    // Generate bank name matching GDS: stacked_colgrp_x{bits}x{num_colgrp}
-    // bits = num_wordlines (since each colgrp has 2 arrays, each with num_wordlines)
-    std::string bank_name = "stacked_colgrp_x" + std::to_string(config_.num_wordlines * 2) + "x" + std::to_string(config_.num_colgrp);
+    // Generate bank name matching GDS: stacked_colgrp_x{bits}x{num_data_bits}
+    // bits = num_wls (since each colgrp has 2 arrays, each with num_wls)
+    std::string bank_name = "stacked_colgrp_x" + std::to_string(config_.num_wls * 2) + "x" + std::to_string(config_.num_data_bits);
     return create_subckt(bank_name, ports, instances.str());
 }
 
 std::string SpiceGenerator::generate_stacked_colgrp_mux() {
     std::vector<std::string> ports;
     
-    for (int mux = 0; mux < config_.num_mux; ++mux) {
+    for (int mux = 0; mux < config_.num_banks; ++mux) {
         // WLT and WLB ports
-        for (int i = 0; i < config_.num_wordlines; ++i) {
-            ports.push_back("WLT[" + std::to_string(i + mux * config_.num_wordlines) + "]");
+        for (int i = 0; i < config_.num_wls; ++i) {
+            ports.push_back("WLT[" + std::to_string(i + mux * config_.num_wls) + "]");
         }
-        for (int i = 0; i < config_.num_wordlines; ++i) {
-            ports.push_back("WLB[" + std::to_string(i + mux * config_.num_wordlines) + "]");
+        for (int i = 0; i < config_.num_wls; ++i) {
+            ports.push_back("WLB[" + std::to_string(i + mux * config_.num_wls) + "]");
         }
     }
     
     // YSEL ports
     std::vector<std::string> ysel_ports;
-    for (int mux = 0; mux < config_.num_mux; ++mux) {
+    for (int mux = 0; mux < config_.num_banks; ++mux) {
         for (int i = 0; i < 4; ++i) {
             ysel_ports.push_back("yseltn[" + std::to_string(i + mux * 4) + "]");
         }
@@ -412,10 +571,10 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
     ports.insert(ports.end(), ysel_ports.begin(), ysel_ports.end());
     
     // Data ports
-    for (int i = 0; i < config_.data_bits; ++i) {
+    for (int i = 0; i < config_.num_data_bits; ++i) {
         ports.push_back("D[" + std::to_string(i) + "]");
     }
-    for (int i = 0; i < config_.data_bits; ++i) {
+    for (int i = 0; i < config_.num_data_bits; ++i) {
         ports.push_back("Q[" + std::to_string(i) + "]");
     }
     
@@ -426,7 +585,7 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
     };
     std::vector<std::string> ctrl_ports;
     for (const auto& name : ctrl_port_names) {
-        for (int mux = 0; mux < config_.num_mux; ++mux) {
+        for (int mux = 0; mux < config_.num_banks; ++mux) {
             ctrl_ports.push_back(name + "[" + std::to_string(mux) + "]");
         }
     }
@@ -436,14 +595,14 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
     
     // Instances
     std::stringstream instances;
-    for (int mux = 0; mux < config_.num_mux; ++mux) {
-        for (int bit = 0; bit < config_.data_bits; ++bit) {
+    for (int mux = 0; mux < config_.num_banks; ++mux) {
+        for (int bit = 0; bit < config_.num_data_bits; ++bit) {
             instances << "X" << mux << "_" << bit << " ";
-            for (int i = 0; i < config_.num_wordlines; ++i) {
-                instances << "WLT[" << (i + mux * config_.num_wordlines) << "] ";
+            for (int i = 0; i < config_.num_wls; ++i) {
+                instances << "WLT[" << (i + mux * config_.num_wls) << "] ";
             }
-            for (int i = 0; i < config_.num_wordlines; ++i) {
-                instances << "WLB[" << (i + mux * config_.num_wordlines) << "] ";
+            for (int i = 0; i < config_.num_wls; ++i) {
+                instances << "WLB[" << (i + mux * config_.num_wls) << "] ";
             }
             for (int i = 0; i < 4; ++i) {
                 instances << "yseltn[" << (i + mux * 4) << "] ";
@@ -463,9 +622,9 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
         }
     }
     
-    // Generate bank name matching GDS: stacked_colgrp_x{bits}x{num_colgrp}
-    // bits = num_wordlines (since each colgrp has 2 arrays, each with num_wordlines)
-    std::string bank_name = "stacked_colgrp_x" + std::to_string(config_.num_wordlines * 2) + "x" + std::to_string(config_.num_colgrp) + "x" + std::to_string(config_.num_mux);
+    // Generate bank name matching GDS: stacked_colgrp_x{bits}x{num_data_bits}
+    // bits = num_wls (since each colgrp has 2 arrays, each with num_wls)
+    std::string bank_name = "stacked_colgrp_x" + std::to_string(config_.num_wls * 2) + "x" + std::to_string(config_.num_data_bits) + "x" + std::to_string(config_.num_banks);
     return create_subckt(bank_name, ports, instances.str());
 }
 
@@ -496,8 +655,8 @@ std::string SpiceGenerator::generate_spice_content() {
     return content.str();
 }
 
-bool SpiceGenerator::generate(const std::string& output_filename) {
-    std::string output_path = config_.output_dir + "/" + output_filename;
+bool SpiceGenerator::generate() {
+    std::string output_path = join_path(get_current_dir_name(), config_.output_sp_name);
     std::string content = generate_spice_content();
     
     std::ofstream outfile(output_path);
@@ -509,12 +668,11 @@ bool SpiceGenerator::generate(const std::string& output_filename) {
     outfile << content;
     outfile.close();
     
-    LOGI << "✓ Generated SPICE netlist: " << output_filename;
-    LOGI << "  Number of wordlines: " << config_.num_wordlines;
-    LOGI << "  Number of column groups: " << config_.num_colgrp;
-    LOGI << "  Data bits: " << config_.data_bits;
-    LOGI << "  Mux slices: " << config_.num_mux;
-    
+    LOGI << "✓ Generated SPICE netlist: " << config_.output_sp_name;
+    LOGI << "  Number of wordlines: " << config_.num_wls;
+    LOGI << "  Number of data bits: " << config_.num_data_bits;
+    LOGI << "  Number of banks: " << config_.num_banks;
+        
     return true;
 }
 

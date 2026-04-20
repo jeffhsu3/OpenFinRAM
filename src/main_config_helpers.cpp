@@ -1,54 +1,70 @@
 #include "main_config_helpers.hpp"
 
+#include "argparse/argparse.hpp"
 #include "plog/Log.h"
 
-#include <string>
-
 MainCliOptions parse_main_cli_options(int argc, char** argv) {
+    argparse::ArgumentParser program("OpenFinRAM");
+
+    program.add_argument("--num-wls")
+        .help("Number of wordline top/bottom (i.e., |WLT/WLB|). Must be an even number.")
+        .default_value(uint64_t{2})
+        .scan<'u', uint64_t>();
+
+    program.add_argument("--num-data-bits")
+        .help("Number of D/Q bits (i.e., |D/Q|). Must be an even number.")
+        .default_value(uint64_t{2})
+        .scan<'u', uint64_t>();
+
+    program.add_argument("--num-banks")
+        .help("Number of banks. Must be a power of 2.")
+        .default_value(uint64_t{1})
+        .scan<'u', uint64_t>();
+
+    program.add_argument("--single-port")
+        .help("Generate single-port SRAM (default: single-port).")
+        .default_value(true)
+        .implicit_value(false);
+
+    program.add_argument("--skip-characterization")
+        .help("Disable SiliconSmart characterization and verification steps.")
+        .default_value(false)
+        .implicit_value(true);
+
+    program.add_argument("--output-sp-name")
+        .help("Output name for generated SPICE netlist.")
+        .default_value(std::string("sram_colgrp.sp"));
+
+    try {
+        program.parse_args(argc, argv);
+    } catch (const std::exception& e) {
+        LOGE << "CLI parse error: " << e.what();
+        std::cerr << program;
+        std::exit(1);
+    }
+
     MainCliOptions options;
+    options.num_wls    = program.get<uint64_t>("--num-wls");
+    options.num_data_bits = program.get<uint64_t>("--num-data-bits");
+    options.num_banks          = program.get<uint64_t>("--num-banks");
+    options.single_port        = program.get<bool>("--single-port");
+    options.run_characterization = !program.get<bool>("--skip-characterization");
+    options.output_sp_name = program.get<std::string>("--output-sp-name");
 
-    if (argc >= 2) {
-        options.test_num_bits = std::stoull(argv[1]);
-        LOGI << "Using test_num_bits from command line: " << options.test_num_bits;
-    } else {
-        LOGI << "Using default test_num_bits: " << options.test_num_bits;
-    }
-
-    if (argc >= 3) {
-        options.num_stacked_rows = std::stoull(argv[2]);
-        LOGI << "Using num_stacked_rows from command line: " << options.num_stacked_rows;
-    } else {
-        LOGI << "Using default num_stacked_rows: " << options.num_stacked_rows;
-    }
-
-    if (argc >= 4) {
-        options.num_mux = std::stoull(argv[3]);
-        LOGI << "Using num_mux from command line: " << options.num_mux;
-    } else {
-        LOGI << "Using default num_mux: " << options.num_mux;
-    }
-
-    if (argc >= 5) {
-        uint64_t verify_arg = std::stoull(argv[4]);
-        options.run_verification = (verify_arg != 0);
-        LOGI << "Using run_verification from command line: "
-             << (options.run_verification ? "1 (enabled)" : "0 (disabled)");
-    } else {
-        LOGI << "Using default run_verification: 1 (enabled)";
-    }
-
-    LOGI << "Configuration: test_num_bits=" << options.test_num_bits
-         << ", num_stacked_rows=" << options.num_stacked_rows
-         << ", num_mux=" << options.num_mux
-         << ", run_verification=" << (options.run_verification ? 1 : 0);
+    LOGI << "Configuration: num_wls=" << options.num_wls
+         << ", num_data_bits=" << options.num_data_bits
+         << ", num_banks=" << options.num_banks
+         << ", single_port=" << (options.single_port ? 1 : 0)
+         << ", run_characterization=" << (options.run_characterization ? 1 : 0)
+         << ", output_sp_name=" << options.output_sp_name;
 
     return options;
 }
 
-RuntimeDerivedParams derive_runtime_params(uint64_t test_num_bits, uint64_t num_mux) {
+RuntimeDerivedParams derive_runtime_params(uint64_t num_wls, uint64_t num_banks) {
     RuntimeDerivedParams params;
 
-    params.num_wl = test_num_bits;
+    params.num_wl = num_wls;
 
     uint64_t temp = params.num_wl;
     while (temp > 1) {
@@ -56,7 +72,7 @@ RuntimeDerivedParams derive_runtime_params(uint64_t test_num_bits, uint64_t num_
         temp >>= 1;
     }
 
-    temp = num_mux;
+    temp = num_banks;
     while (temp > 1) {
         params.mux_addr_bits++;
         temp >>= 1;

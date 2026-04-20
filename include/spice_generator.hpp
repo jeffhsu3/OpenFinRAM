@@ -5,6 +5,8 @@
 #include <vector>
 #include <fstream>
 
+#include "main_config_helpers.hpp"
+
 namespace OpenFinRAM {
 
 // ============================================================================
@@ -32,12 +34,21 @@ struct SpiceConfig {
 class SpiceTemplates {
 public:
     static std::string get_cell_6t();
+    static std::string get_cell_8t();
+    static std::string get_replica_cell_8t();
     static std::string get_dummy_cell();
+    static std::string get_dummy_cell_8t();
     static std::string get_dummy_topbot_v1();
     static std::string get_dummy_topbot_v2();
     static std::string get_prech_v1();
+    static std::string get_prech_8t_v1();
     static std::string get_prech_v2();
+    static std::string get_prech_8t_v2();
     static std::string get_prech_ymux();
+    static std::string get_wrasst_prech_ymux_x8_sram_8t();
+    static std::string get_write_driver();
+    static std::string get_sense_amp();
+    static std::string get_skewed_inv();
     static std::string get_io_nand();
     static std::string get_tbuf();
     static std::string get_iocolgrp();
@@ -48,13 +59,13 @@ public:
 // ============================================================================
 class SpiceGenerator {
 public:
-    SpiceGenerator(const SpiceConfig& config);
+    SpiceGenerator(const MainCliOptions& config);
     
     // Generate complete SPICE netlist
-    bool generate(const std::string& output_filename = "sram_colgrp.sp");
+    bool generate();
     
 private:
-    SpiceConfig config_;
+    MainCliOptions config_;
     
     // Helper functions
     std::string format_ports(const std::vector<std::string>& ports, int max_per_line = 10);

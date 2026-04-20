@@ -1,10 +1,11 @@
 cmake_minimum_required(VERSION 3.22)
 project(OpenFinRAM)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 17)
 
 # Add gdstk as subdirectory
 add_subdirectory(third_party/gdstk)
+add_subdirectory(third_party/argparse)
 
 # Include directories
 include_directories(include)
@@ -38,11 +39,11 @@ set(SOURCES
 add_executable(OpenFinRAM ${SOURCES})
 
 # Link libraries
-target_link_libraries(OpenFinRAM gdstk)
+target_link_libraries(OpenFinRAM gdstk argparse)
 
 # Create GDS comparator executable
 add_executable(gds_comparator src/gds_comparator.cpp)
-target_link_libraries(gds_comparator gdstk)
+target_link_libraries(gds_comparator gdstk argparse)
 target_include_directories(gds_comparator PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 add_custom_command(TARGET OpenFinRAM POST_BUILD
