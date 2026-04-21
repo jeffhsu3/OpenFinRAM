@@ -653,7 +653,7 @@ std::string SpiceGenerator::generate_spice_content(const bool& single_port) {
 }
 
 bool SpiceGenerator::generate() {
-    std::string output_path = join_path(get_current_dir_name(), config_.output_sp_name);
+    std::string output_path = join_path(get_current_dir_name(), "sram_colgrp.sp");
     std::string content = generate_spice_content(config_.single_port);
     
     std::ofstream outfile(output_path);
@@ -665,7 +665,7 @@ bool SpiceGenerator::generate() {
     outfile << content;
     outfile.close();
     
-    LOGI << "✓ Generated SPICE netlist: " << config_.output_sp_name;
+    LOGI << "✓ Generated SPICE netlist: " << output_path;
     LOGI << "  Number of wordlines: " << config_.num_wls;
     LOGI << "  Number of data bits: " << config_.num_data_bits;
     LOGI << "  Number of banks: " << config_.num_banks;
