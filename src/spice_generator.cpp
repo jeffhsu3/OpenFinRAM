@@ -5,309 +5,10 @@
 
 #include "plog/Log.h"
 
+#include "spice_templates.hpp"
 #include "utils.hpp"
 
 namespace OpenFinRAM {
-
-// ============================================================================
-// SPICE Templates Implementation
-// ============================================================================
-
-std::string SpiceTemplates::get_cell_6t() {
-    return R"(.SUBCKT sram_cell_6t_122 WL BLN BL VDD VSS
-M0 QB WL BLN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M1 Q QB VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M2 VSS Q QB VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M3 BL WL Q VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M4 Q QB VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
-M5 VDD Q QB VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_cell_8t() {
-    return R"(.SUBCKT sram_cell_8t WLA WLB BLA BLAN BLB BLBN VDD VSS
-M0 Q  QB VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M1 QB Q  VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M2 Q  QB VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
-M3 QB Q  VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
-M4 Q  WLA BLA  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M5 QB WLA BLAN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M6 Q  WLB BLB  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M7 QB WLB BLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_replica_cell_8t() {
-    return R"(.SUBCKT replica_cell_8t WLA WLB RBLA RBLAN RBLB RBLBN VDD VSS
-M0 VSS VDD VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M1 VDD VSS VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M2 VSS VDD VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
-M3 VDD VSS VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
-M4 VSS WLA RBLA VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M5 VDD WLA RBLAN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M6 VSS WLB RBLB VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M7 VDD WLB RBLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_dummy_cell() {
-    return R"(.SUBCKT dummy_sram_6t122 BLN VDD VSS
-M0 QB VSS bln VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2
-M1 Q VDD VSS VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2
-M2 Q VDD VDD VDD pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_dummy_cell_8t() {
-    return R"(.SUBCKT dummy_cell_8t BLA BLAN BLB BLBN VDD VSS
-M0 VSS VDD VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M1 VDD VSS VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M2 VSS VDD VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
-M3 VDD VSS VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
-M4 VSS VSS BLA  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M5 VDD VSS BLAN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M6 VSS VSS BLB  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M7 VDD VSS BLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_dummy_topbot_v1() {
-    return R"(.SUBCKT dummy_topbot_v1 BLN VDD VSS
-M0 6 VSS BLN VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2
-M1 VSS VDD VSS VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2
-M2 VDD VDD VDD VDD pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_dummy_topbot_v2() {
-    return R"(.SUBCKT dummy_topbot_v2 BLN VDD VSS
-M0 VSS VDD VSS VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2
-M1 6 VSS BLN VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2
-M2 VDD VDD VDD VDD pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_prech_v1() {
-    return R"(.SUBCKT sram_prech_ymux_6t112_v1 blprechn yseln ysel san sa bln bl VDD VSS
-M0 bln ysel san VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M1 bl ysel sa VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M2 bln blprechn VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M3 bl blprechn VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M4 san yseln bln VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M5 sa yseln bl VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_prech_8t_v1() {
-    return R"(.SUBCKT sram_prech_ymux_8t_v1
-+ blprechn_A yseln_A ysel_A san_A sa_A bln_A bl_A
-+ blprechn_B yseln_B ysel_B san_B sa_B bln_B bl_B
-+ VDD VSS
-M0  bln_A ysel_A san_A VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M1  bl_A  ysel_A sa_A  VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M2  bln_A blprechn_A VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M3  bl_A  blprechn_A VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M4  san_A yseln_A bln_A VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M5  sa_A  yseln_A bl_A  VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M6  bln_B ysel_B san_B VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M7  bl_B  ysel_B sa_B  VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M8  bln_B blprechn_B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M9  bl_B  blprechn_B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M10 san_B yseln_B bln_B VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M11 sa_B  yseln_B bl_B  VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_prech_v2() {
-    return R"(.SUBCKT sram_prech_ymux_6t112_v2 blprechn yseln ysel san sa bln bl VDD VSS
-M0 bl ysel sa VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M1 bln ysel san VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M2 bl blprechn VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M3 bln blprechn VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M4 sa yseln bl VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M5 san yseln bln VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_prech_8t_v2() {
-    return R"(.SUBCKT sram_prech_ymux_8t_v2
-+ blprechn_A yseln_A ysel_A san_A sa_A bln_A bl_A
-+ blprechn_B yseln_B ysel_B san_B sa_B bln_B bl_B
-+ VDD VSS
-M0  bln_A ysel_A san_A VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M1  bl_A  ysel_A sa_A  VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M2  bln_A blprechn_A VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M3  bl_A  blprechn_A VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M4  san_A yseln_A bln_A VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M5  sa_A  yseln_A bl_A  VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M6  bln_B ysel_B san_B VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M7  bl_B  ysel_B sa_B  VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M8  bln_B blprechn_B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M9  bl_B  blprechn_B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M10 san_B yseln_B bln_B VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M11 sa_B  yseln_B bl_B  VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_prech_ymux() {
-    return R"(.SUBCKT wrasst_prech_ymux_x4_sram_6t122_v2 bln[0] bln[1] bln[2] bln[3] bl[0] bl[1] bl[2] bl[3] yseln[0] yseln[1]
-+ yseln[2] yseln[3] ysel[0] ysel[1] ysel[2] ysel[3] san sa blprechn VDD 
-+ VSS
-X0 blprechn yseln[0] ysel[0] san sa bln[0] bl[0] VDD VSS sram_prech_ymux_6t112_v1
-X1 blprechn yseln[1] ysel[1] san sa bln[1] bl[1] VDD VSS sram_prech_ymux_6t112_v1
-X2 blprechn yseln[2] ysel[2] san sa bln[2] bl[2] VDD VSS sram_prech_ymux_6t112_v2
-X3 blprechn yseln[3] ysel[3] san sa bln[3] bl[3] VDD VSS sram_prech_ymux_6t112_v2
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_wrasst_prech_ymux_x8_sram_8t() {
-    return R"(.SUBCKT wrasst_prech_ymux_x8_sram_8t
-+ bln_A[0] bln_A[1] bln_A[2] bln_A[3]
-+ bl_A[0]  bl_A[1]  bl_A[2]  bl_A[3]
-+ bln_B[0] bln_B[1] bln_B[2] bln_B[3]
-+ bl_B[0]  bl_B[1]  bl_B[2]  bl_B[3]
-+ yseln_A[0] yseln_A[1] yseln_A[2] yseln_A[3]
-+ ysel_A[0]  ysel_A[1]  ysel_A[2]  ysel_A[3]
-+ yseln_B[0] yseln_B[1] yseln_B[2] yseln_B[3]
-+ ysel_B[0]  ysel_B[1]  ysel_B[2]  ysel_B[3]
-+ san_A sa_A san_B sa_B
-+ blprechn_A blprechn_B
-+ VDD VSS
-X0 blprechn_A yseln_A[0] ysel_A[0] san_A sa_A bln_A[0] bl_A[0] blprechn_B yseln_B[0] ysel_B[0] san_B sa_B bln_B[0] bl_B[0] VDD VSS sram_prech_ymux_8t_v1
-X1 blprechn_A yseln_A[1] ysel_A[1] san_A sa_A bln_A[1] bl_A[1] blprechn_B yseln_B[1] ysel_B[1] san_B sa_B bln_B[1] bl_B[1] VDD VSS sram_prech_ymux_8t_v1
-X2 blprechn_A yseln_A[2] ysel_A[2] san_A sa_A bln_A[2] bl_A[2] blprechn_B yseln_B[2] ysel_B[2] san_B sa_B bln_B[2] bl_B[2] VDD VSS sram_prech_ymux_8t_v2
-X3 blprechn_A yseln_A[3] ysel_A[3] san_A sa_A bln_A[3] bl_A[3] blprechn_B yseln_B[3] ysel_B[3] san_B sa_B bln_B[3] bl_B[3] VDD VSS sram_prech_ymux_8t_v2
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_write_driver() {
-    return R"(.SUBCKT write_driver_sram D wrena wrenan wdo wdon vdd vss
-* Data inverter: 53 = ~D
-M35 vdd D  53  vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M15 vss D  53  vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-* Cross-coupled write data latch (node 50 = D side, node 51 = ~D side)
-* M24/M26 intentionally nfin=1 (ratioed latch — do not change)
-M26 50  51  vdd vdd pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-M24 vdd 50  51  vdd pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-M4  50  51  vss vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M2  vss 50  51  vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-* Load D and ~D into latch on write enable
-M10 D   wrenan 50  vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M11 53  wrenan 51  vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-* Write enable drivers: assert latch data onto wdo/wdon (NMOS pull-down + PMOS pull-up)
-M6  wdo  wrena  50   vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M0  51   wrena  wdon vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M28 wdo  wrenan 50   vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M22 51   wrenan wdon vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_sense_amp() {
-    return R"(.SUBCKT sense_amp_sram sa san SAE SAPRECHN qa qan vdd vss
-* SAPRECHN precharge chain: pulls qa and qan to VDD before sensing
-M27 qan SAPRECHN vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M29 59  SAPRECHN qan vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M30 qa  SAPRECHN 59  vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M31 vdd SAPRECHN qa  vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-* PMOS cross-coupled latch load
-M25 vdd qa  qan vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M32 qa  qan vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-* Differential input NMOS pair (sa = BL side, san = BLN side)
-M5  52  sa  57  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M9  58  san 52  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-* NMOS cross-coupled latch
-M3  57  qa  qan vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M12 qa  qan 58  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-* SAE tail: enables differential sensing
-M7  vss SAE 52  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M8  52  SAE vss vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-* Dummy FinFET devices (layout matching, gate tied to supply — always OFF)
-M1  qan vss vss vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M13 vss vss qa  vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M23 qan vdd vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M33 vdd vdd qa  vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_skewed_inv() {
-    return R"(.SUBCKT skewed_inv_sram in out VDD VSS
-MP out in VDD VDD pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-MN out in VSS VSS nmos_rvt L=2e-08 W=1.08e-07  nfin=4
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_io_nand() {
-    return R"(.SUBCKT io_nand_3f_6f A B Y VDD VSS
-M0 VSS A 6 VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M1 6 A VSS VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M2 Y B 6 VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M3 6 B Y VSS nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M4 VDD A Y VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M5 Y B VDD VDD pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_tbuf() {
-    return R"(.SUBCKT TBUF_INV A ENB EN VDD VSS Y
-MP1 n1 A VDD   VDD pmos_rvt L=2e-08 W=1296.00n nfin=48
-MP2 Y   ENB  n1 VDD pmos_rvt L=2e-08 W=972.00n nfin=36
-MN1 n2 A VSS   VSS nmos_rvt L=2e-08 W=1296.00n nfin=48
-MN2 Y   EN  n2 VSS nmos_rvt L=2e-08 W=972.00n nfin=36
-.ENDS)";
-}
-
-std::string SpiceTemplates::get_iocolgrp() {
-    return R"(.SUBCKT iocolgrp_sram_6t122_v2 wrenan wrena SAE SAPRECHN oeb_out oe_out D Q bltn[0] bltn[1] bltn[2]
-+ bltn[3] blt[0] blt[1] blt[2] blt[3] blbn[0] blbn[1] blbn[2] blbn[3] blb[0] 
-+ blb[1] blb[2] blb[3] BLPRECHTN BLPRECHBN yseltn[0] yseltn[1] yseltn[2] yseltn[3] yselt[0]
-+ yselt[1] yselt[2] yselt[3] yselbn[0] yselbn[1] yselbn[2] yselbn[3] yselb[0] yselb[1] yselb[2] 
-+ yselb[3] vdd vss
-M0 51 wrena 46 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M1 47 vss vss vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M2 vss 50 51 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M3 57 44 47 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M4 50 51 vss vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M5 52 45 57 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M6 45 wrena 50 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M7 vss SAE 52 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M8 52 SAE vss vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M9 58 46 52 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M10 D wrenan 50 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M11 53 wrenan 51 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M12 44 47 58 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M13 vss vss 44 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M15 vss D 53 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M19 vss 49 48 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M22 51 wrenan 46 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M23 47 vdd vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M24 vdd 50 51 vdd pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-M25 vdd 44 47 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M26 50 51 vdd vdd pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-M27 47 SAPRECHN vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M28 45 wrenan 50 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M29 59 SAPRECHN 47 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M30 44 SAPRECHN 59 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M31 vdd SAPRECHN 44 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M32 44 47 vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M33 vdd vdd 44 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M35 vdd D 53 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M39 vdd 49 48 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-X42 bltn[0] bltn[1] bltn[2] bltn[3] blt[0] blt[1] blt[2] blt[3] yseltn[0] yseltn[1]
-+ yseltn[2] yseltn[3] yselt[0] yselt[1] yselt[2] yselt[3] 46 45 BLPRECHTN vdd 
-+ vss wrasst_prech_ymux_x4_sram_6t122_v2
-X43 blbn[0] blbn[1] blbn[2] blbn[3] blb[0] blb[1] blb[2] blb[3] yselbn[0] yselbn[1]
-+ yselbn[2] yselbn[3] yselb[0] yselb[1] yselb[2] yselb[3] 46 45 BLPRECHBN vdd 
-+ vss wrasst_prech_ymux_x4_sram_6t122_v2
-X44 49 44 54 vdd vss io_nand_3f_6f
-X45 54 47 49 vdd vss io_nand_3f_6f
-X46 48 oeb_out oe_out vdd vss Q TBUF_INV
-.ENDS)";
-}
-
-// ============================================================================
-// SPICE Generator Implementation
-// ============================================================================
-
 SpiceGenerator::SpiceGenerator(const MainCliOptions& config)
     : config_(config)
 {
@@ -628,36 +329,332 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
     return create_subckt(bank_name, ports, instances.str());
 }
 
-std::string SpiceGenerator::generate_spice_content() {
+std::string SpiceGenerator::generate_cell_row_8t() {
+    std::vector<std::string> ports;
+    
+    // WL ports
+    for (int i = 0; i < config_.num_wls; ++i) {
+        ports.push_back("WLA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_wls; ++i) {
+        ports.push_back("WLB[" + std::to_string(i) + "]");
+    }
+
+    ports.push_back("BLA");
+    ports.push_back("BLAN");
+    ports.push_back("BLB");
+    ports.push_back("BLBN");
+    ports.push_back("RWLA");
+    ports.push_back("RWLB");
+    ports.push_back("RBLA");
+    ports.push_back("RBLB");
+    ports.push_back("VDD");
+    ports.push_back("VSS");
+    
+    // sram_cell_row_8t instances
+    std::stringstream instances;
+    for (int i = 0; i < config_.num_wls; ++i) {
+        instances << "X" << i << " WLA[" << i << "] WLB[" << i << "] BLA BLAN BLB BLBN VDD VSS sram_cell_8t\n";
+    }
+    
+    instances << "X" << config_.num_wls     << " RWLA RWLB RBLA RBLAN RBLB RBLBN VDD VSS replica_cell_8t\n";
+    instances << "X" << config_.num_wls + 1 << " BLA BLAN BLB BLBN VDD VSS dummy_cell_8t\n";
+    
+    return create_subckt("sram_cell_row_8t", ports, instances.str());
+}
+
+std::string SpiceGenerator::generate_array_8t() {
+    std::vector<std::string> ports;
+
+    // WL ports
+    for (int i = 0; i < config_.num_wls; ++i) {
+        ports.push_back("WLA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_wls; ++i) {
+        ports.push_back("WLB[" + std::to_string(i) + "]");
+    }
+
+    // BL ports
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("BLA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("BLAN[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("BLB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("BLBN[" + std::to_string(i) + "]");
+    }
+
+    // replica wordline/bitline ports
+    ports.push_back("RWLA");
+    ports.push_back("RWLB");
+    ports.push_back("RBLA");
+    ports.push_back("RBLB");
+
+    ports.push_back("VDD");
+    ports.push_back("VSS");
+
+    std::stringstream instances;
+    for (int i = 0; i < 4; ++i) {
+        instances << "X" << i << " ";
+        for (int j = 0; j < config_.num_wls; ++j) {
+            instances << "WLA[" << j << "] ";
+        }
+        for (int j = 0; j < config_.num_wls; ++j) {
+            instances << "WLB[" << j << "] ";
+        }
+        instances << "BLA[" << i << "] BLAN[" << i << "] BLB[" << i << "] BLBN[" << i << "] RWLA RWLB RBLA RBLB VDD VSS sram_cell_row_8t\n";
+    }
+
+    return create_subckt("array_sram_8t", ports, instances.str());
+}
+
+std::string SpiceGenerator::generate_colgrp_8t() {
+    std::vector<std::string> ports;
+
+    // WLTA/WLTB and WLBA/WLBB ports
+    for (int i = 0; i < config_.num_wls; ++i) {
+        ports.push_back("WLTA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_wls; ++i) {
+        ports.push_back("WLTB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_wls; ++i) {
+        ports.push_back("WLBA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_wls; ++i) {
+        ports.push_back("WLBB[" + std::to_string(i) + "]");
+    }
+
+    // D/Q ports
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        ports.push_back("DA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        ports.push_back("QA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        ports.push_back("DB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        ports.push_back("QB[" + std::to_string(i) + "]");
+    }
+
+    // wrena/wrenan, oeb_out/oe_out, blprechtn/blprechbn ports for both ports
+    std::vector<std::string> ctrl_port_names = {
+        "wrenaA", "wrenanA", "wrenaB", "wrenanB",
+        "oeb_outA", "oe_outA", "oeb_outB", "oe_outB",
+        "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB"
+    };
+    ports.insert(ports.end(), ctrl_port_names.begin(), ctrl_port_names.end());
+
+    // yseltn/yselt/yselbn/yselb ports for both ports
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("yseltnA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("yseltA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("yselbnA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("yselbA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("yseltnB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("yseltB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("yselbnB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4; ++i) {
+        ports.push_back("yselbB[" + std::to_string(i) + "]");
+    }
+
+    // Replica wordline ports
+    ports.push_back("RWLTA");
+    ports.push_back("RWLBA");
+    ports.push_back("RWLTB");
+    ports.push_back("RWLBB");
+
+    ports.push_back("VDD");
+    ports.push_back("VSS");
+
+    std::stringstream instances;
+    instances << "X0 ";
+    for (int i = 0; i < config_.num_wls; ++i) {
+        instances << "WLTA[" << i << "] ";
+    }
+    for (int i = 0; i < config_.num_wls; ++i) {
+        instances << "WLTB[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLT_A[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLTN_A[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLT_B[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLTN_B[" << i << "] ";
+    }
+    instances << "RWLTA RWLTB RBLA RBLB VDD VSS array_sram_8t\n";
+
+    instances << "X1 ";
+    for (int i = 0; i < config_.num_wls; ++i) {
+        instances << "WLBA[" << i << "] ";
+    }
+    for (int i = 0; i < config_.num_wls; ++i) {
+        instances << "WLBB[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLB_A[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLBN_A[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLB_B[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLBN_B[" << i << "] ";
+    }
+    instances << "RWLBA RWLBB RBLA RBLB VDD VSS array_sram_8t\n";
+
+    instances << "X2 wrenaA wrenanA wrenaB wrenanB RBLA RBLB oeb_outA oe_outA ";
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        instances << "DA[" << i << "] ";
+    }
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        instances << "QA[" << i << "] ";
+    }
+    instances << "oeb_outB oe_outB ";
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        instances << "DB[" << i << "] ";
+    }
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        instances << "QB[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLT_A[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLTN_A[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLB_A[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLBN_A[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLT_B[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLTN_B[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "BLB_B[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {         
+        instances << "BLBN_B[" << i << "] ";
+    }
+
+    instances << "blprechtnA blprechbnA blprechtnB blprechbnB ";
+    for (int i = 0; i < 4; ++i) {
+        instances << "yseltnA[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "yseltA[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "yselbnA[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "yselbA[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "yseltnB[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "yseltB[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "yselbnB[" << i << "] ";
+    }
+    for (int i = 0; i < 4; ++i) {
+        instances << "yselbB[" << i << "] ";
+    }
+    instances << "VDD VSS iocolgrp_sram_8t\n";
+
+    return create_subckt("colgrp_sram_8t", ports, instances.str());
+}
+
+std::string SpiceGenerator::generate_spice_content(const bool& single_port) {
     std::stringstream content;
     std::string sep = std::string(70, '*') + "\n";
     
-    // Add all basic cell templates
-    content << sep << SpiceTemplates::get_cell_6t() << "\n\n";
-    content << sep << SpiceTemplates::get_dummy_cell() << "\n\n";
-    content << sep << SpiceTemplates::get_dummy_topbot_v1() << "\n\n";
-    content << sep << SpiceTemplates::get_dummy_topbot_v2() << "\n\n";
-    content << sep << SpiceTemplates::get_prech_v1() << "\n\n";
-    content << sep << SpiceTemplates::get_prech_v2() << "\n\n";
-    content << sep << SpiceTemplates::get_prech_ymux() << "\n\n";
-    content << sep << SpiceTemplates::get_io_nand() << "\n\n";
-    content << sep << SpiceTemplates::get_tbuf() << "\n\n";
-    content << sep << SpiceTemplates::get_iocolgrp() << "\n\n";
-    
-    // Generate hierarchy
-    content << sep << generate_cell_row() << "\n";
-    content << sep << generate_sramcol() << "\n";
-    content << sep << generate_array() << "\n";
-    content << sep << generate_colgrp() << "\n";
-    content << sep << generate_stacked_colgrp() << "\n";
-    content << sep << generate_stacked_colgrp_mux() << "\n";
+    if (single_port){
+        LOGD << "Generating single-port SRAM SPICE netlist...";
+
+        // Add all basic cell templates
+        content << sep << SpiceTemplates::get_cell_6t() << "\n\n";
+        content << sep << SpiceTemplates::get_dummy_cell() << "\n\n";
+        content << sep << SpiceTemplates::get_dummy_topbot_v1() << "\n\n";
+        content << sep << SpiceTemplates::get_dummy_topbot_v2() << "\n\n";
+        content << sep << SpiceTemplates::get_prech_v1() << "\n\n";
+        content << sep << SpiceTemplates::get_prech_v2() << "\n\n";
+        content << sep << SpiceTemplates::get_prech_ymux() << "\n\n";
+        content << sep << SpiceTemplates::get_io_nand() << "\n\n";
+        content << sep << SpiceTemplates::get_tbuf() << "\n\n";
+        content << sep << SpiceTemplates::get_iocolgrp() << "\n\n";
+        
+        // Generate hierarchy
+        content << sep << generate_cell_row() << "\n";
+        content << sep << generate_sramcol() << "\n";
+        content << sep << generate_array() << "\n";
+        content << sep << generate_colgrp() << "\n";
+        content << sep << generate_stacked_colgrp() << "\n";
+        content << sep << generate_stacked_colgrp_mux() << "\n";
+    } else {
+        LOGD << "Generating dual-port SRAM SPICE netlist...";
+
+        content << sep << SpiceTemplates::get_cell_8t() << "\n\n";
+        content << sep << SpiceTemplates::get_dummy_cell_8t() << "\n\n";
+        content << sep << SpiceTemplates::get_replica_cell_8t() << "\n\n";
+
+        content << sep << SpiceTemplates::get_prech_8t_v1() << "\n\n";
+        content << sep << SpiceTemplates::get_prech_8t_v2() << "\n\n";
+        content << sep << SpiceTemplates::get_wrasst_prech_ymux_x8_sram_8t() << "\n\n";
+
+        content << sep << SpiceTemplates::get_write_driver() << "\n\n";
+        content << sep << SpiceTemplates::get_sense_amp() << "\n\n";
+        content << sep << SpiceTemplates::get_skewed_inv() << "\n\n";
+        content << sep << SpiceTemplates::get_or2() << "\n\n";
+        content << sep << SpiceTemplates::get_buf() << "\n\n";
+        content << sep << SpiceTemplates::get_io_nand() << "\n\n";
+        content << sep << SpiceTemplates::get_tbuf() << "\n\n";
+        content << sep << SpiceTemplates::get_iocolgrp_8t() << "\n\n";
+
+        content << sep << generate_cell_row_8t() << "\n";
+        content << sep << generate_array_8t() << "\n";
+        content << sep << generate_colgrp_8t() << "\n";
+    }
     
     return content.str();
 }
 
 bool SpiceGenerator::generate() {
     std::string output_path = join_path(get_current_dir_name(), config_.output_sp_name);
-    std::string content = generate_spice_content();
+    std::string content = generate_spice_content(config_.single_port);
     
     std::ofstream outfile(output_path);
     if (!outfile.is_open()) {

@@ -8,55 +8,6 @@
 #include "main_config_helpers.hpp"
 
 namespace OpenFinRAM {
-
-// ============================================================================
-// SPICE Generator Configuration
-// ============================================================================
-struct SpiceConfig {
-    int num_wordlines;      // Number of wordlines (WL)
-    int num_colgrp;         // Number of column groups to stack
-    int data_bits;          // Number of data bits (usually same as num_colgrp)
-    int num_mux;            // Number of mux slices (horizontal stacks)
-    std::string output_dir; // Output directory for SPICE files
-    
-    SpiceConfig() 
-        : num_wordlines(16)
-        , num_colgrp(8)
-        , data_bits(8)
-        , num_mux(1)
-        , output_dir(".")
-    {}
-};
-
-// ============================================================================
-// SPICE Templates - Cell definitions
-// ============================================================================
-class SpiceTemplates {
-public:
-    static std::string get_cell_6t();
-    static std::string get_cell_8t();
-    static std::string get_replica_cell_8t();
-    static std::string get_dummy_cell();
-    static std::string get_dummy_cell_8t();
-    static std::string get_dummy_topbot_v1();
-    static std::string get_dummy_topbot_v2();
-    static std::string get_prech_v1();
-    static std::string get_prech_8t_v1();
-    static std::string get_prech_v2();
-    static std::string get_prech_8t_v2();
-    static std::string get_prech_ymux();
-    static std::string get_wrasst_prech_ymux_x8_sram_8t();
-    static std::string get_write_driver();
-    static std::string get_sense_amp();
-    static std::string get_skewed_inv();
-    static std::string get_io_nand();
-    static std::string get_tbuf();
-    static std::string get_iocolgrp();
-};
-
-// ============================================================================
-// SPICE Generator - Main class
-// ============================================================================
 class SpiceGenerator {
 public:
     SpiceGenerator(const MainCliOptions& config);
@@ -80,9 +31,14 @@ private:
     std::string generate_colgrp();
     std::string generate_stacked_colgrp();
     std::string generate_stacked_colgrp_mux();
+
+    // Generate different hierarchy levels with dual-port SRAM
+    std::string generate_cell_row_8t();
+    std::string generate_array_8t();
+    std::string generate_colgrp_8t();
     
     // Full content generation
-    std::string generate_spice_content();
+    std::string generate_spice_content(const bool& single_port);
 };
 
 } // namespace OpenFinRAM

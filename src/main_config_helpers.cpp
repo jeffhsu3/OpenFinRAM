@@ -22,9 +22,9 @@ MainCliOptions parse_main_cli_options(int argc, char** argv) {
         .scan<'u', uint64_t>();
 
     program.add_argument("--single-port")
-        .help("Generate single-port SRAM (default: single-port).")
-        .default_value(true)
-        .implicit_value(false);
+        .help("Generate single-port SRAM (default: dual-port).")
+        .default_value(false)
+        .implicit_value(true);
 
     program.add_argument("--skip-characterization")
         .help("Disable SiliconSmart characterization and verification steps.")

@@ -21,6 +21,7 @@ set(SOURCES
     src/spice_converter.cpp
     src/spice_integrator.cpp
     src/spice_include_resolver.cpp
+    src/spice_templates.cpp
     src/pex_runner.cpp
     src/capacitance_parser.cpp
     src/spice_simulator.cpp
