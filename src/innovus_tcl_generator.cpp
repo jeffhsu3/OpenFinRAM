@@ -260,7 +260,8 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
                                            int num_wlb,
                                            int num_ysel,
                                            int addr_width,
-                                           int num_mux) const {
+                                           int num_mux,
+                                           bool spice_only) const {
     
     if (!qor_report_.valid) {
         LOGE << "QoR report not valid, cannot generate run.tcl";
@@ -334,336 +335,335 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
     // ========================================================================
     // 6. Physical Pins - 根據固定規則計算位置
     // ========================================================================
-    
-    double colgrp_width = (width + 0.054 * 2) / num_mux;
-    for (int mux = 0; mux < num_mux; ++mux) {
-        const double pin_width = 0.018;
-        LOGD << mux * 0.027 / num_mux;
-        double x_pos = 0.207 + mux * (colgrp_width);  // WLT 第一根位置
-        
-        // WLT pins
-        file << "# WLT (Word Line Top) pins\n";
-        for (int i = 0; i < num_wlt; ++i) {
+    if (!spice_only) {
+        double colgrp_width = (width + 0.054 * 2) / num_mux;
+        for (int mux = 0; mux < num_mux; ++mux) {
+            const double pin_width = 0.018;
+            double x_pos = 0.207 + mux * (colgrp_width);  // WLT 第一根位置
+            
+            // WLT pins
+            file << "# WLT (Word Line Top) pins\n";
+            for (int i = 0; i < num_wlt; ++i) {
+                double x_left = x_pos;
+                double x_right = x_pos + pin_width;
+                file << "createPhysicalPin wlt[" << i + mux * num_wlt << "] -layer 3"
+                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+                x_pos += 0.108;  // spacing to next WLT
+            }
+            file << "\n";
+            
+            // blprechtn (跟 WLT 最右邊 spacing 0.303)
+            x_pos += 0.321 - 0.108;  // 減去上面多加的 spacing
+            file << "# blprechtn pin\n";
             double x_left = x_pos;
             double x_right = x_pos + pin_width;
-            file << "createPhysicalPin wlt[" << i + mux * num_wlt << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
-            x_pos += 0.108;  // spacing to next WLT
-        }
-        file << "\n";
-        
-        // blprechtn (跟 WLT 最右邊 spacing 0.303)
-        x_pos += 0.321 - 0.108;  // 減去上面多加的 spacing
-        file << "# blprechtn pin\n";
-        double x_left = x_pos;
-        double x_right = x_pos + pin_width;
-        file << "createPhysicalPin blprechtn[" << mux << "] -layer 3"
-            << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n\n";
-        
-        // yseltn (跟 blprechtn spacing 0.054, 兩根 spacing 0.018)
-        x_pos += 0.072;
-        file << "# yseltn pins\n";
-        for (int i = 0; i < num_ysel; ++i) {
-            x_left = x_pos;
-            x_right = x_pos + pin_width;
-            file << "createPhysicalPin yseltn[" << i + mux * num_ysel << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
-            x_pos += 0.036;
-        }
-        file << "\n";
-        
-        // yselt (緊接著 yseltn)
-        file << "# yselt pins\n";
-        for (int i = 0; i < num_ysel; ++i) {
-            x_left = x_pos;
-            x_right = x_pos + pin_width;
-            file << "createPhysicalPin yselt[" << i + mux * num_ysel << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
-            x_pos += 0.036;
-        }
-        file << "\n";
-
-        // oe_n pin
-        if (mux == 0) {
-            file << "createPhysicalPin oe_n -layer 3"
-                << " -rect " << x_pos << " 0.05 " << x_pos + pin_width << " " << height - 0.05 << "\n\n";
-        }
-        
-        // wrena, saprechn, sae, wrenan (跟 yselt 最右邊 spacing 0.255, 兩根 spacing 0.018)
-        x_pos += 0.273 - 0.036;  // 減去上面多加的 spacing
-        double wrenan_left;
-        file << "# Control signal pins\n";
-        const char* ctrl_signals[] = {"wrena", "saprechn", "sae", "wrenan"};
-        for (const char* sig : ctrl_signals) {
-            if (std::string(sig) == "saprechn") {
-                x_pos += 0.036;
-            }
-            x_left = x_pos;
-            x_right = x_pos + pin_width;
-            file << "createPhysicalPin " << sig << "[" << mux << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
-            if (std::string(sig) == "wrenan") {
-                wrenan_left = x_left;  // 記錄 wrenan 的位置
-            }
-            x_pos += 0.036;
-        }
-
-        // oeb_out pin
-        file << "createPhysicalPin oeb_out[" << mux << "] -layer 3"
-            << " -rect " << x_pos + 0.387 + 0.412 << " -0.150 " << x_pos + 0.387 + 0.412 + pin_width << " " << height + 0.150 << "\n";
-
-        // oe_out pin
-        file << "createPhysicalPin oe_out[" << mux << "] -layer 3"
-            << " -rect " << x_pos + 0.459 + 0.561 << " -0.150 " << x_pos + 0.459 + 0.561 + pin_width << " " << height + 0.150 << "\n";
-
-        file << "\n";
-        
-        // A pins (跟 wrenan 右邊 spacing 0.036)
-        if (mux == 0) {
-            file << "# Address pins\n";
-            for (int i = 0; i < addr_width; ++i) {
-                if (i == 7) {
-                    // Add 0.018 + 0.026 spacing between A[6] and A[7]
-                    x_pos += 0.044;
-                }
-                if (i == 9) {
-                    x_pos += 0.553;
-                }
-
+            file << "createPhysicalPin blprechtn[" << mux << "] -layer 3"
+                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n\n";
+            
+            // yseltn (跟 blprechtn spacing 0.054, 兩根 spacing 0.018)
+            x_pos += 0.072;
+            file << "# yseltn pins\n";
+            for (int i = 0; i < num_ysel; ++i) {
                 x_left = x_pos;
                 x_right = x_pos + pin_width;
-                file << "createPhysicalPin A[" << i << "] -layer 3"
-                    << " -rect " << x_left << " 0.05 " << x_right << " " << height - 0.05 << "\n";
+                file << "createPhysicalPin yseltn[" << i + mux * num_ysel << "] -layer 3"
+                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
                 x_pos += 0.036;
             }
             file << "\n";
-        
-
-            x_pos = wrenan_left + 0.477 + 0.018;
-            const char* ctrl_signals_2[] = {"ce_n", "we_n", "clk", "rst_n"};
-            for (const char* sig : ctrl_signals_2) {
+            
+            // yselt (緊接著 yseltn)
+            file << "# yselt pins\n";
+            for (int i = 0; i < num_ysel; ++i) {
                 x_left = x_pos;
                 x_right = x_pos + pin_width;
-                file << "createPhysicalPin " << sig << " -layer 3"
-                    << " -rect " << x_left << " 0.05 " << x_right << " " << height - 0.05 << "\n";
+                file << "createPhysicalPin yselt[" << i + mux * num_ysel << "] -layer 3"
+                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
                 x_pos += 0.036;
             }
             file << "\n";
 
-        }
-        
-        // yselb (跟 wrenan spacing 0.669, 兩根 spacing 0.036)
-        x_pos = wrenan_left + 0.669 + 0.54;
-        file << "# yselb pins\n";
-        for (int i = 0; i < num_ysel; ++i) {
-            x_left = x_pos;
-            x_right = x_pos + pin_width;
-            file << "createPhysicalPin yselb[" << i + mux * num_ysel << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
-            x_pos += 0.036;
-        }
-        file << "\n";
-        
-        // yselbn (緊接著 yselb)
-        file << "# yselbn pins\n";
-        for (int i = 0; i < num_ysel; ++i) {
-            x_left = x_pos;
-            x_right = x_pos + pin_width;
-            file << "createPhysicalPin yselbn[" << i + mux * num_ysel << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
-            x_pos += 0.036;
-        }
-        file << "\n";
-        
-        // blprechbn (跟 yselb 最右邊距離 0.054)
-        x_pos += 0.072 - 0.036;
-        file << "# blprechbn pin\n";
-        x_left = x_pos;
-        x_right = x_pos + pin_width;
-        file << "createPhysicalPin blprechbn[" << mux << "] -layer 3"
-            << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n\n";
-        
-        // WLB pins (跟 blprechbn 距離 0.303, 兩根 spacing 0.09)
-        x_pos += 0.321;
-        file << "# WLB (Word Line Bottom) pins\n";
-        for (int i = 0; i < num_wlb; ++i) {
-            x_left = x_pos;
-            x_right = x_pos + pin_width;
-            file << "createPhysicalPin wlb[" << i + mux * num_wlb << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
-            x_pos += 0.108;
-        }
-        file << "\n";
-        
-        LOGI << "Generated " << num_wlt << " WLT pins, " << num_wlb << " WLB pins, "
-            << num_ysel << " ysel pins per group";
-
-        // Generate VDD/VSS pins
-        file << "# Power pins\n";
-        
-        // 用於記錄所有 power stripe 的資訊
-        struct PowerStripe {
-            std::string net_name;  // VDD or VSS
-            double x_left;
-            double x_right;
-            double width;  // stripe 寬度
-        };
-        std::vector<PowerStripe> power_stripes;
-        
-        // VDD
-        x_pos = 0.063 + mux * (colgrp_width);
-        x_right = x_pos + pin_width;
-        if (mux == 0) {
-            file << "createPGPin VDD -geom M3 " << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "\n";  
-        }
-        file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
-        
-        
-        x_pos += 0.099 * 2 + num_wlt * 0.108;
-        x_right = x_pos + pin_width;
-        file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
-
-        x_pos += 0.648;
-        x_right = x_pos + 0.09;
-        file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VDD", x_pos, x_right, 0.09});
-
-        x_pos += 1.404 + 0.54;
-        x_right = x_pos + pin_width;
-        file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
-
-        x_pos += 0.099 * 2 + num_wlb * 0.108;
-        x_right = x_pos + pin_width;
-        file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n\n";
-        power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
-
-        // VSS
-        x_pos = 0.099 + mux * (colgrp_width);
-        x_right = x_pos + pin_width;
-        if (mux == 0) {
-            file << "createPGPin VSS -geom M3 " << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "\n";
-        }
-        file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
-
-        x_pos += 0.063 + 0.045 + num_wlt * 0.108;
-        x_right = x_pos + pin_width;
-        file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
-
-        x_pos += 0.846;
-        x_right = x_pos + 0.018;
-        file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VSS", x_pos, x_right, 0.018});
-
-        x_pos += 0.396;
-        x_right = x_pos + 0.026;
-        file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VSS", x_pos, x_right, 0.026});
-
-        // x_pos += 0.153;
-        // x_right = x_pos + 0.036;
-        // file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        // power_stripes.push_back({"VSS", x_pos, x_right, 0.036});
-
-        x_pos += 0.918 + 0.54;
-        x_right = x_pos + pin_width;
-        file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
-        power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
-
-        x_pos += 0.063 + 0.045 + num_wlb * 0.108;
-        x_right = x_pos + pin_width;
-        file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n\n";
-        power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
-        
-        // ========================================================================
-        // 8. Define V2 vias and add vias on power stripes
-        // ========================================================================
-        file << "# Define V2 vias for different stripe widths\n";
-        
-        const double via_height = 0.018;
-        const double enclosure = 0.005;  // 只在 x 方向有 enclosure
-        
-        // 收集所有獨特的 stripe 寬度
-        std::vector<double> unique_widths;
-        for (const auto& stripe : power_stripes) {
-            bool found = false;
-            for (double w : unique_widths) {
-                if (std::abs(w - stripe.width) < 0.0001) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                unique_widths.push_back(stripe.width);
-            }
-        }
-        
-        // 為每個獨特的寬度創建 via definition
-        std::map<double, std::string> width_to_via_name;
-        int via_idx = 0;
-        for (double w : unique_widths) {
-            // V2 寬度 = M3 寬度
-            double v2_width = w;
-            double v2_half_width = v2_width / 2.0;
-            double v2_half_height = via_height / 2.0;
-            
-            // M2 寬度 = V2 寬度 + 2 * enclosure (左右各凸 0.005)
-            double m2_width = v2_width + 2.0 * enclosure;
-            double m2_half_width = m2_width / 2.0;
-            double m2_half_height = via_height / 2.0;  // 上下不凸
-            
-            // M3 寬度 = V2 寬度 (等寬)
-            double m3_half_width = v2_half_width;
-            double m3_half_height = via_height / 2.0;  // 上下不凸
-            
-            std::ostringstream via_name;
-            via_name << "V2_W" << std::fixed << std::setprecision(0) << (w * 1000);  // 例如: V2_W18, V2_W90
-            std::string via_name_str = via_name.str();
-            width_to_via_name[w] = via_name_str;
-            
+            // oe_n pin
             if (mux == 0) {
-                file << "add_via_definition -name " << via_name_str
-                    << " -cut_layer V2"
-                    << " -cut_rects {{" << -v2_half_width << " " << -v2_half_height << " " 
-                    << v2_half_width << " " << v2_half_height << "}}"
-                    << " -bottom_layer M2"
-                    << " -bottom_rects {{" << -m2_half_width << " " << -m2_half_height << " " 
-                    << m2_half_width << " " << m2_half_height << "}}"
-                    << " -top_layer M3"
-                    << " -top_rects {{" << -m3_half_width << " " << -m3_half_height << " " 
-                    << m3_half_width << " " << m3_half_height << "}}\n";
+                file << "createPhysicalPin oe_n -layer 3"
+                    << " -rect " << x_pos << " 0.05 " << x_pos + pin_width << " " << height - 0.05 << "\n\n";
             }
             
-            via_idx++;
-        }
-        file << "\n";
-        
-        file << "# V2 vias on power stripes\n";
-        
-        const double via_row_spacing = 0.540;  // 2 * site_height_ = 0.540 um
-        
-        // 為每個 power stripe 添加 V2 via
-        for (const auto& stripe : power_stripes) {
-            double stripe_x_center = (stripe.x_left + stripe.x_right) / 2.0;
-            std::string via_name = width_to_via_name[stripe.width];
-            
-            // VDD 從 y=0.0 開始，VSS 從 y=0.270 開始，間隔都是 0.540
-            double y_start = (stripe.net_name == "VDD") ? 0.0 : 0.270;
-            
-            // 沿著 y 方向添加 via
-            for (double y_center = y_start; y_center < height + 0.09; y_center += via_row_spacing) {
-                file << "add_via -net " << stripe.net_name 
-                    << " -pt {" << stripe_x_center << " " << y_center << "}"
-                    << " -via " << via_name << "\n";
+            // wrena, saprechn, sae, wrenan (跟 yselt 最右邊 spacing 0.255, 兩根 spacing 0.018)
+            x_pos += 0.273 - 0.036;  // 減去上面多加的 spacing
+            double wrenan_left;
+            file << "# Control signal pins\n";
+            const char* ctrl_signals[] = {"wrena", "saprechn", "sae", "wrenan"};
+            for (const char* sig : ctrl_signals) {
+                if (std::string(sig) == "saprechn") {
+                    x_pos += 0.036;
+                }
+                x_left = x_pos;
+                x_right = x_pos + pin_width;
+                file << "createPhysicalPin " << sig << "[" << mux << "] -layer 3"
+                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+                if (std::string(sig) == "wrenan") {
+                    wrenan_left = x_left;  // 記錄 wrenan 的位置
+                }
+                x_pos += 0.036;
             }
-        }
-        file << "\n";
-    }
 
+            // oeb_out pin
+            file << "createPhysicalPin oeb_out[" << mux << "] -layer 3"
+                << " -rect " << x_pos + 0.387 + 0.412 << " -0.150 " << x_pos + 0.387 + 0.412 + pin_width << " " << height + 0.150 << "\n";
+
+            // oe_out pin
+            file << "createPhysicalPin oe_out[" << mux << "] -layer 3"
+                << " -rect " << x_pos + 0.459 + 0.561 << " -0.150 " << x_pos + 0.459 + 0.561 + pin_width << " " << height + 0.150 << "\n";
+
+            file << "\n";
+            
+            // A pins (跟 wrenan 右邊 spacing 0.036)
+            if (mux == 0) {
+                file << "# Address pins\n";
+                for (int i = 0; i < addr_width; ++i) {
+                    if (i == 7) {
+                        // Add 0.018 + 0.026 spacing between A[6] and A[7]
+                        x_pos += 0.044;
+                    }
+                    if (i == 9) {
+                        x_pos += 0.553;
+                    }
+
+                    x_left = x_pos;
+                    x_right = x_pos + pin_width;
+                    file << "createPhysicalPin A[" << i << "] -layer 3"
+                        << " -rect " << x_left << " 0.05 " << x_right << " " << height - 0.05 << "\n";
+                    x_pos += 0.036;
+                }
+                file << "\n";
+            
+
+                x_pos = wrenan_left + 0.477 + 0.018;
+                const char* ctrl_signals_2[] = {"ce_n", "we_n", "clk", "rst_n"};
+                for (const char* sig : ctrl_signals_2) {
+                    x_left = x_pos;
+                    x_right = x_pos + pin_width;
+                    file << "createPhysicalPin " << sig << " -layer 3"
+                        << " -rect " << x_left << " 0.05 " << x_right << " " << height - 0.05 << "\n";
+                    x_pos += 0.036;
+                }
+                file << "\n";
+
+            }
+            
+            // yselb (跟 wrenan spacing 0.669, 兩根 spacing 0.036)
+            x_pos = wrenan_left + 0.669 + 0.54;
+            file << "# yselb pins\n";
+            for (int i = 0; i < num_ysel; ++i) {
+                x_left = x_pos;
+                x_right = x_pos + pin_width;
+                file << "createPhysicalPin yselb[" << i + mux * num_ysel << "] -layer 3"
+                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+                x_pos += 0.036;
+            }
+            file << "\n";
+            
+            // yselbn (緊接著 yselb)
+            file << "# yselbn pins\n";
+            for (int i = 0; i < num_ysel; ++i) {
+                x_left = x_pos;
+                x_right = x_pos + pin_width;
+                file << "createPhysicalPin yselbn[" << i + mux * num_ysel << "] -layer 3"
+                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+                x_pos += 0.036;
+            }
+            file << "\n";
+            
+            // blprechbn (跟 yselb 最右邊距離 0.054)
+            x_pos += 0.072 - 0.036;
+            file << "# blprechbn pin\n";
+            x_left = x_pos;
+            x_right = x_pos + pin_width;
+            file << "createPhysicalPin blprechbn[" << mux << "] -layer 3"
+                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n\n";
+            
+            // WLB pins (跟 blprechbn 距離 0.303, 兩根 spacing 0.09)
+            x_pos += 0.321;
+            file << "# WLB (Word Line Bottom) pins\n";
+            for (int i = 0; i < num_wlb; ++i) {
+                x_left = x_pos;
+                x_right = x_pos + pin_width;
+                file << "createPhysicalPin wlb[" << i + mux * num_wlb << "] -layer 3"
+                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+                x_pos += 0.108;
+            }
+            file << "\n";
+            
+            LOGI << "Generated " << num_wlt << " WLT pins, " << num_wlb << " WLB pins, "
+                << num_ysel << " ysel pins per group";
+
+            // Generate VDD/VSS pins
+            file << "# Power pins\n";
+            
+            // 用於記錄所有 power stripe 的資訊
+            struct PowerStripe {
+                std::string net_name;  // VDD or VSS
+                double x_left;
+                double x_right;
+                double width;  // stripe 寬度
+            };
+            std::vector<PowerStripe> power_stripes;
+            
+            // VDD
+            x_pos = 0.063 + mux * (colgrp_width);
+            x_right = x_pos + pin_width;
+            if (mux == 0) {
+                file << "createPGPin VDD -geom M3 " << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "\n";  
+            }
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
+            
+            
+            x_pos += 0.099 * 2 + num_wlt * 0.108;
+            x_right = x_pos + pin_width;
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
+
+            x_pos += 0.648;
+            x_right = x_pos + 0.09;
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VDD", x_pos, x_right, 0.09});
+
+            x_pos += 1.404 + 0.54;
+            x_right = x_pos + pin_width;
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
+
+            x_pos += 0.099 * 2 + num_wlb * 0.108;
+            x_right = x_pos + pin_width;
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n\n";
+            power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
+
+            // VSS
+            x_pos = 0.099 + mux * (colgrp_width);
+            x_right = x_pos + pin_width;
+            if (mux == 0) {
+                file << "createPGPin VSS -geom M3 " << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+            }
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
+
+            x_pos += 0.063 + 0.045 + num_wlt * 0.108;
+            x_right = x_pos + pin_width;
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
+
+            x_pos += 0.846;
+            x_right = x_pos + 0.018;
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VSS", x_pos, x_right, 0.018});
+
+            x_pos += 0.396;
+            x_right = x_pos + 0.026;
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VSS", x_pos, x_right, 0.026});
+
+            // x_pos += 0.153;
+            // x_right = x_pos + 0.036;
+            // file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            // power_stripes.push_back({"VSS", x_pos, x_right, 0.036});
+
+            x_pos += 0.918 + 0.54;
+            x_right = x_pos + pin_width;
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
+
+            x_pos += 0.063 + 0.045 + num_wlb * 0.108;
+            x_right = x_pos + pin_width;
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n\n";
+            power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
+            
+            // ========================================================================
+            // 8. Define V2 vias and add vias on power stripes
+            // ========================================================================
+            file << "# Define V2 vias for different stripe widths\n";
+            
+            const double via_height = 0.018;
+            const double enclosure = 0.005;  // 只在 x 方向有 enclosure
+            
+            // 收集所有獨特的 stripe 寬度
+            std::vector<double> unique_widths;
+            for (const auto& stripe : power_stripes) {
+                bool found = false;
+                for (double w : unique_widths) {
+                    if (std::abs(w - stripe.width) < 0.0001) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    unique_widths.push_back(stripe.width);
+                }
+            }
+            
+            // 為每個獨特的寬度創建 via definition
+            std::map<double, std::string> width_to_via_name;
+            int via_idx = 0;
+            for (double w : unique_widths) {
+                // V2 寬度 = M3 寬度
+                double v2_width = w;
+                double v2_half_width = v2_width / 2.0;
+                double v2_half_height = via_height / 2.0;
+                
+                // M2 寬度 = V2 寬度 + 2 * enclosure (左右各凸 0.005)
+                double m2_width = v2_width + 2.0 * enclosure;
+                double m2_half_width = m2_width / 2.0;
+                double m2_half_height = via_height / 2.0;  // 上下不凸
+                
+                // M3 寬度 = V2 寬度 (等寬)
+                double m3_half_width = v2_half_width;
+                double m3_half_height = via_height / 2.0;  // 上下不凸
+                
+                std::ostringstream via_name;
+                via_name << "V2_W" << std::fixed << std::setprecision(0) << (w * 1000);  // 例如: V2_W18, V2_W90
+                std::string via_name_str = via_name.str();
+                width_to_via_name[w] = via_name_str;
+                
+                if (mux == 0) {
+                    file << "add_via_definition -name " << via_name_str
+                        << " -cut_layer V2"
+                        << " -cut_rects {{" << -v2_half_width << " " << -v2_half_height << " " 
+                        << v2_half_width << " " << v2_half_height << "}}"
+                        << " -bottom_layer M2"
+                        << " -bottom_rects {{" << -m2_half_width << " " << -m2_half_height << " " 
+                        << m2_half_width << " " << m2_half_height << "}}"
+                        << " -top_layer M3"
+                        << " -top_rects {{" << -m3_half_width << " " << -m3_half_height << " " 
+                        << m3_half_width << " " << m3_half_height << "}}\n";
+                }
+                
+                via_idx++;
+            }
+            file << "\n";
+            
+            file << "# V2 vias on power stripes\n";
+            
+            const double via_row_spacing = 0.540;  // 2 * site_height_ = 0.540 um
+            
+            // 為每個 power stripe 添加 V2 via
+            for (const auto& stripe : power_stripes) {
+                double stripe_x_center = (stripe.x_left + stripe.x_right) / 2.0;
+                std::string via_name = width_to_via_name[stripe.width];
+                
+                // VDD 從 y=0.0 開始，VSS 從 y=0.270 開始，間隔都是 0.540
+                double y_start = (stripe.net_name == "VDD") ? 0.0 : 0.270;
+                
+                // 沿著 y 方向添加 via
+                for (double y_center = y_start; y_center < height + 0.09; y_center += via_row_spacing) {
+                    file << "add_via -net " << stripe.net_name 
+                        << " -pt {" << stripe_x_center << " " << y_center << "}"
+                        << " -via " << via_name << "\n";
+                }
+            }
+            file << "\n";
+        }
+    }
     
     // ========================================================================
     // 7. Place and Route
@@ -755,7 +755,7 @@ bool InnovusTclGenerator::run_innovus(const std::string& tcl_file,
         "set init_mmmc_file {Default.view}\n"
         "set init_pwr_net {VDD}\n"
         "set init_top_cell {ctrl_decode}\n"
-        "set init_verilog {../verilog/netlist.v}\n"
+        "set init_verilog {../syn/netlist.v}\n"
         "set latch_time_borrow_mode max_borrow\n";
 
     const std::string default_view_content =
@@ -817,7 +817,7 @@ bool InnovusTclGenerator::run_innovus(const std::string& tcl_file,
     std::ostringstream cmd;
     std::string tcl_file_name = tcl_file.substr(tcl_file.find_last_of("/\\") + 1);  // 只取檔名
     cmd << "tcsh -c 'cd " << work_dir << " && ";
-    cmd << "innovus -no_gui -files " << tcl_file_name << "'";
+    cmd << "innovus -no_gui -files " << tcl_file_name << "' > " << log_file << " 2>&1";
     
     LOGI << "Executing command: " << cmd.str();
     

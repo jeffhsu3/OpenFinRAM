@@ -11,6 +11,7 @@ struct MainCliOptions {
     bool single_port = true;
     bool run_characterization = true;
     std::string output_sp_name = "sram_colgrp.sp";
+    bool spice_only = false;
 };
 
 struct RuntimeDerivedParams {

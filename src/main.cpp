@@ -9,6 +9,7 @@
 #include "spice_include_resolver.hpp"
 #include "spice_simulator.hpp"
 #include "innovus_tcl_generator.hpp"
+#include "innovus_manager.hpp"
 #include "siliconsmart_generator.hpp"
 #include "lvs_runner.hpp"
 #include "lef_extractor.hpp"
@@ -62,6 +63,14 @@ int main(int argc, char **argv) {
         LOGE << "Synthesis flow failed.";
         return 1;
     }
+
+    // Run Innovus flow
+    InnovusManager innovus_manager(cli_options);
+    if (!innovus_manager.run_innovus_flow()) {
+        LOGE << "Innovus flow failed.";
+        return 1;
+    }
+    
 
     // // ========================================================================
     // // Initialize ASAP7 Layer Map (hardcoded)

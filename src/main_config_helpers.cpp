@@ -35,6 +35,11 @@ MainCliOptions parse_main_cli_options(int argc, char** argv) {
         .help("Output name for generated SPICE netlist.")
         .default_value(std::string("sram_colgrp.sp"));
 
+    program.add_argument("--spice-only")
+        .help("Only generate SPICE netlist but also run Innovus.")
+        .default_value(false)
+        .implicit_value(true);
+
     try {
         program.parse_args(argc, argv);
     } catch (const std::exception& e) {
@@ -50,13 +55,14 @@ MainCliOptions parse_main_cli_options(int argc, char** argv) {
     options.single_port        = program.get<bool>("--single-port");
     options.run_characterization = !program.get<bool>("--skip-characterization");
     options.output_sp_name = program.get<std::string>("--output-sp-name");
-
+    options.spice_only = program.get<bool>("--spice-only");
     LOGI << "Configuration: num_wls=" << options.num_wls
          << ", num_data_bits=" << options.num_data_bits
          << ", num_banks=" << options.num_banks
          << ", single_port=" << (options.single_port ? 1 : 0)
          << ", run_characterization=" << (options.run_characterization ? 1 : 0)
-         << ", output_sp_name=" << options.output_sp_name;
+         << ", output_sp_name=" << options.output_sp_name
+         << ", spice_only=" << (options.spice_only ? 1 : 0);
 
     return options;
 }

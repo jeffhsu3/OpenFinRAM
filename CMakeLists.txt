@@ -26,6 +26,7 @@ set(SOURCES
     src/capacitance_parser.cpp
     src/spice_simulator.cpp
     src/innovus_tcl_generator.cpp
+    src/innovus_manager.cpp
     src/filler_generator.cpp
     src/siliconsmart_generator.cpp
     src/lvs_runner.cpp
