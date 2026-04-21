@@ -27,6 +27,15 @@ SynthesisManager::SynthesisManager(const MainCliOptions& cli_options)
     db_path_ = join_path(get_executable_directory(), "tech/db");
     syn_path_ = join_path(get_executable_directory(), "tmp/syn");
     output_path_ = join_path(get_executable_directory(), "tmp/syn");
+
+    if (!directory_exists(join_path(get_executable_directory(), "tmp"))) {
+        LOGD << "Creating tmp directory: " << join_path(get_executable_directory(), "tmp");
+        create_directory(join_path(get_executable_directory(), "tmp"), nullptr);
+    }
+    if (!directory_exists(syn_path_)) {
+        LOGD << "Creating synthesis directory: " << syn_path_;
+        create_directory(syn_path_, nullptr);
+    }
 }
 
 std::string SynthesisManager::generate_parameter_string() const {
