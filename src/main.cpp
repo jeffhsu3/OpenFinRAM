@@ -56,6 +56,13 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    // Run synthesis flow
+    SynthesisManager synth_manager(cli_options);
+    if (!synth_manager.run_synthesis()) {
+        LOGE << "Synthesis flow failed.";
+        return 1;
+    }
+
     // // ========================================================================
     // // Initialize ASAP7 Layer Map (hardcoded)
     // // ========================================================================

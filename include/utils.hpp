@@ -1,3 +1,6 @@
+#ifndef UTILS_HPP
+#define UTILS_HPP
+
 #include <unistd.h>  // Linux 系統呼叫
 #include <limits.h>  // 定義了 PATH_MAX
 #include <string>
@@ -15,3 +18,7 @@ bool create_directory(const std::string& path, std::string* error);
 std::string get_current_timestamp();
 
 bool directory_exists(const std::string& path);
+
+bool file_exists(const std::string& path);
+
+#endif // UTILS_HPP

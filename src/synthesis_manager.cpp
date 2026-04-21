@@ -1,73 +1,59 @@
 #include "synthesis_manager.hpp"
-#include "capacitance_parser.hpp"
-#include "capacitance_predictor.hpp"
-#include "utils.hpp"
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
 #include <sys/stat.h>
 #include <iomanip>
+#include <cmath>
 
-// Constructor
-SynthesisManager::SynthesisManager(const SynthesisConfig& config)
-    : config_(config) {
-    // Ensure paths are set
-    if (config_.verilog_path.empty()) {
-        config_.verilog_path = "./verilog";
+#include "plog/Log.h"
+
+#include "capacitance_parser.hpp"
+#include "capacitance_predictor.hpp"
+#include "utils.hpp"
+
+SynthesisManager::SynthesisManager(const MainCliOptions& cli_options)
+    : cli_options_(cli_options) {
+    cur_path_ = get_executable_directory();
+
+    if (cli_options_.single_port) {
+        rtl_path_ = join_path(cur_path_, "tech/verilog_sp");
+    } else {
+        rtl_path_ = join_path(cur_path_, "tech/verilog_dp");
     }
-    if (config_.syn_path.empty()) {
-        config_.syn_path = "./verilog";
-    }
-    if (config_.output_path.empty()) {
-        config_.output_path = "./verilog";
-    }
+
+    db_path_ = join_path(get_executable_directory(), "tech/db");
+    syn_path_ = join_path(get_executable_directory(), "tmp/syn");
+    output_path_ = join_path(get_executable_directory(), "tmp/syn");
 }
 
 std::string SynthesisManager::generate_parameter_string() const {
-    std::ostringstream oss;
-    oss << "ADDR_WIDTH=" << config_.addr_width
-        << ",NUM_WL=" << config_.num_wl
-        << ",MUX_RATIO=" << config_.mux_ratio
-        << ",DLY_PRECH_CNT=" << config_.delay_prech_cnt
-        << ",DLY_WL_CNT=" << config_.delay_wl_cnt
-        << ",DLY_SENSE_CNT=" << config_.delay_sense_cnt
-        << ",DLY_WRITE_CNT=" << config_.delay_write_cnt;
-    return oss.str();
-}
+    int addr_width = std::ceil(std::log2(cli_options_.num_wls)) 
+                   + std::ceil(std::log2(cli_options_.num_banks))
+                   + 1 + 2; // +1 for top/bottom, +2 for ysel
 
-std::string SynthesisManager::get_config_string() const {
     std::ostringstream oss;
-    oss << "Synthesis Configuration:\n"
-        << "  Address Width: " << config_.addr_width << " bits\n"
-        << "  Wordlines (NUM_WL): " << config_.num_wl << "\n"
-        << "  MUX Ratio: " << config_.mux_ratio << "\n"
-        << "  Delay Precharge Count: " << config_.delay_prech_cnt << "\n"
-        << "  Delay Wordline Count: " << config_.delay_wl_cnt << "\n"
-        << "  Delay Sense Count: " << config_.delay_sense_cnt << "\n"
-        << "  Delay Write Count: " << config_.delay_write_cnt << "\n"
-        << "  Verilog Path: " << config_.verilog_path << "\n"
-        << "  Synthesis Path: " << config_.syn_path << "\n"
-        << "  Output Path: " << config_.output_path;
+    oss << "ADDR_WIDTH=" << addr_width
+        << ",NUM_WL=" << cli_options_.num_wls
+        << ",NUM_BANK=" << cli_options_.num_banks;
     return oss.str();
 }
 
 std::string SynthesisManager::generate_tcl_content() const {
     std::ostringstream oss;
-    std::string cur_path = get_executable_directory();
-    
-    oss << "# Design Compiler synthesis script\n"
-        << "# Generated automatically with parameterized design\n"
+    int addr_width = std::ceil(std::log2(cli_options_.num_wls)) 
+                   + std::ceil(std::log2(cli_options_.num_banks))
+                   + 1 + 2; // +1 for top/bottom, +2 for ysel
+
+    oss << "# Design Compiler synthesis script (Version 2)\n"
         << "# Configuration:\n"
-        << "#   ADDR_WIDTH=" << config_.addr_width << "\n"
-        << "#   NUM_WL=" << config_.num_wl << "\n"
-        << "#   MUX_RATIO=" << config_.mux_ratio << "\n"
-        << "#   DLY_PRECH_CNT=" << config_.delay_prech_cnt << "\n"
-        << "#   DLY_WL_CNT=" << config_.delay_wl_cnt << "\n"
-        << "#   DLY_SENSE_CNT=" << config_.delay_sense_cnt << "\n"
-        << "#   DLY_WRITE_CNT=" << config_.delay_write_cnt << "\n\n"
-        
-        << "set_app_var search_path \"$search_path " << cur_path << "/tech/db " << config_.verilog_path << "\"\n"
+        << "#   ADDR_WIDTH=" << addr_width << "\n"
+        << "#   NUM_WL=" << cli_options_.num_wls << "\n"
+        << "#   NUM_BANK=" << cli_options_.num_banks << "\n\n"
+
+        << "set_app_var search_path \"$search_path " << db_path_ << " " << rtl_path_ << "\"\n"
         << "set_app_var target_library \"asap7sc7p5t_AO_RVT_TT.db asap7sc7p5t_INVBUF_RVT_TT.db asap7sc7p5t_OA_RVT_TT.db asap7sc7p5t_SEQ_RVT_TT.db asap7sc7p5t_SIMPLE_RVT_TT.db\"\n"
         << "set_app_var link_library \"* asap7sc7p5t_AO_RVT_TT.db asap7sc7p5t_INVBUF_RVT_TT.db asap7sc7p5t_OA_RVT_TT.db asap7sc7p5t_SEQ_RVT_TT.db asap7sc7p5t_SIMPLE_RVT_TT.db\"\n"
         << "\n"
@@ -89,52 +75,18 @@ std::string SynthesisManager::generate_tcl_content() const {
         << "set_dont_use asap7sc7p5t_AO_RVT_TT/AOI211xp5_ASAP7_75t_R\n"
         << "set_dont_use asap7sc7p5t_OA_RVT_TT/OAI32xp33_ASAP7_75t_R\n"
         << "set_dont_use asap7sc7p5t_OA_RVT_TT/OAI221xp5_ASAP7_75t_R\n\n";
-        // << "set_dont_touch u_vsswrite* true\n\n";
-    
-    // Add set_load commands based on capacitance values
-    if (!config_.pin_capacitances.empty()) {
-        oss << "# Output load settings (from PEX capacitance report)\n";
-        
-        // Map of signal names to their corresponding ports in the design
-        // Note: The design uses lowercase port names
-        std::map<std::string, std::string> signal_map;
-        signal_map["WLT"] = "wlt";
-        signal_map["WLB"] = "wlb";
-        signal_map["BLPRECHTN"] = "blprechtn";
-        signal_map["BLPRECHBN"] = "blprechbn";
-        signal_map["YSELT"] = "yselt";
-        signal_map["YSELB"] = "yselb";
-        signal_map["YSELTN"] = "yseltn";
-        signal_map["YSELBN"] = "yselbn";
-        signal_map["SAE"] = "sae";
-        signal_map["OEB_OUT"] = "oeb_out";
-        signal_map["OE_OUT"] = "oe_out";
-        signal_map["SAPRECHN"] = "saprechn";
-        signal_map["WRENA"] = "wrena";
-        signal_map["WRENAN"] = "wrenan";
-        
-        for (const auto& entry : config_.pin_capacitances) {
+
+    if (!pin_capacitances_.empty()) {
+        oss << "# Output load settings (predicted capacitance)\n";
+        for (const auto& entry : pin_capacitances_) {
             const std::string& pin_name = entry.first;
             double cap_pf = entry.second;
-            
-            // Find the corresponding port name using exact match
-            std::string port_name;
-            for (const auto& mapping : signal_map) {
-                if (pin_name == mapping.first) {
-                    port_name = mapping.second;
-                    break;
-                }
-            }
-            
-            if (!port_name.empty()) {
-                // Give some margin (e.g., 50%) to the capacitance
-                oss << "set_load " << std::fixed << std::setprecision(6) 
-                    << (cap_pf * 1000) * 1.5 << " [get_ports " << port_name << "*]\n";
-            }
+            oss << "set_load " << std::fixed << std::setprecision(6) 
+                << (cap_pf * 1000) * 1.5 << " [get_ports " << pin_name << "*]\n";
         }
         oss << "\n";
     }
-    
+
     oss << "set_fix_multiple_port_nets -all -buffer_constants [get_designs *] \n\n"
         << "# Compile and generate netlist\n"
         << "compile\n"
@@ -142,122 +94,85 @@ std::string SynthesisManager::generate_tcl_content() const {
         << "define_name_rules NO_CASE_CONFLICT -case_insensitive\n"
         << "change_names -rules NO_CASE_CONFLICT -hierarchy\n"
         << "change_names -rules verilog -hierarchy\n"
-        << "write_file -hierarchy -format verilog -output ./netlist.v\n"
+        << "write_file -hierarchy -format verilog -output " << syn_path_ << "/netlist.v\n"
         << "exit\n";
-    
+
     return oss.str();
 }
 
-bool SynthesisManager::file_exists(const std::string& path) const {
-    struct stat buffer;
-    return (stat(path.c_str(), &buffer) == 0);
-}
+bool SynthesisManager::generate_synthesis_script() {
+    LOGD << std::string(70, '=');
+    LOGD << "Generating Synthesis Script";
+    LOGD << std::string(70, '=');
 
-bool SynthesisManager::create_output_directories() const {
-    // Create syn_path directory
-    std::string mkdir_cmd = "mkdir -p " + config_.syn_path;
-    int result = std::system(mkdir_cmd.c_str());
-    if (result != 0) {
-        std::cerr << "  ✗ Error creating directory: " << config_.syn_path << std::endl;
+    if (!directory_exists(syn_path_)) {
+        LOGD << "Creating synthesis directory: " << syn_path_;
+        if (!create_directory(syn_path_, nullptr)) {
+            LOGE << "Failed to create synthesis directory: " << syn_path_;
+            return false;
+        }
+    }
+
+    std::string syn_tcl_path = syn_path_ + "/syn_auto.tcl";
+    std::string tcl_content = generate_tcl_content();
+
+    std::ofstream tcl_file(syn_tcl_path);
+    if (!tcl_file.is_open()) {
+        LOGE << "Cannot open file for writing: " << syn_tcl_path;
         return false;
     }
-    
-    // Create output_path directory
-    mkdir_cmd = "mkdir -p " + config_.output_path;
-    result = std::system(mkdir_cmd.c_str());
-    if (result != 0) {
-        std::cerr << "  ✗ Error creating directory: " << config_.output_path << std::endl;
-        return false;
-    }
-    
+
+    tcl_file << tcl_content;
+    tcl_file.close();
+
     return true;
 }
 
-bool SynthesisManager::generate_synthesis_script() {
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "Generating Synthesis Script (syn.tcl)" << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
-    
-    if (!create_output_directories()) {
-        return false;
-    }
-    
-    std::string syn_tcl_path = config_.syn_path + "/syn_auto.tcl";
-    std::string tcl_content = generate_tcl_content();
-    
-    try {
-        std::ofstream tcl_file(syn_tcl_path);
-        if (!tcl_file.is_open()) {
-            std::cerr << "  ✗ Error: Cannot open file for writing: " << syn_tcl_path << std::endl;
-            return false;
-        }
-        
-        tcl_file << tcl_content;
-        tcl_file.close();
-        
-        std::cout << "  ✓ Generated synthesis script" << std::endl;
-        std::cout << "  → " << syn_tcl_path << std::endl;
-        std::cout << "\n  Parameters:" << std::endl;
-        std::cout << "    ADDR_WIDTH=" << config_.addr_width << std::endl;
-        std::cout << "    NUM_WL=" << config_.num_wl << std::endl;
-        std::cout << "    MUX_RATIO=" << config_.mux_ratio << std::endl;
-        std::cout << "    DLY_PRECH_CNT=" << config_.delay_prech_cnt << std::endl;
-        std::cout << "    DLY_WL_CNT=" << config_.delay_wl_cnt << std::endl;
-        std::cout << "    DLY_SENSE_CNT=" << config_.delay_sense_cnt << std::endl;
-        std::cout << "    DLY_WRITE_CNT=" << config_.delay_write_cnt << std::endl;
-        
-        return true;
-    } catch (const std::exception& e) {
-        std::cerr << "  ✗ Error writing synthesis script: " << e.what() << std::endl;
-        return false;
-    }
-}
-
 bool SynthesisManager::run_design_compiler() {
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "Running Design Compiler" << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
+    LOGD << "\n" << std::string(70, '=');
+    LOGD << "Running Design Compiler";
+    LOGD << std::string(70, '=');
     
-    std::string syn_tcl_path = config_.syn_path + "/syn_auto.tcl";
+    std::string syn_tcl_path = syn_path_ + "/syn_auto.tcl";
     
     // Check if script was generated
     if (!file_exists(syn_tcl_path)) {
-        std::cerr << "  ✗ Error: syn_auto.tcl not found at " << syn_tcl_path << std::endl;
-        std::cerr << "    Please run generate_synthesis_script() first" << std::endl;
+        LOGE << "  ✗ Error: syn_auto.tcl not found at " << syn_tcl_path;
+        LOGE << "    Please run generate_synthesis_script() first";
         return false;
     }
     
     // Construct the Design Compiler command
     // Note: Adjust dc_shell path if needed for your environment
-    std::string cmd = "tcsh -c 'cd " + config_.syn_path + " && dc_shell -f syn_auto.tcl -output_log_file syn_auto.log'";
+    std::string cmd = "tcsh -c 'cd " + syn_path_ + " && dc_shell -f syn_auto.tcl -output_log_file syn_auto.log' > /dev/null 2>&1";
     
-    std::cout << "  ▶ Running: " << cmd << std::endl;
+    LOGD << "  ▶ Running: " << cmd;
     
     int result = std::system(cmd.c_str());
     
     if (result != 0) {
-        std::cerr << "  ✗ Design Compiler failed with exit code: " << result << std::endl;
-        std::cerr << "    Check log file: " << config_.syn_path << "/syn_auto.log" << std::endl;
+        LOGE << "  ✗ Design Compiler failed with exit code: " << result;
+        LOGE << "    Check log file: " << syn_path_ << "/syn_auto.log";
         return false;
     }
     
-    std::cout << "  ✓ Design Compiler completed successfully" << std::endl;
+    LOGD << "  ✓ Design Compiler completed successfully";
     return true;
 }
 
 bool SynthesisManager::verify_synthesis_output() {
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "Verifying Synthesis Output" << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
+    LOGD << "\n" << std::string(70, '=');
+    LOGD << "Verifying Synthesis Output";
+    LOGD << std::string(70, '=');
     
-    std::string netlist_path = config_.syn_path + "/netlist.v";
-    std::string log_path = config_.syn_path + "/syn_auto.log";
+    std::string netlist_path = syn_path_ + "/netlist.v";
+    std::string log_path = syn_path_ + "/syn_auto.log";
     
     if (!file_exists(netlist_path)) {
-        std::cerr << "  ✗ Error: netlist.v not generated" << std::endl;
+        LOGE << "  ✗ Error: netlist.v not generated";
         
         if (file_exists(log_path)) {
-            std::cerr << "\n  Checking log file for errors..." << std::endl;
+            LOGE << "\n  Checking log file for errors...";
             std::ifstream log_file(log_path.c_str());
             std::string line;
             int error_count = 0;
@@ -265,7 +180,7 @@ bool SynthesisManager::verify_synthesis_output() {
                 if (line.find("Error") != std::string::npos ||
                     line.find("ERROR") != std::string::npos ||
                     line.find("error") != std::string::npos) {
-                    std::cerr << "    " << line << std::endl;
+                    LOGE << "    " << line;
                     error_count++;
                 }
             }
@@ -276,183 +191,129 @@ bool SynthesisManager::verify_synthesis_output() {
     // Get file size using stat
     struct stat stat_buf;
     if (stat(netlist_path.c_str(), &stat_buf) == 0) {
-        std::cout << "  ✓ Netlist generated successfully" << std::endl;
-        std::cout << "  → " << netlist_path << std::endl;
-        std::cout << "  File size: " << stat_buf.st_size << " bytes" << std::endl;
+        LOGD << "  ✓ Netlist generated successfully";
+        LOGD << "  → " << netlist_path;
+        LOGD << "  File size: " << stat_buf.st_size << " bytes";
         return true;
     } else {
-        std::cerr << "  ✗ Error checking netlist file" << std::endl;
+        LOGE << "  ✗ Error checking netlist file";
         return false;
     }
 }
 
 bool SynthesisManager::run_synthesis() {
-    std::cout << "\n" << std::string(70, '#') << std::endl;
-    std::cout << "# Parameterized Design Synthesis Flow" << std::endl;
-    std::cout << std::string(70, '#') << std::endl;
-    
-    std::cout << "\n" << get_config_string() << std::endl;
-    
-    // Step 1: Generate synthesis script
+    LOGD << std::string(70, '#');
+    LOGD << "# Parameterized Design Synthesis Flow";
+    LOGD << std::string(70, '#');
+
+    if (!predict_capacitance()) {
+        LOGE << "Synthesis failed at capacitance prediction step";
+        return false;
+    }
+
     if (!generate_synthesis_script()) {
-        std::cerr << "\n✗ Synthesis failed at script generation step" << std::endl;
+        LOGE << "Synthesis failed at script generation step";
         return false;
     }
-    
-    // Step 2: Run Design Compiler
+
     if (!run_design_compiler()) {
-        std::cerr << "\n✗ Synthesis failed at Design Compiler execution step" << std::endl;
+        LOGE << "Synthesis failed at Design Compiler execution step";
         return false;
     }
-    
-    // Step 3: Verify output
+
     if (!verify_synthesis_output()) {
-        std::cerr << "\n✗ Synthesis failed at output verification step" << std::endl;
+        LOGE << "Synthesis failed at output verification step";
         return false;
     }
-    
-    // Step 4: Fix assign statements
+
     if (!fix_assign_statements()) {
-        std::cerr << "\n✗ Synthesis failed at assign statement fixing step" << std::endl;
+        LOGE << "Synthesis failed at assign statement fixing step";
         return false;
     }
-    
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "✓ Synthesis Complete" << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
-    
+
+    LOGD << std::string(70, '=');
+    LOGD << "✓ Synthesis Complete";
+    LOGD << std::string(70, '=');
+
     return true;
 }
 
-bool SynthesisManager::load_capacitance_from_pex(const std::string& rep_file_path) {
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "Loading Capacitance from PEX Report" << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
-    
-    if (!file_exists(rep_file_path)) {
-        std::cerr << "  ✗ Error: PEX report file not found: " << rep_file_path << std::endl;
-        return false;
-    }
-    
-    OpenFinRAM::CapacitanceParser parser;
-    if (!parser.parse(rep_file_path)) {
-        std::cerr << "  ✗ Error: Failed to parse capacitance report" << std::endl;
-        return false;
-    }
-    
-    // Extract capacitance for key signals
-    std::vector<std::string> signals = {
-        "WLT", "WLB", "BLPRECHTN", "BLPRECHBN",
-        "YSELT", "YSELB", "YSELTN", "YSELBN",
-        "SAE", "SAPRECHN", "WRENA", "WRENAN"
-    };
-    
-    config_.pin_capacitances.clear();
-    
-    std::cout << "\n  Extracted Capacitances:" << std::endl;
-    
-    for (const auto& signal : signals) {
-        // Try to get average capacitance for bus signals (WLT, WLB, etc.)
-        double avg_cap = parser.get_average_capacitance_pf(signal);
-        double max_cap = parser.get_max_capacitance_pf(signal);
-        
-        if (avg_cap > 0.0) {
-            // Use maximum capacitance for conservative design
-            config_.pin_capacitances[signal] = max_cap;
-            
-            std::cout << "    " << std::left << std::setw(15) << signal << ": "
-                     << std::scientific << std::setprecision(3) 
-                     << "avg=" << avg_cap << " pF, "
-                     << "max=" << max_cap << " pF "
-                     << "(using max)" << std::endl;
-        }
-    }
-    
-    if (config_.pin_capacitances.empty()) {
-        std::cerr << "  ✗ Warning: No matching capacitances found" << std::endl;
-        return false;
-    }
-    
-    std::cout << "\n  ✓ Loaded " << config_.pin_capacitances.size() 
-              << " capacitance values" << std::endl;
-    
-    return true;
-}
+bool SynthesisManager::predict_capacitance() {
+    LOGD << std::string(70, '=');
+    LOGD << "Predicting Capacitance using Statistical Model";
+    LOGD << std::string(70, '=');
 
-bool SynthesisManager::predict_capacitance(int bit_num, int stacked) {
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "Predicting Capacitance using Statistical Model" << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
-    
-    std::cout << "  Configuration: bit_num=" << bit_num 
-              << ", stacked=" << stacked << std::endl;
-    
-    // 使用統計模型預測
+    LOGD << "  Configuration: num_wls * 2=" << cli_options_.num_wls * 2 
+         << ", num_data_bits=" << cli_options_.num_data_bits;
+
     OpenFinRAM::CapacitancePredictor predictor;
-    auto predictions = predictor.predict_all(bit_num, stacked);
-    
-    config_.pin_capacitances.clear();
-    
-    // 映射預測結果到對應的pin names
-    // 預測器返回的key: WLT, YSELT, BLPRECHTN, WRENA, SAE
+    auto predictions = predictor.predict_all(cli_options_.num_wls * 2, cli_options_.num_data_bits);
+
     std::map<std::string, std::vector<std::string>> signal_map = {
-        {"WLT", {"WLT", "WLB"}},
-        {"YSELT", {"YSELT", "YSELB", "YSELTN", "YSELBN"}},
-        {"BLPRECHTN", {"BLPRECHTN", "BLPRECHBN"}},
-        {"WRENA", {"WRENA", "WRENAN"}},
-        {"SAE", {"SAE", "SAPRECHN", "OEB_OUT", "OE_OUT"}}
+        {"WLT", {"wlt_A", "wlt_A", "wlt_B", "wlt_B", "RWLT_A", "RWLB_A", "RWLT_B", "RWLB_B"}},
+        {"YSELT", {"yselt_A", "yseltn_A", "yselb_A", "yselbn_A", "yselt_B", "yseltn_B", "yselb_B", "yselbn_B"}},
+        {"BLPRECHTN", {"blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B"}},
+        {"WRENA", {"wrena_A", "wrenan_A", "wrena_B", "wrenan_B"}},
+        {"SAE", {"oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"}}
     };
-    
-    std::cout << "\n  Predicted Capacitances:" << std::endl;
-    
+
+    if (cli_options_.single_port) {
+        signal_map["WLT"] = {"wlt", "wlb"};
+        signal_map["YSELT"] = {"yselt", "yseltn", "yselb", "yselbn"};
+        signal_map["BLPRECHTN"] = {"blprechtn", "blprechbn"};
+        signal_map["WRENA"] = {"wrena", "wrenan"};
+        signal_map["SAE"] = {"oeb_out", "oe_out"};
+    } else {
+        signal_map["WLT"] = {"wlt_A", "wlt_B", "RWLT_A", "RWLB_A", "RWLT_B", "RWLB_B"};
+        signal_map["YSELT"] = {"yselt_A", "yseltn_A", "yselb_A", "yselbn_A", "yselt_B", "yseltn_B", "yselb_B", "yselbn_B"};
+        signal_map["BLPRECHTN"] = {"blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B"};
+        signal_map["WRENA"] = {"wrena_A", "wrenan_A", "wrena_B", "wrenan_B"};
+        signal_map["SAE"] = {"oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"};
+    }
+
+    LOGD << "\n  Predicted Capacitances:";
     for (const auto& pred : predictions) {
         const std::string& metric = pred.first;
         double cap = pred.second;
-        
-        std::cout << "    " << std::left << std::setw(15) << metric << ": "
-                  << std::fixed << std::setprecision(6) 
-                  << cap << " pF" << std::endl;
-        
-        // 將預測值應用到相關的所有pin
+
         auto it = signal_map.find(metric);
         if (it != signal_map.end()) {
             for (const auto& pin : it->second) {
-                config_.pin_capacitances[pin] = cap;
+                pin_capacitances_[pin] = cap;
+
+                LOGD << "    " << std::left << std::setw(20) << pin << ": "
+                     << std::fixed << std::setprecision(6) 
+                     << cap << " pF";
             }
         } else {
-            config_.pin_capacitances[metric] = cap;
+            pin_capacitances_[metric] = cap;
+
+            LOGD << "    " << std::left << std::setw(20) << metric << ": "
+                 << std::fixed << std::setprecision(6) 
+                 << cap << " pF";
         }
     }
-    
-    std::cout << "\n  ✓ Predicted " << predictions.size() 
-              << " capacitance values for " << config_.pin_capacitances.size()
-              << " pins" << std::endl;
-    std::cout << "  ℹ Using statistical model (no PEX required)" << std::endl;
-    
+
     return true;
 }
 
-void SynthesisManager::set_pin_capacitance(const std::string& pin_name, double cap_pf) {
-    config_.pin_capacitances[pin_name] = cap_pf;
-}
-
 bool SynthesisManager::fix_assign_statements() {
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "Checking and Fixing Assign Statements" << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
+    LOGD << "\n" << std::string(70, '=');
+    LOGD << "Checking and Fixing Assign Statements";
+    LOGD << std::string(70, '=');
     
-    std::string netlist_path = config_.syn_path + "/netlist.v";
+    std::string netlist_path = syn_path_ + "/netlist.v";
     
     // Check if netlist exists
     if (!file_exists(netlist_path)) {
-        std::cerr << "  ✗ Error: Netlist not found at " << netlist_path << std::endl;
+        LOGE << "  ✗ Error: Netlist not found at " << netlist_path;
         return false;
     }
     
     // Read the netlist file
     std::ifstream infile(netlist_path);
     if (!infile.is_open()) {
-        std::cerr << "  ✗ Error: Cannot open netlist file: " << netlist_path << std::endl;
+        LOGE << "  ✗ Error: Cannot open netlist file: " << netlist_path;
         return false;
     }
     
@@ -481,12 +342,12 @@ bool SynthesisManager::fix_assign_statements() {
     infile.close();
     
     if (assign_count == 0) {
-        std::cout << "  ✓ No assign statements found - netlist is clean" << std::endl;
+        LOGD << "  ✓ No assign statements found - netlist is clean";
         return true;
     }
     
-    std::cout << "  ⚠ Found " << assign_count << " assign statement(s)" << std::endl;
-    std::cout << "  Converting to HB1xp67_ASAP7_75t_R buffers..." << std::endl;
+    LOGD << "  ⚠ Found " << assign_count << " assign statement(s)";
+    LOGD << "  Converting to HB1xp67_ASAP7_75t_R buffers...";
     
     // Process each line and replace assigns with buffers
     int buffer_counter = 0;
@@ -507,14 +368,14 @@ bool SynthesisManager::fix_assign_statements() {
             // Find the '=' position
             size_t equal_pos = current_line.find('=', assign_pos);
             if (equal_pos == std::string::npos) {
-                std::cerr << "  ✗ Warning: Invalid assign at line " << (i+1) << std::endl;
+                LOGE << "  ✗ Warning: Invalid assign at line " << (i+1);
                 continue;
             }
             
             // Find the ';' position
             size_t semicolon_pos = current_line.find(';', equal_pos);
             if (semicolon_pos == std::string::npos) {
-                std::cerr << "  ✗ Warning: No semicolon found at line " << (i+1) << std::endl;
+                LOGE << "  ✗ Warning: No semicolon found at line " << (i+1);
                 continue;
             }
             
@@ -558,8 +419,8 @@ bool SynthesisManager::fix_assign_statements() {
             // Replace the line
             current_line = new_line.str();
             
-            std::cout << "  • Line " << (i+1) << ": " << output << " = " << input 
-                      << " → " << buf_name.str() << std::endl;
+            LOGD << "  • Line " << (i+1) << ": " << output << " = " << input 
+                 << " → " << buf_name.str();
         }
     }
     
@@ -570,15 +431,15 @@ bool SynthesisManager::fix_assign_statements() {
     std::string cp_cmd = "cp " + netlist_path + " " + backup_path;
     int result = std::system(cp_cmd.c_str());
     if (result != 0) {
-        std::cerr << "  ✗ Warning: Could not create backup file" << std::endl;
+        LOGE << "  ✗ Warning: Could not create backup file" << " (command: " << cp_cmd << ")";
     } else {
-        std::cout << "  ✓ Created backup: " << backup_path << std::endl;
+        LOGD << "  ✓ Created backup: " << backup_path;
     }
     
     // Write modified content
     std::ofstream outfile(netlist_path);
     if (!outfile.is_open()) {
-        std::cerr << "  ✗ Error: Cannot write to netlist file: " << netlist_path << std::endl;
+        LOGE << "  ✗ Error: Cannot write to netlist file: " << netlist_path;
         return false;
     }
     
@@ -587,8 +448,8 @@ bool SynthesisManager::fix_assign_statements() {
     }
     outfile.close();
     
-    std::cout << "  ✓ Fixed " << assign_count << " assign statement(s)" << std::endl;
-    std::cout << "  → Updated netlist: " << netlist_path << std::endl;
+    LOGD << "  ✓ Fixed " << assign_count << " assign statement(s)";
+    LOGD << "  → Updated netlist: " << netlist_path;
     
     return true;
 }

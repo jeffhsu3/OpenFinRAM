@@ -1,7 +1,7 @@
 module ctrl_decode #(
     parameter ADDR_WIDTH = 10,
     parameter NUM_WL     = 32,
-    parameter MUX_RATIO  = 2,    // MUX 分組數量 
+    parameter NUM_BANK  = 2,    // MUX 分組數量 
     // 時序參數 
     parameter DLY_PRECH_CNT = 30,
     parameter DLY_WL_CNT    = 5,
@@ -16,20 +16,20 @@ module ctrl_decode #(
     input  logic                  oe_n,       // 系統輸出致能 
     
     // 使用二維陣列定義輸出接腳 (SystemVerilog 特性)
-    output logic [MUX_RATIO-1:0][NUM_WL-1:0] wlt,       
-    output logic [MUX_RATIO-1:0][NUM_WL-1:0] wlb,       
-    output logic [MUX_RATIO-1:0]             blprechtn, 
-    output logic [MUX_RATIO-1:0]             blprechbn, 
-    output logic [MUX_RATIO-1:0][3:0]        yselt,     
-    output logic [MUX_RATIO-1:0][3:0]        yseltn,    
-    output logic [MUX_RATIO-1:0][3:0]        yselb,     
-    output logic [MUX_RATIO-1:0][3:0]        yselbn,    
-    output logic [MUX_RATIO-1:0]             sae,       
-    output logic [MUX_RATIO-1:0]             saprechn,  
-    output logic [MUX_RATIO-1:0]             wrena,     
-    output logic [MUX_RATIO-1:0]             wrenan,    
-    output logic [MUX_RATIO-1:0]             oeb_out,   // 輸出至 NOR2 閘 
-    output logic [MUX_RATIO-1:0]             oe_out     // 直接控制輸出 OE 
+    output logic [NUM_BANK-1:0][NUM_WL-1:0] wlt,       
+    output logic [NUM_BANK-1:0][NUM_WL-1:0] wlb,       
+    output logic [NUM_BANK-1:0]             blprechtn, 
+    output logic [NUM_BANK-1:0]             blprechbn, 
+    output logic [NUM_BANK-1:0][3:0]        yselt,     
+    output logic [NUM_BANK-1:0][3:0]        yseltn,    
+    output logic [NUM_BANK-1:0][3:0]        yselb,     
+    output logic [NUM_BANK-1:0][3:0]        yselbn,    
+    output logic [NUM_BANK-1:0]             sae,       
+    output logic [NUM_BANK-1:0]             saprechn,  
+    output logic [NUM_BANK-1:0]             wrena,     
+    output logic [NUM_BANK-1:0]             wrenan,    
+    output logic [NUM_BANK-1:0]             oeb_out,   // 輸出至 NOR2 閘 
+    output logic [NUM_BANK-1:0]             oe_out     // 直接控制輸出 OE 
 );
 
     // --- 1. 地址解碼 (Address Decoding) --- 
@@ -44,14 +44,14 @@ module ctrl_decode #(
 
     localparam ROW_BITS      = clog2(NUM_WL); 
     localparam Y_BITS        = 2; 
-    localparam SLICE_BITS = (MUX_RATIO > 1) ? clog2(MUX_RATIO) : 1;
+    localparam SLICE_BITS = (NUM_BANK > 1) ? clog2(NUM_BANK) : 1;
     localparam BANK_BIT_IDX  = ROW_BITS + Y_BITS; 
     localparam SLICE_BIT_IDX = BANK_BIT_IDX + 1; 
 
     wire [ROW_BITS-1:0]   row_sel_d   = A[ROW_BITS-1 : 0]; 
     wire [1:0]            col_sel_d   = A[BANK_BIT_IDX-1 : ROW_BITS]; 
     wire                  bank_sel_d  = A[BANK_BIT_IDX]; 
-    wire [SLICE_BITS-1:0] slice_sel_d = (MUX_RATIO > 1) ? A[SLICE_BIT_IDX + SLICE_BITS - 1 : SLICE_BIT_IDX] : 1'b0;
+    wire [SLICE_BITS-1:0] slice_sel_d = (NUM_BANK > 1) ? A[SLICE_BIT_IDX + SLICE_BITS - 1 : SLICE_BIT_IDX] : 1'b0;
 
     logic [ROW_BITS-1:0]   row_sel_r;
     logic [1:0]            col_sel_r;
@@ -102,7 +102,7 @@ module ctrl_decode #(
         oeb_out    = '1; // 預設 NOR2 遮罩開啟 (1)，禁止輸出
         
         // Y-Select 預設值 
-        for (int i = 0; i < MUX_RATIO; i++) begin
+        for (int i = 0; i < NUM_BANK; i++) begin
             yselt[i]  = 4'b0000;
             yselb[i]  = 4'b0000;
             yseltn[i] = 4'b1111;
