@@ -9,6 +9,8 @@
 #include <cerrno>
 #include <cstring>
 
+#include "main_config_helpers.hpp"
+
 std::string get_executable_directory();
 
 std::string join_path(const std::string& base, const std::string& name);
@@ -20,5 +22,7 @@ std::string get_current_timestamp();
 bool directory_exists(const std::string& path);
 
 bool file_exists(const std::string& path);
+
+int get_addr_width(const MainCliOptions& cli_options);
 
 #endif // UTILS_HPP

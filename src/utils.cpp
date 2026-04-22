@@ -1,5 +1,6 @@
 #include "utils.hpp"
 
+#include <cmath>
 #include <ctime>
 
 std::string get_executable_directory() {
@@ -61,4 +62,10 @@ bool directory_exists(const std::string& path) {
 bool file_exists(const std::string& path) {
     struct stat buffer;
     return (stat(path.c_str(), &buffer) == 0);
+}
+
+int get_addr_width(const MainCliOptions& cli_options) {
+    return std::ceil(std::log2(cli_options.num_wls)) 
+         + std::ceil(std::log2(cli_options.num_banks))
+         + 1 + 2; // +1 for top/bottom, +2 for ysel
 }
