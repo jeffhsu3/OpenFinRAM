@@ -36,6 +36,7 @@ private:
     std::string generate_cell_row_8t();
     std::string generate_array_8t();
     std::string generate_colgrp_8t();
+    std::string generate_stacked_colgrp_8t();
     
     // Full content generation
     std::string generate_spice_content(const bool& single_port);

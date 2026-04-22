@@ -647,6 +647,7 @@ std::string SpiceGenerator::generate_spice_content(const bool& single_port) {
         content << sep << generate_cell_row_8t() << "\n";
         content << sep << generate_array_8t() << "\n";
         content << sep << generate_colgrp_8t() << "\n";
+        content << sep << generate_stacked_colgrp_8t() << "\n";
     }
     
     return content.str();
