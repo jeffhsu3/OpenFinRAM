@@ -598,6 +598,73 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     return create_subckt("colgrp_sram_8t", ports, instances.str());
 }
 
+std::string SpiceGenerator::generate_stacked_colgrp_8t() {
+    std::vector<std::string> ports;
+
+    // WLTA/WLTB and WLBA/WLBB ports for each bank
+    for (int mux = 0; mux < config_.num_banks; ++mux) {
+        for (int i = 0; i < config_.num_wls; ++i) {
+            ports.push_back("WLTA[" + std::to_string(i + mux * config_.num_wls) + "]");
+        }
+        for (int i = 0; i < config_.num_wls; ++i) {
+            ports.push_back("WLTB[" + std::to_string(i + mux * config_.num_wls) + "]");
+        }
+        for (int i = 0; i < config_.num_wls; ++i) {
+            ports.push_back("WLBA[" + std::to_string(i + mux * config_.num_wls) + "]");
+        }
+        for (int i = 0; i < config_.num_wls; ++i) {
+            ports.push_back("WLBB[" + std::to_string(i + mux * config_.num_wls) + "]");
+        }
+    }
+
+    // D/Q ports
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        ports.push_back("D[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        ports.push_back("Q[" + std::to_string(i) + "]");
+    }
+
+    // wrena/wrenan, oeb_out/oe_out, blprechtn/blprechbn ports for each bank
+    std::vector<std::string> ctrl_port_names = {
+        "wrena", "wrenan", "oeb_out", "oe_out", "blprechtn", "blprechbn"
+    };
+    for (const auto& name : ctrl_port_names) {
+        for (int mux = 0; mux < config_.num_banks; ++mux) {
+            ports.push_back(name + "[" + std::to_string(mux) + "]");
+        }
+    }
+    ports.push_back("VDD");
+    ports.push_back("VSS");
+
+    // Instances
+    std::stringstream instances;
+    for (int mux = 0; mux < config_.num_banks; ++mux) {
+        for (int bit = 0; bit < config_.num_data_bits; ++bit) {
+            instances << "X" << mux << "_" << bit << " ";
+            for (int i = 0; i < config_.num_wls; ++i) {
+                instances << "WLTA[" << (i + mux * config_.num_wls) << "] ";
+            }
+            for (int i = 0; i < config_.num_wls; ++i) {
+                instances << "WLTB[" << (i + mux * config_.num_wls) << "] ";
+            }
+            for (int i = 0; i < config_.num_wls; ++i) {
+                instances << "WLBA[" << (i + mux * config_.num_wls) << "] ";
+            }
+            for (int i = 0; i < config_.num_wls; ++i) {
+                instances << "WLBB[" << (i + mux * config_.num_wls) << "] ";
+            }
+            instances << "D[" << bit << "] Q[" << bit << "] ";
+            instances << "wrena[" << mux << "] wrenan[" << mux << "] oeb_out[" << mux << "] oe_out[" << mux << "] blprechtn[" << mux << "] blprechbn[" << mux << "] VDD VSS colgrp_sram_8t\n";
+        }
+    }
+
+    // Generate bank name matching GDS: stacked_colgrp_x{bits}x{num_data_bits}x{num_banks}
+    // bits = num_wls (since each colgrp has 2 arrays, each with num_wls)
+    std::string bank_name = "stacked_colgrp_x" + std::to_string(config_.num_wls * 2) + "x" + std::to_string(config_.num_data_bits) + "x" + std::to_string(config_.num_banks);
+    return create_subckt(bank_name, ports, instances.str());
+}
+
 std::string SpiceGenerator::generate_spice_content(const bool& single_port) {
     std::stringstream content;
     std::string sep = std::string(70, '*') + "\n";
