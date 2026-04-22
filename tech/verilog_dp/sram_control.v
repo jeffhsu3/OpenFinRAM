@@ -13,8 +13,8 @@ module ctrl_decode #(
     input  logic                  we_n_B,
     input  logic                  oe_n_A,
     input  logic                  oe_n_B,
-    input  logic [ADDR_WIDTH-1:0] addr_A,
-    input  logic [ADDR_WIDTH-1:0] addr_B,
+    input  logic [ADDR_WIDTH-1:0] A_A,
+    input  logic [ADDR_WIDTH-1:0] A_B,
 
     // Per-port replica wordline controls for SA timing path.
     // RWLT_A/RWLB_A fire when Port A reads top/bottom bank.
@@ -70,18 +70,18 @@ module ctrl_decode #(
 
     localparam [COLUMN_MUX-1:0] ONEHOT_BASE = {{(COLUMN_MUX - 1){1'b0}}, 1'b1};
 
-    wire [ROW_BITS-1:0]   row_sel_d_A = addr_A[ROW_BITS-1:0];
-    wire [Y_BITS-1:0]     col_sel_d_A = addr_A[BANK_BIT_IDX-1:ROW_BITS];
-    wire                  bank_sel_d_A = addr_A[BANK_BIT_IDX];
+    wire [ROW_BITS-1:0]   row_sel_d_A = A_A[ROW_BITS-1:0];
+    wire [Y_BITS-1:0]     col_sel_d_A = A_A[BANK_BIT_IDX-1:ROW_BITS];
+    wire                  bank_sel_d_A = A_A[BANK_BIT_IDX];
     wire [SLICE_BITS-1:0] slice_sel_d_A = (NUM_BANK > 1) ?
-                                          addr_A[SLICE_BIT_IDX + SLICE_BITS - 1:SLICE_BIT_IDX] :
+                                          A_A[SLICE_BIT_IDX + SLICE_BITS - 1:SLICE_BIT_IDX] :
                                           '0;
 
-    wire [ROW_BITS-1:0]   row_sel_d_B = addr_B[ROW_BITS-1:0];
-    wire [Y_BITS-1:0]     col_sel_d_B = addr_B[BANK_BIT_IDX-1:ROW_BITS];
-    wire                  bank_sel_d_B = addr_B[BANK_BIT_IDX];
+    wire [ROW_BITS-1:0]   row_sel_d_B = A_B[ROW_BITS-1:0];
+    wire [Y_BITS-1:0]     col_sel_d_B = A_B[BANK_BIT_IDX-1:ROW_BITS];
+    wire                  bank_sel_d_B = A_B[BANK_BIT_IDX];
     wire [SLICE_BITS-1:0] slice_sel_d_B = (NUM_BANK > 1) ?
-                                          addr_B[SLICE_BIT_IDX + SLICE_BITS - 1:SLICE_BIT_IDX] :
+                                          A_B[SLICE_BIT_IDX + SLICE_BITS - 1:SLICE_BIT_IDX] :
                                           '0;
 
     logic [ROW_BITS-1:0]   row_sel_r_A;
