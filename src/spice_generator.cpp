@@ -619,21 +619,58 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
 
     // D/Q ports
     for (int i = 0; i < config_.num_data_bits; ++i) {
-        ports.push_back("D[" + std::to_string(i) + "]");
+        ports.push_back("DA[" + std::to_string(i) + "]");
     }
     for (int i = 0; i < config_.num_data_bits; ++i) {
-        ports.push_back("Q[" + std::to_string(i) + "]");
+        ports.push_back("DB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        ports.push_back("QA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < config_.num_data_bits; ++i) {
+        ports.push_back("QB[" + std::to_string(i) + "]");
     }
 
     // wrena/wrenan, oeb_out/oe_out, blprechtn/blprechbn ports for each bank
     std::vector<std::string> ctrl_port_names = {
-        "wrena", "wrenan", "oeb_out", "oe_out", "blprechtn", "blprechbn"
+        "wrenaA", "wrenanA", "wrenaB", "wrenanB", "oeb_outA", "oe_outA", "oeb_outB", "oe_outB", "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB"
     };
     for (const auto& name : ctrl_port_names) {
         for (int mux = 0; mux < config_.num_banks; ++mux) {
             ports.push_back(name + "[" + std::to_string(mux) + "]");
         }
     }
+
+    for (int i = 0; i < 4 * config_.num_banks; ++i) {
+        ports.push_back("yseltnA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4 * config_.num_banks; ++i) {
+        ports.push_back("yseltA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4 * config_.num_banks; ++i) {
+        ports.push_back("yselbnA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4 * config_.num_banks; ++i) {
+        ports.push_back("yselbA[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4 * config_.num_banks; ++i) {
+        ports.push_back("yseltnB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4 * config_.num_banks; ++i) {
+        ports.push_back("yseltB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4 * config_.num_banks; ++i) {
+        ports.push_back("yselbnB[" + std::to_string(i) + "]");
+    }
+    for (int i = 0; i < 4 * config_.num_banks; ++i) {
+        ports.push_back("yselbB[" + std::to_string(i) + "]");
+    }
+
+    ports.push_back("RWLTA");
+    ports.push_back("RWLBA");
+    ports.push_back("RWLTB");
+    ports.push_back("RWLBB");
+
     ports.push_back("VDD");
     ports.push_back("VSS");
 
@@ -654,8 +691,38 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
             for (int i = 0; i < config_.num_wls; ++i) {
                 instances << "WLBB[" << (i + mux * config_.num_wls) << "] ";
             }
-            instances << "D[" << bit << "] Q[" << bit << "] ";
-            instances << "wrena[" << mux << "] wrenan[" << mux << "] oeb_out[" << mux << "] oe_out[" << mux << "] blprechtn[" << mux << "] blprechbn[" << mux << "] VDD VSS colgrp_sram_8t\n";
+
+            for (int i = 0; i < 4; ++i) {
+                instances << "yseltnA[" << (i + mux * 4) << "] ";
+            }
+            for (int i = 0; i < 4; ++i) {
+                instances << "yseltA[" << (i + mux * 4) << "] ";
+            }
+            for (int i = 0; i < 4; ++i) {
+                instances << "yselbnA[" << (i + mux * 4) << "] ";
+            }
+            for (int i = 0; i < 4; ++i) {
+                instances << "yselbA[" << (i + mux * 4) << "] ";
+            }
+            for (int i = 0; i < 4; ++i) {
+                instances << "yseltnB[" << (i + mux * 4) << "] ";
+            }
+            for (int i = 0; i < 4; ++i) {
+                instances << "yseltB[" << (i + mux * 4) << "] ";
+            }
+            for (int i = 0; i < 4; ++i) {
+                instances << "yselbnB[" << (i + mux * 4) << "] ";
+            }
+            for (int i = 0; i < 4; ++i) {
+                instances << "yselbB[" << (i + mux * 4) << "] ";
+            }
+
+            instances << "DA[" << bit << "] DB[" << bit << "] QA[" << bit << "] QB[" << bit << "] ";
+            instances << "wrenaA[" << mux << "] wrenanA[" << mux << "] wrenaB[" << mux << "] wrenanB[" << mux
+                      << "] oeb_outA[" << mux << "] oe_outA[" << mux << "] oeb_outB[" << mux << "] oe_outB[" << mux 
+                      << "] blprechtnA[" << mux << "] blprechbnA[" << mux << "] blprechtnB[" << mux << "] blprechbnB[" << mux << "] ";
+            
+            instances << "RWTA RWLTA RWLBA RWLTB RWLBB VDD VSS colgrp_sram_8t\n";
         }
     }
 
