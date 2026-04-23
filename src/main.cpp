@@ -70,7 +70,12 @@ int main(int argc, char **argv) {
         LOGE << "Innovus flow failed.";
         return 1;
     }
-    
+
+    SpiceIntegrator integrator(cli_options);
+    if (!integrator.integrate_sram()) {
+        LOGE << "SRAM integration failed.";
+        return 1;
+    }
 
     // // ========================================================================
     // // Initialize ASAP7 Layer Map (hardcoded)

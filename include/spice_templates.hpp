@@ -28,7 +28,8 @@ public:
     static std::string get_io_nand();
     static std::string get_tbuf();
     static std::string get_iocolgrp();
-    static std::string get_iocolgrp_8t();
+    static std::string get_buf_sram(const std::string& port, const int& num_buf = 5);
+    static std::string get_iocolgrp_8t(const int& num_buf = 5);
 };
 } // namespace OpenFinRAM
 

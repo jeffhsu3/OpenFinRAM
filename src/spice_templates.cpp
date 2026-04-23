@@ -27,7 +27,7 @@ M7 QB WLB BLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
 }
 
 std::string SpiceTemplates::get_replica_cell_8t() {
-    return R"(.SUBCKT replica_cell_8t WLA WLB RBLA RBLAN RBLB RBLBN VDD VSS
+    return R"(.SUBCKT replica_cell_8t WLA WLB RBLA RBLB VDD VSS
 M0 VSS VDD VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
 M1 VDD VSS VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
 M2 VSS VDD VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
@@ -227,10 +227,10 @@ MM3 VDD A net15 VDD pmos_rvt w=81.0n l=20n nfin=3
 
 std::string SpiceTemplates::get_buf() {
     return R"(.SUBCKT buf_sram A VDD VSS Y
-MM3 Y AN VSS VSS nmos_rvt w=162.00n l=20n nfin=6
-MM2 AN A VSS VSS nmos_rvt w=54.0n l=20n nfin=2
-MM0 Y AN VDD VDD pmos_rvt w=162.00n l=20n nfin=6
-MM1 AN A VDD VDD pmos_rvt w=54.0n l=20n nfin=2
+MM3 Y AN VSS VSS nmos_rvt w=8.1e-08 l=20n nfin=3
+MM2 AN A VSS VSS nmos_rvt w=8.1e-08 l=20n nfin=3
+MM0 Y AN VDD VDD pmos_rvt w=8.1e-08 l=20n nfin=3
+MM1 AN A VDD VDD pmos_rvt w=8.1e-08 l=20n nfin=3
 .ENDS)";
 }
 
@@ -302,8 +302,19 @@ X46 48 oeb_out oe_out vdd vss Q TBUF_INV
 .ENDS)";
 }
 
-std::string SpiceTemplates::get_iocolgrp_8t() {
-    return R"(.SUBCKT iocolgrp_sram_8t
+std::string SpiceTemplates::get_buf_sram(const std::string& port, const int& num_buf) {
+    std::string buf_str;
+    for (int i = 0; i < num_buf - 1; ++i) {
+        buf_str += "XBUF_" + std::to_string(i) + " sae_" + port + "_" + std::to_string(i) + " VDD VSS sae_" + port + "_" + std::to_string(i + 1) + " buf_sram\n";
+    }
+
+    buf_str += "XBUF_" + std::to_string(num_buf - 1) + " sae_" + port + "_" + std::to_string(num_buf - 1) + " VDD VSS sae_" + port + " buf_sram\n";
+
+    return buf_str;
+}
+
+std::string SpiceTemplates::get_iocolgrp_8t(const int& num_buf) {
+    std::string result = R"(.SUBCKT iocolgrp_sram_8t
 + wrena_A wrenan_A wrena_B wrenan_B
 + RBL_A RBL_B
 + oeb_out_A oe_out_A DA QA
@@ -317,6 +328,7 @@ std::string SpiceTemplates::get_iocolgrp_8t() {
 + blb_B[0]  blb_B[1]  blb_B[2]  blb_B[3]
 + blbn_B[0] blbn_B[1] blbn_B[2] blbn_B[3]
 + blprechtn_A blprechbn_A blprechtn_B blprechbn_B
++ blprechn_rbl_A blprechn_rbl_B
 + yseltn_A[0] yseltn_A[1] yseltn_A[2] yseltn_A[3]
 + yselt_A[0]  yselt_A[1]  yselt_A[2]  yselt_A[3]
 + yselbn_A[0] yselbn_A[1] yselbn_A[2] yselbn_A[3]
@@ -327,13 +339,13 @@ std::string SpiceTemplates::get_iocolgrp_8t() {
 + yselb_B[0]  yselb_B[1]  yselb_B[2]  yselb_B[3]
 + vdd vss
 XINV_A RBL_A sae_A_0 vdd vss skewed_inv_sram
-XINV_A_BUF_0 sae_A_0 vdd vss sae_A_1 buf_sram
-XINV_A_BUF_1 sae_A_1 vdd vss sae_A buf_sram
+)";
+    result += get_buf_sram("A", num_buf);
+    result += R"(
 XINV_B RBL_B sae_B_0 vdd vss skewed_inv_sram
-XINV_B_BUF_0 sae_B_0 vdd vss sae_B_1 buf_sram
-XINV_B_BUF_1 sae_B_1 vdd vss sae_B buf_sram
-XOR_PRECH_A blprechtn_A blprechbn_A vdd vss blprechn_rbl_A or2_sram
-XOR_PRECH_B blprechtn_B blprechbn_B vdd vss blprechn_rbl_B or2_sram
+)";
+    result += get_buf_sram("B", num_buf);
+    result += R"(
 MP_RBL_A RBL_A blprechn_rbl_A vdd vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
 MP_RBL_B RBL_B blprechn_rbl_B vdd vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
 XWD_A DA wrena_A wrenan_A sa_A san_A vdd vss write_driver_sram
@@ -375,6 +387,8 @@ X45_B n54_B qan_B n49_B vdd vss io_nand_3f_6f
 X46_A n48_A oeb_out_A oe_out_A vdd vss QA TBUF_INV
 X46_B n48_B oeb_out_B oe_out_B vdd vss QB TBUF_INV
 .ENDS)";
+
+    return result;
 }
 
 } // namespace OpenFinRAM

@@ -6,6 +6,8 @@
 #include <map>
 #include <cstdint>
 
+#include "main_config_helpers.hpp"
+
 /**
  * Configuration for SRAM integration
  */
@@ -46,12 +48,14 @@ public:
      * @param config Integration configuration
      */
     explicit SpiceIntegrator(const SramIntegrationConfig& config);
+
+    explicit SpiceIntegrator(const MainCliOptions& cli_options_);
     
     /**
      * Run the complete integration flow
-     * @return Path to integrated SPICE file, empty string if failed
+     * @return True if integration succeeded, false otherwise
      */
-    std::string integrate_sram(const std::string& output_file = "sram.sp");
+    bool integrate_sram();
     
     /**
      * Get configuration parameters as a string for logging
@@ -60,11 +64,8 @@ public:
     
 private:
     SramIntegrationConfig config_;
-    
-    /**
-     * Check if file exists
-     */
-    bool file_exists(const std::string& path) const;
+
+    MainCliOptions cli_options_;
     
     /**
      * Parse control circuit ports from netlist
@@ -78,7 +79,7 @@ private:
      * Generate header section of SRAM netlist
      * @return Header string with includes
      */
-    std::string generate_header() const;
+    std::string generate_header(const std::string& ctrl_netlist_path, const std::string& datapath_netlist_path) const;
     
     /**
      * Generate SRAM subcircuit definition header
@@ -110,6 +111,14 @@ private:
      * @return Footer string
      */
     std::string generate_footer() const;
+
+    /**
+     * Flatten netlist by resolving includes and subcircuit definitions
+     * @param input_path Path to input netlist
+     * @param output_path Path to output flattened netlist
+     * @return True if flattening succeeded, false otherwise
+     */
+    bool flatten_netlist(const std::string& input_path, const std::string& output_path) const;
 };
 
 #endif // SPICE_INTEGRATOR_HPP

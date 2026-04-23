@@ -6,9 +6,16 @@
 #include <algorithm>
 #include <regex>
 
+#include "plog/Log.h"
+
+#include "utils.hpp"
+
 // Constructor
 SpiceIntegrator::SpiceIntegrator(const SramIntegrationConfig& config)
     : config_(config) {}
+
+SpiceIntegrator::SpiceIntegrator(const MainCliOptions& cli_options_)
+    : cli_options_(cli_options_) {}
 
 std::string SpiceIntegrator::get_config_string() const {
     std::ostringstream oss;
@@ -20,11 +27,6 @@ std::string SpiceIntegrator::get_config_string() const {
         << "  Data Width: " << config_.data_width << " bits\n"
         << "  Wordlines: " << config_.num_wordlines << " (top and bottom)";
     return oss.str();
-}
-
-bool SpiceIntegrator::file_exists(const std::string& path) const {
-    struct stat buffer;
-    return (stat(path.c_str(), &buffer) == 0);
 }
 
 std::vector<std::string> SpiceIntegrator::parse_ctrl_ports(
@@ -159,20 +161,20 @@ std::map<std::string, std::string> SpiceIntegrator::build_port_mapping() const {
     return port_map;
 }
 
-std::string SpiceIntegrator::generate_header() const {
+std::string SpiceIntegrator::generate_header(const std::string& ctrl_netlist_path, const std::string& datapath_netlist_path) const {
     std::ostringstream oss;
     oss << "* HSPICE Netlist for Complete SRAM\n"
-        << "* Configuration: " << config_.data_width << "-bit data, "
-        << config_.addr_width << "-bit address\n"
-        << "* Wordlines: " << config_.num_wordlines << " (top) + "
-        << config_.num_wordlines << " (bottom)\n"
+        << "* Configuration: " << cli_options_.num_data_bits << "-bit data, "
+        << get_addr_width(cli_options_) << "-bit address\n"
+        << "* Wordlines: " << cli_options_.num_wls << " (top) + "
+        << cli_options_.num_wls << " (bottom)\n"
         << "* Generated automatically by OpenFinRAM\n"
         << "*\n"
         << "* ===================================================================\n"
         << "* Includes\n"
         << "* ===================================================================\n"
-        << ".INCLUDE \"" << config_.ctrl_netlist << "\"\n"
-        << ".INCLUDE \"" << config_.datapath_netlist << "\"\n"
+        << ".INCLUDE \"" << ctrl_netlist_path << "\"\n"
+        << ".INCLUDE \"" << datapath_netlist_path << "\"\n"
         << "\n";
     return oss.str();
 }
@@ -181,27 +183,69 @@ std::string SpiceIntegrator::generate_subckt_header() const {
     std::ostringstream oss;
     
     oss << "* ===================================================================\n"
-        << "* SRAM Top Module (" << config_.data_width << "-bit data)\n"
+        << "* SRAM Top Module (" << cli_options_.num_data_bits << "-bit data)\n"
         << "* ===================================================================\n";
     
-    // Build port list (updated to ce_n and we_n)
-    oss << ".SUBCKT sram_x" << config_.num_wordlines * 2
-        << "x" << config_.data_width << " vdd vss clk rst_n ce_n we_n oe_n";
-    
-    // Address ports
-    for (uint64_t i = 0; i < config_.addr_width; ++i) {
-        oss << " A[" << i << "]";
+    if (cli_options_.single_port) {
+        oss << "* Single-Port Configuration\n";
+
+        // Build port list (updated to ce_n and we_n)
+        oss << ".SUBCKT sram_x" << cli_options_.num_wls * 2
+            << "x" << cli_options_.num_data_bits
+            << "x" << cli_options_.num_banks
+            << " vdd vss clk rst_n ce_n we_n oe_n";
+        
+        // Address ports
+        for (uint64_t i = 0; i < get_addr_width(cli_options_); ++i) {
+            oss << " A[" << i << "]";
+        }
+        
+        // Data input ports
+        for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
+            oss << " D[" << i << "]";
+        }
+        
+        // Data output ports
+        for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
+            oss << " Q[" << i << "]";
+        }
+    } else {
+        oss << "* Dual-Port Configuration\n";
+
+        oss << ".SUBCKT sram_x" << cli_options_.num_wls * 2
+            << "x" << cli_options_.num_data_bits
+            << "x" << cli_options_.num_banks
+            << " vdd vss clk rst_n ce_n_A we_n_A oe_n_A"
+            << "\n+";
+
+        for (uint64_t i = 0; i < get_addr_width(cli_options_); ++i) {
+            oss << " A_A[" << i << "]";
+        }
+        oss << "\n+";
+        for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
+            oss << " D_A[" << i << "]";
+        }
+        oss << "\n+";
+        for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
+            oss << " Q_A[" << i << "]";
+        }
+        oss << "\n+";
+
+        oss << " ce_n_B we_n_B oe_n_B"
+            << "\n+";
+        for (uint64_t i = 0; i < get_addr_width(cli_options_); ++i) {
+            oss << " A_B[" << i << "]";
+        }
+        oss << "\n+";
+        for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
+            oss << " D_B[" << i << "]";
+        }
+        oss << "\n+";
+        for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
+            oss << " Q_B[" << i << "]";
+        }
     }
     
-    // Data input ports
-    for (uint64_t i = 0; i < config_.data_width; ++i) {
-        oss << " D[" << i << "]";
-    }
-    
-    // Data output ports
-    for (uint64_t i = 0; i < config_.data_width; ++i) {
-        oss << " Q[" << i << "]";
-    }
     
     oss << "\n\n";
     return oss.str();
@@ -254,90 +298,178 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
         oss << "** Instantiate SRAM Datapath\n"
             << "Xdata_" << (top_bottom == 0 ? "top " : "bottom ");
         
-        for (int mux = 0; mux < config_.num_mux; ++mux) {
-            // Wordlines (top)
-            int line_count = 0;
-            for (uint64_t i = 0; i < config_.num_wordlines; ++i) {
-                // if (line_count > 0 && line_count % 8 == 0) {
-                //     oss << "\n+";
-                // }
-                oss << " wlt[" << i + mux * config_.num_wordlines << "]";
-                // line_count++;
-            }
-            oss << "\n+";
-            
-            // Wordlines (bottom)
-            for (uint64_t i = 0; i < config_.num_wordlines; ++i) {
-                // if (line_count > 0 && line_count % 8 == 0) {
-                //     oss << "\n+";
-                // }
-                oss << " wlb[" << i + mux * config_.num_wordlines << "]";
-                line_count++;
-            }
-            oss << "\n+";
-        }
+        for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
+            if (cli_options_.single_port) {
+                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
+                    oss << " wlt[" << i + bank * cli_options_.num_wls << "]";
+                }
+                oss << "\n+";
+                
+                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
+                    oss << " wlb[" << i + bank * cli_options_.num_wls << "]";
+                }
+                oss << "\n+";
+            } else {
+                // Wordlines (top)
+                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
+                    oss << " wlt_a[" << i + bank * cli_options_.num_wls << "]";
+                }
+                oss << "\n+";
+                
+                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
+                    oss << " wlt_b[" << i + bank * cli_options_.num_wls << "]";
+                }
+                oss << "\n+";
 
-        for (int mux = 0; mux < config_.num_mux; ++mux) {
-            // yseltn
-            for (int i = 0; i < 4; ++i) {
-                oss << " yseltn[" << i + mux * 4 << "]";
-                // line_count++;
-            }
-            oss << "\n+";
+                // Wordlines (bottom)
+                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
+                    oss << " wlb_a[" << i + bank * cli_options_.num_wls << "]";
+                }
+                oss << "\n+";
 
-            // yselt
-            for (int i = 0; i < 4; ++i) {
-                oss << " yselt[" << i + mux * 4 << "]";
-            }
-            oss << "\n+";
-
-            // yselbn
-            for (int i = 0; i < 4; ++i) {
-                oss << " yselbn[" << i + mux * 4 << "]";
-            }
-            oss << "\n+";
-
-            // yselb
-            for (int i = 0; i < 4; ++i) {
-                oss << " yselb[" << i + mux * 4 << "]";
-            }
-            oss << "\n+";
-        }
-        
-        // Data input
-        for (uint64_t i = 0; i < config_.data_width / 2; ++i) {
-            if (i > 0 && i % 8 == 0) {
+                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
+                    oss << " wlb_b[" << i + bank * cli_options_.num_wls << "]";
+                }
                 oss << "\n+";
             }
-            oss << " D[" << i + top_bottom * (config_.data_width / 2) << "]";
         }
-        oss << "\n+";
-        
-        // Data output
-        for (uint64_t i = 0; i < config_.data_width / 2; ++i) {
-            if (i > 0 && i % 8 == 0) {
-                oss << "\n+";
-            }
-            oss << " Q[" << i + top_bottom * (config_.data_width / 2) << "]";
-        }
-        oss << "\n+";
 
-        std::vector<std::string> ctrl_sigs = {
-            "wrena", "wrenan", "saprechn", "sae", "oeb_out", "oe_out",
-            "blprechtn", "blprechbn"
-        };
+        // Data IO
+        if (cli_options_.single_port) {
+            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+                oss << " D[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            }
+            oss << "\n+";
+
+            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+                oss << " Q[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            }
+            oss << "\n+";
+        } else {
+            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+                oss << " D_A[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            }
+            oss << "\n+";
+
+            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+                oss << " D_B[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            }
+            oss << "\n+";
+
+            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+                oss << " Q_A[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            }
+            oss << "\n+";
+
+            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+                oss << " Q_B[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            }
+            oss << "\n+";
+        }
+
+        std::vector<std::string> ctrl_sigs;
+        if (cli_options_.single_port) {
+            ctrl_sigs = {
+                "wrena", "wrenan", "saprechn", "sae", "oeb_out", "oe_out",
+                "blprechtn", "blprechbn"
+            };
+        } else {
+            ctrl_sigs = {
+                "wrena_A", "wrenan_A", "wrena_B", "wrenan_B",
+                "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B",
+                "blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B",
+                "blprechn_rbl_A", "blprechn_rbl_B"
+            };
+        }
         for (const auto& sig : ctrl_sigs) {
-            for (int mux = 0; mux < config_.num_mux; ++mux) {
-                oss << " " << sig << "[" << mux << "]";
+            for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
+                oss << " " << sig << "[" << bank << "]";
             }
 
             oss << "\n+";
+        }
+
+        for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
+            if (cli_options_.single_port) {
+                // yseltn
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yseltn[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                // yselt
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselt[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                // yselbn
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselbn[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                // yselb
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselb[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+            } else {
+                // yseltn
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yseltn_A[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                // yselt
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselt_A[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                // yselbn
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselbn_A[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                // yselb
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselb_A[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yseltn_B[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselt_B[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselbn_B[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselb_B[" << i + bank * 4 << "]";
+                }
+                oss << "\n+";
+
+                oss << " RWLT_A[" << bank << "] RWLB_A[" << bank << "] RWLT_B[" << bank << "] RWLB_B[" << bank << "]";
+                oss << "\n+";
+            }
         }
         
         // Control signals and power
         oss << " VDD VSS\n"
-            << "+ stacked_colgrp_x"<< config_.num_wordlines * 2 
-            << "x" << config_.data_width / 2 << "x" << config_.num_mux << "\n\n";
+            << "+ stacked_colgrp_x"<< cli_options_.num_wls * 2 
+            << "x" << cli_options_.num_data_bits / 2 << "x" << cli_options_.num_banks << "\n\n";
     }
 
     return oss.str();
@@ -348,64 +480,113 @@ std::string SpiceIntegrator::generate_footer() const {
     
     // oss << "Vvsswrite vsswrite vss DC 0\n";
 
-    oss << "\n.ENDS sram_x" << config_.num_wordlines * 2
-        << "x" << config_.data_width << "\n";
+    oss << "\n.ENDS sram_x" << cli_options_.num_wls * 2
+        << "x" << cli_options_.num_data_bits
+        << "x" << cli_options_.num_banks << "\n";
     
     return oss.str();
 }
 
-std::string SpiceIntegrator::integrate_sram(const std::string& output_file) {
-    std::cout << "\n" << std::string(70, '=') << std::endl;
-    std::cout << "Integrating Control and Datapath" << std::endl;
-    std::cout << std::string(70, '=') << std::endl;
-    
-    // Verify input files exist
-    if (!file_exists(config_.ctrl_netlist)) {
-        std::cerr << "  ✗ Error: Control netlist not found: " 
-                  << config_.ctrl_netlist << std::endl;
-        return "";
+bool SpiceIntegrator::flatten_netlist(const std::string& input_path, const std::string& output_path) const {
+    std::ifstream infile(input_path.c_str());
+    if (!infile.is_open()) {
+        LOGE << "  ✗ Error: Cannot open input netlist for flattening: " << input_path;
+        return false;
     }
-    
-    if (!file_exists(config_.datapath_netlist)) {
-        std::cerr << "  ✗ Error: Datapath netlist not found: " 
-                  << config_.datapath_netlist << std::endl;
-        return "";
-    }
-    
-    std::cout << "  ▶ Merging netlists..." << std::endl;
-    
-    // Parse control circuit ports
-    std::cout << "\n  ▶ Parsing control circuit ports..." << std::endl;
-    std::vector<std::string> ctrl_ports = parse_ctrl_ports(config_.ctrl_netlist);
-    
-    if (ctrl_ports.empty()) {
-        std::cerr << "  ✗ Error: Could not parse control ports" << std::endl;
-        return "";
-    }
-    
-    // Generate output file path
-    std::string output_path = output_file;
-    // If output_file is just a filename, prepend the directory path
-    if (output_file.find('/') == std::string::npos &&
-        output_file.find('\\') == std::string::npos) {
-        // Extract directory from datapath_netlist
-        size_t last_slash = config_.datapath_netlist.find_last_of("/\\");
-        if (last_slash != std::string::npos) {
-            output_path = config_.datapath_netlist.substr(0, last_slash + 1) + output_file;
-        }
-    }
-    
-    // Generate SPICE netlist
-    std::cout << "\n  ▶ Generating integrated SPICE netlist..." << std::endl;
-    
+
     std::ofstream outfile(output_path.c_str());
     if (!outfile.is_open()) {
-        std::cerr << "  ✗ Error: Cannot open output file " << output_path << std::endl;
-        return "";
+        LOGE << "  ✗ Error: Cannot open output netlist for flattening: " << output_path;
+        return false;
+    }
+
+    std::string cdl_path = join_path(get_current_dir_name(), "tech/cdl/asap7sc7p5t_28_R.cdl");
+    std::ifstream cdl_file(cdl_path.c_str());
+    if (!cdl_file.is_open()) {
+        LOGE << "  ✗ Error: Cannot open CDL file for flattening: " << cdl_path;
+        return false;
+    }
+
+    // First write CDL content
+    std::string cdl_line;
+    while (std::getline(cdl_file, cdl_line)) {
+        outfile << cdl_line << "\n";
+    }
+    outfile << "\n";
+
+    std::string line;
+    while (std::getline(infile, line)) {
+        // Check for .INCLUDE statements
+        if (line.substr(0, 4) == ".inc" || line.substr(0, 4) == ".INC" ||
+            line.substr(0, 8) == ".INCLUDE" || line.substr(0, 8) == ".include") {
+                // Parse include path between quotes
+                std::string include_path = line.substr(line.find_first_of("\"") + 1, line.find_last_of("\"") - line.find_first_of("\"") - 1);
+                
+                
+                // Read all content
+                std::ifstream inc_file(include_path.c_str());
+                if (!inc_file.is_open()) {
+                    LOGE << "  ✗ Error: Cannot open included file: " << include_path;
+                    return false;
+                }
+
+                std::string inc_line;
+                while (std::getline(inc_file, inc_line)) {
+                    outfile << inc_line << "\n";
+                }
+        } else {
+            // Write line as is
+            outfile << line << "\n";
+        }
+    }
+
+    return true;
+}
+
+bool SpiceIntegrator::integrate_sram() {
+    std::string output_file_path = join_path(get_current_dir_name(), cli_options_.output_sp_name);
+
+    LOGD << "\n" << std::string(70, '=');
+    LOGD << "Integrating Control and Datapath";
+    LOGD << std::string(70, '=');
+    
+    // Verify input files exist
+    std::string ctrl_netlist_path = join_path(get_current_dir_name(), "tmp/innovus/netlist_for_lvs.sp");
+    if (!file_exists(ctrl_netlist_path)) {
+        LOGE << "  ✗ Error: Control netlist not found: " 
+             << ctrl_netlist_path;
+        return false;
+    }
+    
+    std::string datapath_netlist_path = join_path(get_current_dir_name(), "sram_colgrp.sp");
+    if (!file_exists(datapath_netlist_path)) {
+        LOGE << "  ✗ Error: Datapath netlist not found: " 
+             << datapath_netlist_path;
+        return false;
+    }
+    
+    LOGD << "  ▶ Merging netlists...";
+    
+    // Parse control circuit ports
+    LOGD << "  ▶ Parsing control circuit ports...";
+    std::vector<std::string> ctrl_ports = parse_ctrl_ports(ctrl_netlist_path);
+    
+    if (ctrl_ports.empty()) {
+        LOGE << "  ✗ Error: Could not parse control ports";
+        return false;
+    }
+
+    // Generate SPICE netlist
+    LOGD << "\n  ▶ Generating integrated SPICE netlist...";
+    
+    std::ofstream outfile(output_file_path.c_str());
+    if (!outfile.is_open()) {
+        LOGE << "  ✗ Error: Cannot open output file " << output_file_path;
+        return false;
     }
     
     // Write sections
-    outfile << generate_header();
+    outfile << generate_header(ctrl_netlist_path, datapath_netlist_path);
     outfile << generate_subckt_header();
     outfile << generate_ctrl_instance(ctrl_ports);
     outfile << generate_datapath_instance();
@@ -414,17 +595,20 @@ std::string SpiceIntegrator::integrate_sram(const std::string& output_file) {
     outfile.close();
     
     // Verify output
-    if (!file_exists(output_path)) {
-        std::cerr << "  ✗ Error: Output file not created" << std::endl;
-        return "";
+    if (!file_exists(output_file_path)) {
+        LOGE << "  ✗ Error: Output file not created";
+        return false;
     }
     
-    std::cout << "\n  ✓ Integration completed" << std::endl;
-    std::cout << "  → " << output_path << std::endl;
-    std::cout << "\n  SRAM Configuration:" << std::endl;
-    std::cout << "    Address bits: " << config_.addr_width << std::endl;
-    std::cout << "    Data bits: " << config_.data_width << std::endl;
-    std::cout << "    Total addresses: " << (1UL << config_.addr_width) << std::endl;
+    LOGD << "✓ Integration completed → " << output_file_path;
     
-    return output_path;
+    // Flatten the netlist to resolve includes and subcircuit definitions
+    LOGD << "\n  ▶ Flattening netlist for LVS compatibility...";
+    std::string flattened_output_path = join_path(get_current_dir_name(), "sram_flat.sp");
+    if (!flatten_netlist(output_file_path, flattened_output_path)) {
+        LOGE << "  ✗ Error: Netlist flattening failed";
+        return false;
+    }
+    
+    return true;
 }

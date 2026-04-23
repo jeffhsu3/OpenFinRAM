@@ -20,10 +20,13 @@ module ctrl_decode #(
     // RWLT_A/RWLB_A fire when Port A reads top/bottom bank.
     // RWLT_B/RWLB_B fire when Port B reads top/bottom bank.
     // Kept separate so RBL_A only discharges on Port A reads and RBL_B on Port B reads.
-    output logic                  RWLT_A,
-    output logic                  RWLB_A,
-    output logic                  RWLT_B,
-    output logic                  RWLB_B,
+    output logic [NUM_BANK-1:0]   RWLT_A,
+    output logic [NUM_BANK-1:0]   RWLB_A,
+    output logic [NUM_BANK-1:0]   RWLT_B,
+    output logic [NUM_BANK-1:0]   RWLB_B,
+
+    output logic [NUM_BANK-1:0]   blprechn_rbl_A,
+    output logic [NUM_BANK-1:0]   blprechn_rbl_B,
 
     output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlt_A,
     output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlb_A,
@@ -118,12 +121,12 @@ module ctrl_decode #(
     wire wl_any_fire_A;
     wire wl_any_fire_B;
 
-    delay_cell #(.BUF_COUNT(5)) u_delay_wl_A (
+    delay_cell #(.BUF_COUNT(2)) u_delay_wl_A (
         .A(prech_off_A),
         .Y(wl_any_fire_A)
     );
 
-    delay_cell #(.BUF_COUNT(5)) u_delay_wl_B (
+    delay_cell #(.BUF_COUNT(2)) u_delay_wl_B (
         .A(prech_off_B),
         .Y(wl_any_fire_B)
     );
@@ -300,5 +303,9 @@ module ctrl_decode #(
         oe_out_A = ~oeb_out_A;
         oe_out_B = ~oeb_out_B;
     end
+
+    // Replica BL precharge: asserted whenever any bank releases precharge on Port A/B.
+    assign blprechn_rbl_A = |blprechtn_A | |blprechbn_A;
+    assign blprechn_rbl_B = |blprechtn_B | |blprechbn_B;
 
 endmodule
