@@ -262,7 +262,7 @@ bool SynthesisManager::predict_capacitance() {
         {"WLT", {"wlt_A", "wlt_A", "wlt_B", "wlt_B", "RWLT_A", "RWLB_A", "RWLT_B", "RWLB_B"}},
         {"YSELT", {"yselt_A", "yseltn_A", "yselb_A", "yselbn_A", "yselt_B", "yseltn_B", "yselb_B", "yselbn_B"}},
         {"BLPRECHTN", {"blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B", "blprechn_rbl_A", "blprechn_rbl_B"}},
-        {"WRENA", {"wrena_A", "wrenan_A", "wrena_B", "wrenan_B"}},
+        {"WRENA", {"wrena_A", "wrenan_A"}},
         {"SAE", {"oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"}}
     };
 
@@ -276,7 +276,7 @@ bool SynthesisManager::predict_capacitance() {
         signal_map["WLT"] = {"wlt_A", "wlt_B", "wlb_A", "wlb_B", "RWLT_A", "RWLB_A", "RWLT_B", "RWLB_B"};
         signal_map["YSELT"] = {"yselt_A", "yseltn_A", "yselb_A", "yselbn_A", "yselt_B", "yseltn_B", "yselb_B", "yselbn_B"};
         signal_map["BLPRECHTN"] = {"blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B", "blprechn_rbl_A", "blprechn_rbl_B"};
-        signal_map["WRENA"] = {"wrena_A", "wrenan_A", "wrena_B", "wrenan_B"};
+        signal_map["WRENA"] = {"wrena_A", "wrenan_A"};
         signal_map["SAE"] = {"oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"};
     }
 

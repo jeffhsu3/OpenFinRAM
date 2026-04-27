@@ -305,20 +305,20 @@ X46 48 oeb_out oe_out vdd vss Q TBUF_INV
 std::string SpiceTemplates::get_buf_sram(const std::string& port, const int& num_buf) {
     std::string buf_str;
     for (int i = 0; i < num_buf - 1; ++i) {
-        buf_str += "XBUF_" + std::to_string(i) + " sae_" + port + "_" + std::to_string(i) + " VDD VSS sae_" + port + "_" + std::to_string(i + 1) + " buf_sram\n";
+        buf_str += "XBUF_" + port + "_" + std::to_string(i) + " sae_" + port + "_" + std::to_string(i) + " VDD VSS sae_" + port + "_" + std::to_string(i + 1) + " buf_sram\n";
     }
 
-    buf_str += "XBUF_" + std::to_string(num_buf - 1) + " sae_" + port + "_" + std::to_string(num_buf - 1) + " VDD VSS sae_" + port + " buf_sram\n";
+    buf_str += "XBUF_" + port + "_" + std::to_string(num_buf - 1) + " sae_" + port + "_" + std::to_string(num_buf - 1) + " VDD VSS sae_" + port + " buf_sram\n";
 
     return buf_str;
 }
 
 std::string SpiceTemplates::get_iocolgrp_8t(const int& num_buf) {
     std::string result = R"(.SUBCKT iocolgrp_sram_8t
-+ wrena_A wrenan_A wrena_B wrenan_B
++ wrena_A wrenan_A
 + RBL_A RBL_B
 + oeb_out_A oe_out_A DA QA
-+ oeb_out_B oe_out_B DB QB
++ oeb_out_B oe_out_B QB
 + blt_A[0]  blt_A[1]  blt_A[2]  blt_A[3]
 + bltn_A[0] bltn_A[1] bltn_A[2] bltn_A[3]
 + blb_A[0]  blb_A[1]  blb_A[2]  blb_A[3]
@@ -349,7 +349,6 @@ XINV_B RBL_B sae_B_0 vdd vss skewed_inv_sram
 MP_RBL_A RBL_A blprechn_rbl_A vdd vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
 MP_RBL_B RBL_B blprechn_rbl_B vdd vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
 XWD_A DA wrena_A wrenan_A sa_A san_A vdd vss write_driver_sram
-XWD_B DB wrena_B wrenan_B sa_B san_B vdd vss write_driver_sram
 XSA_A sa_A san_A sae_A sae_A qa_A qan_A vdd vss sense_amp_sram
 XSA_B sa_B san_B sae_B sae_B qa_B qan_B vdd vss sense_amp_sram
 XWRMUX_T

@@ -231,14 +231,10 @@ std::string SpiceIntegrator::generate_subckt_header() const {
         }
         oss << "\n+";
 
-        oss << " ce_n_B we_n_B oe_n_B"
+        oss << " ce_n_B oe_n_B"
             << "\n+";
         for (uint64_t i = 0; i < get_addr_width(cli_options_); ++i) {
             oss << " A_B[" << i << "]";
-        }
-        oss << "\n+";
-        for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
-            oss << " D_B[" << i << "]";
         }
         oss << "\n+";
         for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
@@ -352,11 +348,6 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             oss << "\n+";
 
             for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
-                oss << " D_B[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
-            }
-            oss << "\n+";
-
-            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
                 oss << " Q_A[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
             }
             oss << "\n+";
@@ -375,7 +366,7 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             };
         } else {
             ctrl_sigs = {
-                "wrena_A", "wrenan_A", "wrena_B", "wrenan_B",
+                "wrena_A", "wrenan_A",
                 "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B",
                 "blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B",
                 "blprechn_rbl_A", "blprechn_rbl_B"
@@ -389,81 +380,82 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             oss << "\n+";
         }
 
-        for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
-            if (cli_options_.single_port) {
-                // yseltn
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yseltn[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                // yselt
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselt[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                // yselbn
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselbn[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                // yselb
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselb[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-            } else {
-                // yseltn
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yseltn_A[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                // yselt
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselt_A[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                // yselbn
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselbn_A[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                // yselb
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselb_A[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yseltn_B[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselt_B[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselbn_B[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-
-                for (int i = 0; i < 4; ++i) {
-                    oss << " yselb_B[" << i + bank * 4 << "]";
-                }
-                oss << "\n+";
-
-                oss << " RWLT_A[" << bank << "] RWLB_A[" << bank << "] RWLT_B[" << bank << "] RWLB_B[" << bank << "]";
-                oss << "\n+";
+        if (cli_options_.single_port) {
+            // yseltn
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yseltn[" << bank << "]";
             }
+            oss << "\n+";
+
+            // yselt
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselt[" << bank << "]";
+            }
+            oss << "\n+";
+
+            // yselbn
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselbn[" << bank << "]";
+            }
+            oss << "\n+";
+
+            // yselb
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselb[" << bank << "]";
+            }
+            oss << "\n+";
+        } else {
+            // yseltn
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yseltn_A[" << bank << "]";
+            }
+            oss << "\n+";
+
+            // yselt
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselt_A[" << bank << "]";
+            }
+            oss << "\n+";
+
+            // yselbn
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselbn_A[" << bank << "]";
+            }
+            oss << "\n+";
+
+            // yselb
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselb_A[" << bank << "]";
+            }
+            oss << "\n+";
+
+
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yseltn_B[" << bank << "]";
+            }
+            oss << "\n+";
+
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselt_B[" << bank << "]";
+            }
+            oss << "\n+";
+
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselbn_B[" << bank << "]";
+            }
+            oss << "\n+";
+
+
+            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
+                oss << " yselb_B[" << bank << "]";
+            }
+            oss << "\n+";
+        }
+        
+
+        for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
+            oss << " RWLT_A[" << bank << "] RWLB_A[" << bank << "] RWLT_B[" << bank << "] RWLB_B[" << bank << "]";
+            oss << "\n+";
         }
         
         // Control signals and power
@@ -532,12 +524,44 @@ bool SpiceIntegrator::flatten_netlist(const std::string& input_path, const std::
 
                 std::string inc_line;
                 while (std::getline(inc_file, inc_line)) {
+                    if (inc_line.substr(0, 8) == ".INCLUDE") {
+                        continue; // Skip nested includes
+                    }
+                    if (inc_line == "*.BUSDELIMITER [ ") {
+                        continue; // Skip bus delimiter lines
+                    }
                     outfile << inc_line << "\n";
                 }
         } else {
             // Write line as is
             outfile << line << "\n";
         }
+    }
+
+    return true;
+}
+
+bool SpiceIntegrator::replace_chars_for_sis(const std::string& input_path, const std::string& output_path) const {
+    std::ifstream infile(input_path.c_str());
+    if (!infile.is_open()) {
+        LOGE << "  ✗ Error: Cannot open input netlist for character replacement: " << input_path;
+        return false;
+    }
+
+    std::ofstream outfile(output_path.c_str());
+    if (!outfile.is_open()) {
+        LOGE << "  ✗ Error: Cannot open output netlist for character replacement: " << output_path;
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(infile, line)) {
+        // Replace [ and ] with _ for SIS compatibility and to lowercase
+        std::string modified_line = line;
+        // std::replace(modified_line.begin(), modified_line.end(), '[', '_');
+        // std::replace(modified_line.begin(), modified_line.end(), ']', ' ');
+        std::transform(modified_line.begin(), modified_line.end(), modified_line.begin(), ::tolower);
+        outfile << modified_line << "\n";
     }
 
     return true;
@@ -607,6 +631,13 @@ bool SpiceIntegrator::integrate_sram() {
     std::string flattened_output_path = join_path(get_current_dir_name(), "sram_flat.sp");
     if (!flatten_netlist(output_file_path, flattened_output_path)) {
         LOGE << "  ✗ Error: Netlist flattening failed";
+        return false;
+    }
+
+    // Replace [] with _ for SIS compatibility
+    std::string sis_ready_output_path = join_path(get_current_dir_name(), "sram_flat_sis.sp");
+    if (!replace_chars_for_sis(flattened_output_path, sis_ready_output_path)) {
+        LOGE << "  ✗ Error: Character replacement for SIS failed";
         return false;
     }
     

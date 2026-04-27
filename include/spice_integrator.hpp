@@ -119,6 +119,14 @@ private:
      * @return True if flattening succeeded, false otherwise
      */
     bool flatten_netlist(const std::string& input_path, const std::string& output_path) const;
+
+    /**
+     * Replace characters in netlist for SIS compatibility
+     * @param input_path Path to input netlist
+     * @param output_path Path to output modified netlist
+     * @return True if replacement succeeded, false otherwise
+     */
+    bool replace_chars_for_sis(const std::string& input_path, const std::string& output_path) const;
 };
 
 #endif // SPICE_INTEGRATOR_HPP

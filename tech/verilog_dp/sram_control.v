@@ -10,7 +10,6 @@ module ctrl_decode #(
     input  logic                  ce_n_A,
     input  logic                  ce_n_B,
     input  logic                  we_n_A,
-    input  logic                  we_n_B,
     input  logic                  oe_n_A,
     input  logic                  oe_n_B,
     input  logic [ADDR_WIDTH-1:0] A_A,
@@ -49,8 +48,6 @@ module ctrl_decode #(
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseltn_B,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselb_B,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselbn_B,
-    output logic [NUM_BANK-1:0]                 wrena_B,
-    output logic [NUM_BANK-1:0]                 wrenan_B,
     output logic [NUM_BANK-1:0]                 oeb_out_B,
     output logic [NUM_BANK-1:0]                 oe_out_B
 );
@@ -98,25 +95,26 @@ module ctrl_decode #(
     logic [SLICE_BITS-1:0] slice_sel_r_B;
 
     typedef enum logic [1:0] {
-        IDLE  = 2'b11,
+        IDLE  = 2'b00,
         READ  = 2'b01,
         WRITE = 2'b10
     } state_t;
 
     state_t state_A;
-    state_t state_B;
     state_t next_state_A;
-    state_t next_state_B;
+
+    // Port B is read-only: single-bit state (0=IDLE, 1=READ)
+    logic state_B;
+    logic next_state_B;
 
     wire read_req_A  = (state_A == READ)  && !ce_n_A;
     wire write_req_A = (state_A == WRITE) && !ce_n_A;
-    wire read_req_B  = (state_B == READ)  && !ce_n_B;
-    wire write_req_B = (state_B == WRITE) && !ce_n_B;
+    wire read_req_B  = state_B && !ce_n_B;
 
     // Precharge is released first, then WL is asserted after a short delay
     // to avoid VDD->BL->cell->VSS crowbar current.
     wire prech_off_A = (read_req_A || write_req_A) && clk;
-    wire prech_off_B = (read_req_B || write_req_B) && clk;
+    wire prech_off_B = read_req_B && clk;
 
     wire wl_any_fire_A;
     wire wl_any_fire_B;
@@ -135,7 +133,6 @@ module ctrl_decode #(
     wire wl_write_fire_A = wl_any_fire_A && write_req_A;
 
     wire wl_read_fire_B  = wl_any_fire_B && read_req_B;
-    wire wl_write_fire_B = wl_any_fire_B && write_req_B;
 
     // Replica WL activity is driven only by read operations.
     wire replica_wl_t_fire = (wl_read_fire_A && bank_sel_r_A) ||
@@ -163,7 +160,7 @@ module ctrl_decode #(
 
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            state_B      <= IDLE;
+            state_B      <= 1'b0;
             row_sel_r_B  <= '0;
             col_sel_r_B  <= '0;
             bank_sel_r_B <= 1'b0;
@@ -189,12 +186,8 @@ module ctrl_decode #(
     end
 
     always_comb begin
-        next_state_B = IDLE;
-        if (!ce_n_B) begin
-            if (!we_n_B && oe_n_B)      next_state_B = WRITE;
-            else if (we_n_B && !oe_n_B) next_state_B = READ;
-            else                        next_state_B = IDLE;
-        end
+        next_state_B = 1'b0;
+        if (!ce_n_B && !oe_n_B) next_state_B = 1'b1;
     end
 
     always_comb begin
@@ -227,8 +220,6 @@ module ctrl_decode #(
             yseltn_B[i] = '1;
             yselb_B[i]  = '0;
             yselbn_B[i] = '1;
-            wrena_B[i]  = 1'b0;
-            wrenan_B[i] = 1'b1;
         end
 
         if (read_req_A || write_req_A) begin
@@ -263,7 +254,7 @@ module ctrl_decode #(
             end
         end
 
-        if (read_req_B || write_req_B) begin
+        if (read_req_B) begin
             if (bank_sel_r_B) begin
                 blprechtn_B[slice_sel_r_B] = prech_off_B;
                 blprechbn_B[slice_sel_r_B] = 1'b0;
@@ -287,11 +278,6 @@ module ctrl_decode #(
 
             if (read_req_B) begin
                 oeb_out_B[slice_sel_r_B] = oe_n_B;
-            end
-
-            if (write_req_B) begin
-                wrena_B[slice_sel_r_B]  = clk;
-                wrenan_B[slice_sel_r_B] = ~clk;
             end
         end
 
