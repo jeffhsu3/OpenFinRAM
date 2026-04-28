@@ -40,6 +40,16 @@ MainCliOptions parse_main_cli_options(int argc, char** argv) {
         .default_value(false)
         .implicit_value(true);
 
+    program.add_argument("--num-wl-buf")
+        .help("Number of buffers for wl delay.")
+        .default_value(uint64_t{5})
+        .scan<'u', uint64_t>();
+
+    program.add_argument("--num-sae-buf")
+        .help("Number of buffers for sae delay.")
+        .default_value(uint64_t{10})
+        .scan<'u', uint64_t>();
+
     try {
         program.parse_args(argc, argv);
     } catch (const std::exception& e) {
@@ -54,8 +64,11 @@ MainCliOptions parse_main_cli_options(int argc, char** argv) {
     options.num_banks          = program.get<uint64_t>("--num-banks");
     options.single_port        = program.get<bool>("--single-port");
     options.run_characterization = !program.get<bool>("--skip-characterization");
+    options.num_wl_buf = program.get<uint64_t>("--num-wl-buf");
+    options.num_sae_buf = program.get<uint64_t>("--num-sae-buf");
     options.output_sp_name = program.get<std::string>("--output-sp-name");
     options.spice_only = program.get<bool>("--spice-only");
+
     LOGI << "Configuration: num_wls=" << options.num_wls
          << ", num_data_bits=" << options.num_data_bits
          << ", num_banks=" << options.num_banks

@@ -46,7 +46,9 @@ std::string SynthesisManager::generate_parameter_string() const {
     std::ostringstream oss;
     oss << "ADDR_WIDTH=" << addr_width
         << ",NUM_WL=" << cli_options_.num_wls
-        << ",NUM_BANK=" << cli_options_.num_banks;
+        << ",NUM_BANK=" << cli_options_.num_banks
+        << ",WL_BUF=" << cli_options_.num_wl_buf
+        << ",SAE_BUF=" << cli_options_.num_sae_buf;
     return oss.str();
 }
 
@@ -60,7 +62,9 @@ std::string SynthesisManager::generate_tcl_content() const {
         << "# Configuration:\n"
         << "#   ADDR_WIDTH=" << addr_width << "\n"
         << "#   NUM_WL=" << cli_options_.num_wls << "\n"
-        << "#   NUM_BANK=" << cli_options_.num_banks << "\n\n"
+        << "#   NUM_BANK=" << cli_options_.num_banks << "\n"
+        << "#   WL_BUF=" << cli_options_.num_wl_buf << "\n"
+        << "#   SAE_BUF=" << cli_options_.num_sae_buf << "\n\n"
 
         << "set_app_var search_path \"$search_path " << db_path_ << " " << rtl_path_ << "\"\n"
         << "set_app_var target_library \"asap7sc7p5t_AO_RVT_TT.db asap7sc7p5t_INVBUF_RVT_TT.db asap7sc7p5t_OA_RVT_TT.db asap7sc7p5t_SEQ_RVT_TT.db asap7sc7p5t_SIMPLE_RVT_TT.db\"\n"
