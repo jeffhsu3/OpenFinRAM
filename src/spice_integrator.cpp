@@ -530,6 +530,11 @@ bool SpiceIntegrator::flatten_netlist(const std::string& input_path, const std::
                     if (inc_line == "*.BUSDELIMITER [ ") {
                         continue; // Skip bus delimiter lines
                     }
+                    if (inc_line.find(".SUBCKT") != std::string::npos && inc_line.find("ctrl_decode") != std::string::npos) {
+                        LOGD << "Add power ports to ctrl_decode instance";
+                        outfile << inc_line << " VDD VSS\n";
+                        continue;
+                    }
                     outfile << inc_line << "\n";
                 }
         } else {
@@ -560,7 +565,16 @@ bool SpiceIntegrator::replace_chars_for_sis(const std::string& input_path, const
         std::string modified_line = line;
         // std::replace(modified_line.begin(), modified_line.end(), '[', '_');
         // std::replace(modified_line.begin(), modified_line.end(), ']', ' ');
-        std::transform(modified_line.begin(), modified_line.end(), modified_line.begin(), ::tolower);
+        // std::transform(modified_line.begin(), modified_line.end(), modified_line.begin(), ::tolower);
+
+        // Replace state_A[0] and state_A[1] with state_A_0 and state_A_1
+        if (line.find("state_A[0]") != std::string::npos) {
+            modified_line = std::regex_replace(modified_line, std::regex("state_A\\[0\\]"), "state_A_0");
+        }
+        if (line.find("state_A[1]") != std::string::npos) {
+            modified_line = std::regex_replace(modified_line, std::regex("state_A\\[1\\]"), "state_A_1");
+        }
+
         outfile << modified_line << "\n";
     }
 
@@ -594,6 +608,8 @@ bool SpiceIntegrator::integrate_sram() {
     // Parse control circuit ports
     LOGD << "  ▶ Parsing control circuit ports...";
     std::vector<std::string> ctrl_ports = parse_ctrl_ports(ctrl_netlist_path);
+    ctrl_ports.push_back("VDD");
+    ctrl_ports.push_back("VSS");
     
     if (ctrl_ports.empty()) {
         LOGE << "  ✗ Error: Could not parse control ports";

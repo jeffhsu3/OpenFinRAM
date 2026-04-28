@@ -761,7 +761,7 @@ std::string SpiceGenerator::generate_spice_content(const bool& single_port) {
         content << sep << SpiceTemplates::get_buf() << "\n\n";
         content << sep << SpiceTemplates::get_io_nand() << "\n\n";
         content << sep << SpiceTemplates::get_tbuf() << "\n\n";
-        content << sep << SpiceTemplates::get_iocolgrp_8t() << "\n\n";
+        content << sep << SpiceTemplates::get_iocolgrp_8t(20) << "\n\n";
 
         content << sep << generate_cell_row_8t() << "\n";
         content << sep << generate_array_8t() << "\n";

@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <ctime>
+#include <fstream>
 
 std::string get_executable_directory() {
     char buffer[PATH_MAX];
@@ -68,4 +69,17 @@ int get_addr_width(const MainCliOptions& cli_options) {
     return std::ceil(std::log2(cli_options.num_wls)) 
          + std::ceil(std::log2(cli_options.num_banks))
          + 1 + 2; // +1 for top/bottom, +2 for ysel
+}
+
+bool copy_file(const std::string& src, const std::string& dst) {
+    std::ifstream in(src, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::ofstream out(dst, std::ios::binary);
+    if (!out) {
+        return false;
+    }
+    out << in.rdbuf();
+    return true;
 }

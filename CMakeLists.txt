@@ -29,6 +29,7 @@ set(SOURCES
     src/innovus_manager.cpp
     src/filler_generator.cpp
     src/siliconsmart_generator.cpp
+    src/siliconsmart_manager.cpp
     src/lvs_runner.cpp
     src/lef_extractor.cpp
     src/main_config_helpers.cpp
@@ -41,7 +42,8 @@ set(SOURCES
 add_executable(OpenFinRAM ${SOURCES})
 
 # Link libraries
-target_link_libraries(OpenFinRAM gdstk argparse)
+find_package(Threads REQUIRED)
+target_link_libraries(OpenFinRAM gdstk argparse Threads::Threads)
 
 # Create GDS comparator executable
 add_executable(gds_comparator src/gds_comparator.cpp)

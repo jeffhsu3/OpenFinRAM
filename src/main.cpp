@@ -11,6 +11,7 @@
 #include "innovus_tcl_generator.hpp"
 #include "innovus_manager.hpp"
 #include "siliconsmart_generator.hpp"
+#include "siliconsmart_manager.hpp"
 #include "lvs_runner.hpp"
 #include "lef_extractor.hpp"
 #include "main_config_helpers.hpp"
@@ -74,6 +75,13 @@ int main(int argc, char **argv) {
     SpiceIntegrator integrator(cli_options);
     if (!integrator.integrate_sram()) {
         LOGE << "SRAM integration failed.";
+        return 1;
+    }
+
+    // Run siliconsmart characterization
+    SiliconSmartManager sis_manager(cli_options);
+    if (!sis_manager.run_siliconsmart()) {
+        LOGE << "SiliconSmart characterization failed.";
         return 1;
     }
 

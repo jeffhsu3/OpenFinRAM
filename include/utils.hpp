@@ -25,4 +25,6 @@ bool file_exists(const std::string& path);
 
 int get_addr_width(const MainCliOptions& cli_options);
 
+bool copy_file(const std::string& src, const std::string& dst);
+
 #endif // UTILS_HPP
