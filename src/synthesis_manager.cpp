@@ -258,26 +258,20 @@ bool SynthesisManager::predict_capacitance() {
     OpenFinRAM::CapacitancePredictor predictor;
     auto predictions = predictor.predict_all(cli_options_.num_wls * 2, cli_options_.num_data_bits);
 
-    std::map<std::string, std::vector<std::string>> signal_map = {
-        {"WLT", {"wlt_A", "wlt_A", "wlt_B", "wlt_B", "RWLT_A", "RWLB_A", "RWLT_B", "RWLB_B"}},
-        {"YSELT", {"yselt_A", "yseltn_A", "yselb_A", "yselbn_A", "yselt_B", "yseltn_B", "yselb_B", "yselbn_B"}},
-        {"BLPRECHTN", {"blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B", "blprechn_rbl_A", "blprechn_rbl_B"}},
-        {"WRENA", {"wrena_A", "wrenan_A"}},
-        {"SAE", {"oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"}}
-    };
+    std::map<std::string, std::vector<std::string>> signal_map;
 
     if (cli_options_.single_port) {
         signal_map["WLT"] = {"wlt", "wlb"};
         signal_map["YSELT"] = {"yselt", "yseltn", "yselb", "yselbn"};
-        signal_map["BLPRECHTN"] = {"blprechtn", "blprechbn", "blprechn_rbl"};
+        signal_map["BLPRECHTN"] = {"blprechtn", "blprechbn"};
         signal_map["WRENA"] = {"wrena", "wrenan"};
-        signal_map["SAE"] = {"oeb_out", "oe_out"};
+        signal_map["SAE"] = {"sae", "oeb_out", "oe_out"};
     } else {
-        signal_map["WLT"] = {"wlt_A", "wlt_B", "wlb_A", "wlb_B", "RWLT_A", "RWLB_A", "RWLT_B", "RWLB_B"};
+        signal_map["WLT"] = {"wlt_A", "wlt_B", "wlb_A", "wlb_B"};
         signal_map["YSELT"] = {"yselt_A", "yseltn_A", "yselb_A", "yselbn_A", "yselt_B", "yseltn_B", "yselb_B", "yselbn_B"};
-        signal_map["BLPRECHTN"] = {"blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B", "blprechn_rbl_A", "blprechn_rbl_B"};
+        signal_map["BLPRECHTN"] = {"blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B"};
         signal_map["WRENA"] = {"wrena_A", "wrenan_A"};
-        signal_map["SAE"] = {"oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"};
+        signal_map["SAE"] = {"sae_A", "sae_B", "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"};
     }
 
     LOGD << "\n  Predicted Capacitances:";

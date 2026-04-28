@@ -369,7 +369,7 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                 "wrena_A", "wrenan_A",
                 "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B",
                 "blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B",
-                "blprechn_rbl_A", "blprechn_rbl_B"
+                "sae_A", "sae_B"
             };
         }
         for (const auto& sig : ctrl_sigs) {
@@ -449,12 +449,6 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
                 oss << " yselb_B[" << bank << "]";
             }
-            oss << "\n+";
-        }
-        
-
-        for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
-            oss << " RWLT_A[" << bank << "] RWLB_A[" << bank << "] RWLT_B[" << bank << "] RWLB_B[" << bank << "]";
             oss << "\n+";
         }
         

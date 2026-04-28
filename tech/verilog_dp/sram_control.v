@@ -2,8 +2,10 @@ module ctrl_decode #(
     parameter ADDR_WIDTH = 5,
     parameter DATA_WIDTH = 1,
     parameter NUM_WL     = 2,
-    parameter NUM_BANK  = 1,
-    parameter COLUMN_MUX = 4
+    parameter NUM_BANK   = 1,
+    parameter COLUMN_MUX = 4,
+    parameter WL_BUF     = 5,
+    parameter SAE_BUF    = 15
 )(
     input  logic                  clk,
     input  logic                  rst_n,
@@ -14,18 +16,6 @@ module ctrl_decode #(
     input  logic                  oe_n_B,
     input  logic [ADDR_WIDTH-1:0] A_A,
     input  logic [ADDR_WIDTH-1:0] A_B,
-
-    // Per-port replica wordline controls for SA timing path.
-    // RWLT_A/RWLB_A fire when Port A reads top/bottom bank.
-    // RWLT_B/RWLB_B fire when Port B reads top/bottom bank.
-    // Kept separate so RBL_A only discharges on Port A reads and RBL_B on Port B reads.
-    output logic [NUM_BANK-1:0]   RWLT_A,
-    output logic [NUM_BANK-1:0]   RWLB_A,
-    output logic [NUM_BANK-1:0]   RWLT_B,
-    output logic [NUM_BANK-1:0]   RWLB_B,
-
-    output logic [NUM_BANK-1:0]   blprechn_rbl_A,
-    output logic [NUM_BANK-1:0]   blprechn_rbl_B,
 
     output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlt_A,
     output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlb_A,
@@ -39,6 +29,7 @@ module ctrl_decode #(
     output logic [NUM_BANK-1:0]                 wrenan_A,
     output logic [NUM_BANK-1:0]                 oeb_out_A,
     output logic [NUM_BANK-1:0]                 oe_out_A,
+    output logic [NUM_BANK-1:0]                 sae_A,
 
     output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlt_B,
     output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlb_B,
@@ -49,7 +40,8 @@ module ctrl_decode #(
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselb_B,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselbn_B,
     output logic [NUM_BANK-1:0]                 oeb_out_B,
-    output logic [NUM_BANK-1:0]                 oe_out_B
+    output logic [NUM_BANK-1:0]                 oe_out_B,
+    output logic [NUM_BANK-1:0]                 sae_B
 );
 
     function integer clog2;
@@ -119,12 +111,12 @@ module ctrl_decode #(
     wire wl_any_fire_A;
     wire wl_any_fire_B;
 
-    delay_cell #(.BUF_COUNT(2)) u_delay_wl_A (
+    delay_cell #(.BUF_COUNT(WL_BUF)) u_delay_wl_A (
         .A(prech_off_A),
         .Y(wl_any_fire_A)
     );
 
-    delay_cell #(.BUF_COUNT(2)) u_delay_wl_B (
+    delay_cell #(.BUF_COUNT(WL_BUF)) u_delay_wl_B (
         .A(prech_off_B),
         .Y(wl_any_fire_B)
     );
@@ -133,6 +125,20 @@ module ctrl_decode #(
     wire wl_write_fire_A = wl_any_fire_A && write_req_A;
 
     wire wl_read_fire_B  = wl_any_fire_B && read_req_B;
+
+    // SAE is asserted after wl_read_fire with an additional SAE_BUF delay
+    wire sae_raw_A;
+    wire sae_raw_B;
+
+    delay_cell #(.BUF_COUNT(SAE_BUF)) u_delay_sae_A (
+        .A(wl_read_fire_A),
+        .Y(sae_raw_A)
+    );
+
+    delay_cell #(.BUF_COUNT(SAE_BUF)) u_delay_sae_B (
+        .A(wl_read_fire_B),
+        .Y(sae_raw_B)
+    );
 
     // Replica WL activity is driven only by read operations.
     wire replica_wl_t_fire = (wl_read_fire_A && bank_sel_r_A) ||
@@ -191,22 +197,19 @@ module ctrl_decode #(
     end
 
     always_comb begin
-        RWLT_A  = 1'b0;
-        RWLB_A  = 1'b0;
-        RWLT_B  = 1'b0;
-        RWLB_B  = 1'b0;
-
         wlt_A       = '0;
         wlb_A       = '0;
         blprechtn_A = '0;
         blprechbn_A = '0;
         oeb_out_A   = '1;
+        sae_A       = '0;
 
         wlt_B       = '0;
         wlb_B       = '0;
         blprechtn_B = '0;
         blprechbn_B = '0;
         oeb_out_B   = '1;
+        sae_B       = '0;
 
         for (int i = 0; i < NUM_BANK; i = i + 1) begin
             yselt_A[i]  = '0;
@@ -246,6 +249,7 @@ module ctrl_decode #(
 
             if (read_req_A) begin
                 oeb_out_A[slice_sel_r_A] = oe_n_A;
+                sae_A[slice_sel_r_A]     = sae_raw_A;
             end
 
             if (write_req_A) begin
@@ -278,20 +282,12 @@ module ctrl_decode #(
 
             if (read_req_B) begin
                 oeb_out_B[slice_sel_r_B] = oe_n_B;
+                sae_B[slice_sel_r_B]     = sae_raw_B;
             end
         end
-
-        RWLT_A[slice_sel_r_A] = wl_read_fire_A &&  bank_sel_r_A;
-        RWLB_A[slice_sel_r_A] = wl_read_fire_A && !bank_sel_r_A;
-        RWLT_B[slice_sel_r_B] = wl_read_fire_B &&  bank_sel_r_B;
-        RWLB_B[slice_sel_r_B] = wl_read_fire_B && !bank_sel_r_B;
 
         oe_out_A = ~oeb_out_A;
         oe_out_B = ~oeb_out_B;
     end
-
-    // Replica BL precharge: released per-slice when the accessed bank releases precharge.
-    assign blprechn_rbl_A = blprechtn_A | blprechbn_A;
-    assign blprechn_rbl_B = blprechtn_B | blprechbn_B;
 
 endmodule

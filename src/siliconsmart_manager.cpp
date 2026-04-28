@@ -337,8 +337,19 @@ define_parameters )" + cell_name + R"( { set liberty_blackbox_model 1 }
 }
 
 bool SiliconSmartManager::run_siliconsmart() {
-    // Make ./tmp/sis directory
+    // Remove existing ./tmp/sis directory if it exists
     std::string sis_dir = join_path(get_current_dir_name(), "tmp/sis");
+    if (directory_exists(sis_dir)) {
+        std::string cmd = "rm -rf " + sis_dir;
+        LOGI << "Removing existing directory with command: " << cmd;
+        int ret = system(cmd.c_str());
+        if (ret != 0) {
+            LOGE << "Failed to remove existing directory: " << sis_dir;
+            return false;
+        }
+    }
+
+    // Make ./tmp/sis directory
     if (!directory_exists(sis_dir)) {
         if (!create_directory(sis_dir, nullptr)) {
             LOGE << "Failed to create directory: " << sis_dir;
@@ -412,13 +423,13 @@ bool SiliconSmartManager::run_siliconsmart() {
 
             std::string line;
             while (std::getline(log, line)) {
-                // if (line.find("Error:   Task") != std::string::npos) {
-                //     LOGE << "SiliconSmart log error detected: " << line;
-                //     LOGI << "Killing SiliconSmart process group (pid=" << child_pid << ")";
-                //     kill(-child_pid, SIGTERM);
-                //     kill_requested.store(true);
-                //     return;
-                // }
+                if (line.find("Error:   Task") != std::string::npos) {
+                    LOGE << "SiliconSmart log error detected: " << line;
+                    LOGI << "Killing SiliconSmart process group (pid=" << child_pid << ")";
+                    kill(-child_pid, SIGTERM);
+                    kill_requested.store(true);
+                    return;
+                }
             }
         }
     });

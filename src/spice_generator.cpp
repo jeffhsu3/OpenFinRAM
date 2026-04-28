@@ -176,7 +176,7 @@ std::string SpiceGenerator::generate_colgrp() {
     instances << "+ bltn[3] blt[0] blt[1] blt[2] blt[3] blbn[0] blbn[1] blbn[2] blbn[3] blb[0]\n";
     instances << "+ blb[1] blb[2] blb[3] BLPRECHTN BLPRECHBN yseltn[0] yseltn[1] yseltn[2] yseltn[3] yselt[0]\n";
     instances << "+ yselt[1] yselt[2] yselt[3] yselbn[0] yselbn[1] yselbn[2] yselbn[3] yselb[0] yselb[1] yselb[2]\n";
-    instances << "+ yselb[3] vdd vss iocolgrp_sram_6t122_v2\n";
+    instances << "+ yselb[3] sae_A sae_B vdd vss iocolgrp_sram_6t122_v2\n";
     
     return create_subckt("colgrp_sram_6t122", ports, instances.str());
 }
@@ -344,10 +344,6 @@ std::string SpiceGenerator::generate_cell_row_8t() {
     ports.push_back("BLAN");
     ports.push_back("BLB");
     ports.push_back("BLBN");
-    ports.push_back("RWLA");
-    ports.push_back("RWLB");
-    ports.push_back("RBLA");
-    ports.push_back("RBLB");
     ports.push_back("VDD");
     ports.push_back("VSS");
     
@@ -357,7 +353,7 @@ std::string SpiceGenerator::generate_cell_row_8t() {
         instances << "X" << i << " WLA[" << i << "] WLB[" << i << "] BLA BLAN BLB BLBN VDD VSS sram_cell_8t\n";
     }
     
-    instances << "X" << config_.num_wls     << " RWLA RWLB RBLA RBLB VDD VSS replica_cell_8t\n";
+    // instances << "X" << config_.num_wls     << " RWLA RWLB RBLA RBLB VDD VSS replica_cell_8t\n";
     instances << "X" << config_.num_wls + 1 << " BLA BLAN BLB BLBN VDD VSS dummy_cell_8t\n";
     
     return create_subckt("sram_cell_row_8t", ports, instances.str());
@@ -388,12 +384,6 @@ std::string SpiceGenerator::generate_array_8t() {
         ports.push_back("BLBN[" + std::to_string(i) + "]");
     }
 
-    // replica wordline/bitline ports
-    ports.push_back("RWLA");
-    ports.push_back("RWLB");
-    ports.push_back("RBLA");
-    ports.push_back("RBLB");
-
     ports.push_back("VDD");
     ports.push_back("VSS");
 
@@ -406,7 +396,7 @@ std::string SpiceGenerator::generate_array_8t() {
         for (int j = 0; j < config_.num_wls; ++j) {
             instances << "WLB[" << j << "] ";
         }
-        instances << "BLA[" << i << "] BLAN[" << i << "] BLB[" << i << "] BLBN[" << i << "] RWLA RWLB RBLA RBLB VDD VSS sram_cell_row_8t\n";
+        instances << "BLA[" << i << "] BLAN[" << i << "] BLB[" << i << "] BLBN[" << i << "] VDD VSS sram_cell_row_8t\n";
     }
 
     return create_subckt("array_sram_8t", ports, instances.str());
@@ -438,8 +428,7 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     std::vector<std::string> ctrl_port_names = {
         "wrenaA", "wrenanA",
         "oeb_outA", "oe_outA", "oeb_outB", "oe_outB",
-        "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB",
-        "blprechn_rbl_A", "blprechn_rbl_B"
+        "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB"
     };
     ports.insert(ports.end(), ctrl_port_names.begin(), ctrl_port_names.end());
 
@@ -469,12 +458,8 @@ std::string SpiceGenerator::generate_colgrp_8t() {
         ports.push_back("yselbB[" + std::to_string(i) + "]");
     }
 
-    // Replica wordline ports
-    ports.push_back("RWLTA");
-    ports.push_back("RWLBA");
-    ports.push_back("RWLTB");
-    ports.push_back("RWLBB");
-
+    ports.push_back("sae_A");
+    ports.push_back("sae_B");
     ports.push_back("VDD");
     ports.push_back("VSS");
 
@@ -498,7 +483,7 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     for (int i = 0; i < 4; ++i) {
         instances << "BLTN_B[" << i << "] ";
     }
-    instances << "RWLTA RWLTB RBLA RBLB VDD VSS array_sram_8t\n";
+    instances << " VDD VSS array_sram_8t\n";
 
     instances << "X1 ";
     for (int i = 0; i < config_.num_wls; ++i) {
@@ -519,9 +504,9 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     for (int i = 0; i < 4; ++i) {
         instances << "BLBN_B[" << i << "] ";
     }
-    instances << "RWLBA RWLBB RBLA RBLB VDD VSS array_sram_8t\n";
+    instances << " VDD VSS array_sram_8t\n";
 
-    instances << "X2 wrenaA wrenanA RBLA RBLB oeb_outA oe_outA ";
+    instances << "X2 wrenaA wrenanA oeb_outA oe_outA ";
     instances << "DA QA oeb_outB oe_outB QB ";
     for (int i = 0; i < 4; ++i) {
         instances << "BLT_A[" << i << "] ";
@@ -548,7 +533,7 @@ std::string SpiceGenerator::generate_colgrp_8t() {
         instances << "BLBN_B[" << i << "] ";
     }
 
-    instances << "blprechtnA blprechbnA blprechtnB blprechbnB blprechn_rbl_A blprechn_rbl_B ";
+    instances << "blprechtnA blprechbnA blprechtnB blprechbnB ";
     for (int i = 0; i < 4; ++i) {
         instances << "yseltnA[" << i << "] ";
     }
@@ -573,7 +558,7 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     for (int i = 0; i < 4; ++i) {
         instances << "yselbB[" << i << "] ";
     }
-    instances << "VDD VSS iocolgrp_sram_8t\n";
+    instances << "sae_A sae_B VDD VSS iocolgrp_sram_8t\n";
 
     return create_subckt("colgrp_sram_8t", ports, instances.str());
 }
@@ -613,7 +598,7 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
         "wrenaA", "wrenanA",
         "oeb_outA", "oe_outA", "oeb_outB", "oe_outB", 
         "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB",
-        "blprechn_rbl_A", "blprechn_rbl_B"
+        "sae_A", "sae_B"
     };
     for (const auto& name : ctrl_port_names) {
         for (int mux = 0; mux < config_.num_banks; ++mux) {
@@ -646,13 +631,6 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
         ports.push_back("yselbB[" + std::to_string(i) + "]");
     }
 
-    for (int i = 0; i < config_.num_banks; ++i) {
-        ports.push_back("RWLTA[" + std::to_string(i) + "]");
-        ports.push_back("RWLBA[" + std::to_string(i) + "]");
-        ports.push_back("RWLTB[" + std::to_string(i) + "]");
-        ports.push_back("RWLBB[" + std::to_string(i) + "]");
-    }
-
     ports.push_back("VDD");
     ports.push_back("VSS");
 
@@ -678,7 +656,7 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
             instances << "wrenaA[" << mux << "] wrenanA[" << mux
                       << "] oeb_outA[" << mux << "] oe_outA[" << mux << "] oeb_outB[" << mux << "] oe_outB[" << mux 
                       << "] blprechtnA[" << mux << "] blprechbnA[" << mux << "] blprechtnB[" << mux << "] blprechbnB[" << mux
-                      << "] blprechn_rbl_A[" << mux << "] blprechn_rbl_B[" << mux << "] ";
+                      << "] ";
 
             for (int i = 0; i < 4; ++i) {
                 instances << "yseltnA[" << (i + mux * 4) << "] ";
@@ -705,9 +683,8 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
                 instances << "yselbB[" << (i + mux * 4) << "] ";
             }
 
-            instances << " RWLTA[" << mux << "] RWLBA[" << mux 
-                      << "] RWLTB[" << mux << "] RWLBB[" << mux 
-                      << "] VDD VSS colgrp_sram_8t\n";
+            instances << "sae_A[" << mux << "] sae_B[" << mux << "] ";
+            instances << " VDD VSS colgrp_sram_8t\n";
         }
     }
 

@@ -860,7 +860,7 @@ bool InnovusTclGenerator::run_v2lvs(const std::string& work_dir,
     cmd << "tcsh -c 'cd " << work_dir << " && ";
     cmd << "v2lvs -v " << verilog_file 
         << " -o " << spice_file 
-        << " -s " << cdl_file << "'";
+        << " -s " << cdl_file << "' > v2lvs.log 2>&1";
     
     LOGI << "Executing command: " << cmd.str();
     
