@@ -281,17 +281,17 @@ module ctrl_decode #(
             end
         end
 
-        RWLT_A = wl_read_fire_A &&  bank_sel_r_A;
-        RWLB_A = wl_read_fire_A && !bank_sel_r_A;
-        RWLT_B = wl_read_fire_B &&  bank_sel_r_B;
-        RWLB_B = wl_read_fire_B && !bank_sel_r_B;
+        RWLT_A[slice_sel_r_A] = wl_read_fire_A &&  bank_sel_r_A;
+        RWLB_A[slice_sel_r_A] = wl_read_fire_A && !bank_sel_r_A;
+        RWLT_B[slice_sel_r_B] = wl_read_fire_B &&  bank_sel_r_B;
+        RWLB_B[slice_sel_r_B] = wl_read_fire_B && !bank_sel_r_B;
 
         oe_out_A = ~oeb_out_A;
         oe_out_B = ~oeb_out_B;
     end
 
-    // Replica BL precharge: asserted whenever any bank releases precharge on Port A/B.
-    assign blprechn_rbl_A = |blprechtn_A | |blprechbn_A;
-    assign blprechn_rbl_B = |blprechtn_B | |blprechbn_B;
+    // Replica BL precharge: released per-slice when the accessed bank releases precharge.
+    assign blprechn_rbl_A = blprechtn_A | blprechbn_A;
+    assign blprechn_rbl_B = blprechtn_B | blprechbn_B;
 
 endmodule
