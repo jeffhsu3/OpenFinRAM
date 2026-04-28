@@ -55,6 +55,11 @@ std::string get_current_timestamp() {
     return std::string(buf);
 }
 
+const std::string& get_run_timestamp() {
+    static const std::string ts = get_current_timestamp();
+    return ts;
+}
+
 bool directory_exists(const std::string& path) {
     struct stat st;
     return (stat(path.c_str(), &st) == 0) && S_ISDIR(st.st_mode);

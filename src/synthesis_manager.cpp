@@ -25,8 +25,8 @@ SynthesisManager::SynthesisManager(const MainCliOptions& cli_options)
     }
 
     db_path_ = join_path(get_executable_directory(), "tech/db");
-    syn_path_ = join_path(get_executable_directory(), "tmp/syn");
-    output_path_ = join_path(get_executable_directory(), "tmp/syn");
+    syn_path_ = join_path(get_executable_directory(), "tmp/syn_" + get_run_timestamp());
+    output_path_ = join_path(get_executable_directory(), "tmp/syn_" + get_run_timestamp());
 
     if (!directory_exists(join_path(get_executable_directory(), "tmp"))) {
         LOGD << "Creating tmp directory: " << join_path(get_executable_directory(), "tmp");

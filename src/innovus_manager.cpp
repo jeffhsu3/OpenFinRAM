@@ -18,7 +18,7 @@ bool InnovusManager::run_innovus_flow() {
     tcl_generator.set_site_height(0.27);
     tcl_generator.set_cpu_count(8, 0);
 
-    std::string qor_file_path = join_path(get_executable_directory(), "tmp/syn/qor_report.txt");
+    std::string qor_file_path = join_path(get_executable_directory(), "tmp/syn_" + get_run_timestamp() + "/qor_report.txt");
     bool qor_parsed = tcl_generator.parse_qor_report(qor_file_path);
 
     if (!qor_parsed) {
@@ -26,11 +26,11 @@ bool InnovusManager::run_innovus_flow() {
         return false;
     }
 
-    std::string output_tcl_path = join_path(get_executable_directory(), "tmp/innovus/run.tcl");
-    if (!directory_exists(join_path(get_executable_directory(), "tmp/innovus"))) {
-        LOGD << "Creating Innovus output directory: " << join_path(get_executable_directory(), "tmp/innovus");
-        if (!create_directory(join_path(get_executable_directory(), "tmp/innovus"), nullptr)) {
-            LOGE << "Failed to create Innovus output directory: " << join_path(get_executable_directory(), "tmp/innovus");
+    std::string output_tcl_path = join_path(get_executable_directory(), "tmp/innovus_" + get_run_timestamp() + "/run.tcl");
+    if (!directory_exists(join_path(get_executable_directory(), "tmp/innovus_" + get_run_timestamp()))) {
+        LOGD << "Creating Innovus output directory: " << join_path(get_executable_directory(), "tmp/innovus_" + get_run_timestamp());
+        if (!create_directory(join_path(get_executable_directory(), "tmp/innovus_" + get_run_timestamp()), nullptr)) {
+            LOGE << "Failed to create Innovus output directory: " << join_path(get_executable_directory(), "tmp/innovus_" + get_run_timestamp());
             return false;
         }
     }
@@ -56,7 +56,7 @@ bool InnovusManager::run_innovus_flow() {
         return false;
     }
 
-    std::string innovus_work_dir = join_path(get_executable_directory(), "tmp/innovus");
+    std::string innovus_work_dir = join_path(get_executable_directory(), "tmp/innovus_" + get_run_timestamp());
     std::string log_file = join_path(innovus_work_dir, "innovus.log");
     if (tcl_generator.run_innovus(output_tcl_path, innovus_work_dir, log_file)) {
         LOGI << "Innovus flow completed successfully.";

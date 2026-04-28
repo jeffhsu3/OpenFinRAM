@@ -755,7 +755,7 @@ bool InnovusTclGenerator::run_innovus(const std::string& tcl_file,
         "set init_mmmc_file {Default.view}\n"
         "set init_pwr_net {VDD}\n"
         "set init_top_cell {ctrl_decode}\n"
-        "set init_verilog {../syn/netlist.v}\n"
+        "set init_verilog {" + join_path(get_executable_directory(), "tmp/syn_" + get_run_timestamp() + "/netlist.v") + "}\n"
         "set latch_time_borrow_mode max_borrow\n";
 
     const std::string default_view_content =

@@ -583,14 +583,14 @@ bool SpiceIntegrator::integrate_sram() {
     LOGD << std::string(70, '=');
     
     // Verify input files exist
-    std::string ctrl_netlist_path = join_path(get_current_dir_name(), "tmp/innovus/netlist_for_lvs.sp");
+    std::string ctrl_netlist_path = join_path(get_current_dir_name(), "tmp/innovus_" + get_run_timestamp() + "/netlist_for_lvs.sp");
     if (!file_exists(ctrl_netlist_path)) {
         LOGE << "  ✗ Error: Control netlist not found: " 
              << ctrl_netlist_path;
         return false;
     }
     
-    std::string datapath_netlist_path = join_path(get_current_dir_name(), "sram_colgrp.sp");
+    std::string datapath_netlist_path = join_path(get_current_dir_name(), "tmp/sram_colgrp_" + get_run_timestamp() + ".sp");
     if (!file_exists(datapath_netlist_path)) {
         LOGE << "  ✗ Error: Datapath netlist not found: " 
              << datapath_netlist_path;
@@ -638,14 +638,14 @@ bool SpiceIntegrator::integrate_sram() {
     
     // Flatten the netlist to resolve includes and subcircuit definitions
     LOGD << "\n  ▶ Flattening netlist for LVS compatibility...";
-    std::string flattened_output_path = join_path(get_current_dir_name(), "sram_flat.sp");
+    std::string flattened_output_path = join_path(get_current_dir_name(), "tmp/sram_flat_" + get_run_timestamp() + ".sp");
     if (!flatten_netlist(output_file_path, flattened_output_path)) {
         LOGE << "  ✗ Error: Netlist flattening failed";
         return false;
     }
 
     // Replace [] with _ for SIS compatibility
-    std::string sis_ready_output_path = join_path(get_current_dir_name(), "sram_flat_sis.sp");
+    std::string sis_ready_output_path = join_path(get_current_dir_name(), "tmp/sram_flat_sis_" + get_run_timestamp() + ".sp");
     if (!replace_chars_for_sis(flattened_output_path, sis_ready_output_path)) {
         LOGE << "  ✗ Error: Character replacement for SIS failed";
         return false;

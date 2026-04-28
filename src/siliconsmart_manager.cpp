@@ -20,7 +20,7 @@ SiliconSmartManager::SiliconSmartManager(const MainCliOptions& options)
 }
 
 bool SiliconSmartManager::gen_run() {
-    std::string filePath = join_path(get_current_dir_name(), "tmp/sis/run.tcl");
+    std::string filePath = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp() + "/run.tcl");
 
     std::string cellName = "sram_x" + std::to_string(cli_option_.num_wls * 2) 
                            + "x" + std::to_string(cli_option_.num_data_bits) + 
@@ -172,7 +172,7 @@ define_parameters validation {
 
 )";
 
-    std::string filePath = join_path(get_current_dir_name(), "tmp/sis/configure.tcl");
+    std::string filePath = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp() + "/configure.tcl");
     std::ofstream out(filePath);
     if (!out) {
         LOGE << "Failed to write configure.tcl: " << filePath;
@@ -214,7 +214,7 @@ set_chip_enable ce_n_b -active L -port B
 set_data_output q_b -width )" + std::to_string(data_width) + R"( -port B
 )";
 
-    std::string filePath = join_path(get_current_dir_name(), "tmp/sis/template.tcl");
+    std::string filePath = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp() + "/template.tcl");
     std::ofstream out(filePath);
     if (!out) {
         LOGE << "Failed to write template.tcl: " << filePath;
@@ -316,7 +316,7 @@ define_parameters )" + cell_name + R"( { set liberty_blackbox_model 1 }
 )" ;
 
     // Mkdir control directory if it doesn't exist
-    std::string control_dir = join_path(get_current_dir_name(), "tmp/sis/control");
+    std::string control_dir = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp() + "/control");
     if (!directory_exists(control_dir)) {
         if (!create_directory(control_dir, nullptr)) {
             LOGE << "Failed to create directory: " << control_dir;
@@ -337,17 +337,7 @@ define_parameters )" + cell_name + R"( { set liberty_blackbox_model 1 }
 }
 
 bool SiliconSmartManager::run_siliconsmart() {
-    // Remove existing ./tmp/sis directory if it exists
-    std::string sis_dir = join_path(get_current_dir_name(), "tmp/sis");
-    if (directory_exists(sis_dir)) {
-        std::string cmd = "rm -rf " + sis_dir;
-        LOGI << "Removing existing directory with command: " << cmd;
-        int ret = system(cmd.c_str());
-        if (ret != 0) {
-            LOGE << "Failed to remove existing directory: " << sis_dir;
-            return false;
-        }
-    }
+    std::string sis_dir = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp());
 
     // Make ./tmp/sis directory
     if (!directory_exists(sis_dir)) {
@@ -366,8 +356,8 @@ bool SiliconSmartManager::run_siliconsmart() {
         }
     }
 
-    // Move ./sram_flat_sis.sp to ./tmp/sis/netlist/sram_flat_sis.sp
-    std::string src_netlist = join_path(get_current_dir_name(), "sram_flat_sis.sp");
+    // Move ./tmp/sram_flat_sis_<timestamp>.sp to ./tmp/sis/netlist/sram_flat_sis_<timestamp>.sp
+    std::string src_netlist = join_path(get_current_dir_name(), "tmp/sram_flat_sis_" + get_run_timestamp() + ".sp");
     std::string dst_netlist = join_path(netlist_dir, "sram_x" + std::to_string(cli_option_.num_wls * 2) + "x" + std::to_string(cli_option_.num_data_bits) + "x" + std::to_string(cli_option_.num_banks) + ".sp");
     if (!copy_file(src_netlist, dst_netlist)) {
         LOGE << "Failed to copy netlist from " << src_netlist << " to " << dst_netlist;

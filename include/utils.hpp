@@ -18,6 +18,7 @@ std::string join_path(const std::string& base, const std::string& name);
 bool create_directory(const std::string& path, std::string* error);
 
 std::string get_current_timestamp();
+const std::string& get_run_timestamp();
 
 bool directory_exists(const std::string& path);
 

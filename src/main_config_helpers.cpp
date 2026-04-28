@@ -33,7 +33,7 @@ MainCliOptions parse_main_cli_options(int argc, char** argv) {
 
     program.add_argument("--output-sp-name")
         .help("Output name for generated SPICE netlist.")
-        .default_value(std::string("sram_colgrp.sp"));
+        .default_value(std::string("sram.sp"));
 
     program.add_argument("--spice-only")
         .help("Only generate SPICE netlist but also run Innovus.")

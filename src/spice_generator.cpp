@@ -750,7 +750,7 @@ std::string SpiceGenerator::generate_spice_content(const bool& single_port) {
 }
 
 bool SpiceGenerator::generate() {
-    std::string output_path = join_path(get_current_dir_name(), "sram_colgrp.sp");
+    std::string output_path = join_path(get_current_dir_name(), "tmp/sram_colgrp_" + get_run_timestamp() + ".sp");
     std::string content = generate_spice_content(config_.single_port);
     
     std::ofstream outfile(output_path);
