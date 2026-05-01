@@ -17,6 +17,8 @@ public:
 
     bool gen_inst();
 
+    bool copy_lib_file();
+
 private:
     MainCliOptions cli_option_;
 

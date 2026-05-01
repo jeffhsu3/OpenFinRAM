@@ -576,7 +576,21 @@ bool SpiceIntegrator::replace_chars_for_sis(const std::string& input_path, const
 }
 
 bool SpiceIntegrator::integrate_sram() {
-    std::string output_file_path = join_path(get_current_dir_name(), cli_options_.output_sp_name);
+    // Mkdir results directory if it doesn't exist
+    std::string results_dir = join_path(get_current_dir_name(), "results");
+    if (!create_directory(results_dir, nullptr) && !directory_exists(results_dir)) {
+        LOGE << "  ✗ Error: Cannot create results directory: " << results_dir;
+        return false;
+    }
+
+    // output to ./results/{cell_name}_timestamp/{cell_name}.sp
+    std::string cell_name = "sram_x" + std::to_string(cli_options_.num_wls * 2) + "x" + std::to_string(cli_options_.num_data_bits) + "x" + std::to_string(cli_options_.num_banks);
+    std::string cell_results_dir = join_path(results_dir, cell_name + "_" + get_run_timestamp());
+    if (!create_directory(cell_results_dir, nullptr) && !directory_exists(cell_results_dir)) {
+        LOGE << "  ✗ Error: Cannot create cell results directory: " << cell_results_dir;
+        return false;
+    }
+    std::string output_file_path = join_path(cell_results_dir, cell_name + ".sp");
 
     LOGD << "\n" << std::string(70, '=');
     LOGD << "Integrating Control and Datapath";
