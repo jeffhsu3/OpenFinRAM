@@ -1,6 +1,5 @@
 module ctrl_decode #(
     parameter ADDR_WIDTH = 5,
-    parameter DATA_WIDTH = 1,
     parameter NUM_WL     = 2,
     parameter NUM_BANK   = 1,
     parameter COLUMN_MUX = 4,

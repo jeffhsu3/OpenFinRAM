@@ -176,7 +176,7 @@ std::string SpiceGenerator::generate_colgrp() {
     instances << "+ bltn[3] blt[0] blt[1] blt[2] blt[3] blbn[0] blbn[1] blbn[2] blbn[3] blb[0]\n";
     instances << "+ blb[1] blb[2] blb[3] BLPRECHTN BLPRECHBN yseltn[0] yseltn[1] yseltn[2] yseltn[3] yselt[0]\n";
     instances << "+ yselt[1] yselt[2] yselt[3] yselbn[0] yselbn[1] yselbn[2] yselbn[3] yselb[0] yselb[1] yselb[2]\n";
-    instances << "+ yselb[3] sae_A sae_B vdd vss iocolgrp_sram_6t122_v2\n";
+    instances << "+ yselb[3] vdd vss iocolgrp_sram_6t122_v2\n";
     
     return create_subckt("colgrp_sram_6t122", ports, instances.str());
 }
@@ -252,25 +252,7 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
             ports.push_back("WLB[" + std::to_string(i + mux * config_.num_wls) + "]");
         }
     }
-    
-    // YSEL ports
-    std::vector<std::string> ysel_ports;
-    for (int mux = 0; mux < config_.num_banks; ++mux) {
-        for (int i = 0; i < 4; ++i) {
-            ysel_ports.push_back("yseltn[" + std::to_string(i + mux * 4) + "]");
-        }
-        for (int i = 0; i < 4; ++i) {
-            ysel_ports.push_back("yselt[" + std::to_string(i + mux * 4) + "]");
-        }
-        for (int i = 0; i < 4; ++i) {
-            ysel_ports.push_back("yselbn[" + std::to_string(i + mux * 4) + "]");
-        }
-        for (int i = 0; i < 4; ++i) {
-            ysel_ports.push_back("yselb[" + std::to_string(i + mux * 4) + "]");
-        }
-    }
-    ports.insert(ports.end(), ysel_ports.begin(), ysel_ports.end());
-    
+
     // Data ports
     for (int i = 0; i < config_.num_data_bits / 2; ++i) {
         ports.push_back("D[" + std::to_string(i) + "]");
@@ -290,9 +272,29 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
             ctrl_ports.push_back(name + "[" + std::to_string(mux) + "]");
         }
     }
-    ctrl_ports.push_back("VDD");
-    ctrl_ports.push_back("VSS");
     ports.insert(ports.end(), ctrl_ports.begin(), ctrl_ports.end());
+
+    // YSEL ports
+    std::vector<std::string> ysel_ports;
+    for (int mux = 0; mux < config_.num_banks; ++mux) {
+        for (int i = 0; i < 4; ++i) {
+            ysel_ports.push_back("yseltn[" + std::to_string(i + mux * 4) + "]");
+        }
+        for (int i = 0; i < 4; ++i) {
+            ysel_ports.push_back("yselt[" + std::to_string(i + mux * 4) + "]");
+        }
+        for (int i = 0; i < 4; ++i) {
+            ysel_ports.push_back("yselbn[" + std::to_string(i + mux * 4) + "]");
+        }
+        for (int i = 0; i < 4; ++i) {
+            ysel_ports.push_back("yselb[" + std::to_string(i + mux * 4) + "]");
+        }
+    }
+    ports.insert(ports.end(), ysel_ports.begin(), ysel_ports.end());
+    
+    ports.push_back("VDD");
+    ports.push_back("VSS");
+    
     
     // Instances
     std::stringstream instances;
@@ -711,6 +713,8 @@ std::string SpiceGenerator::generate_spice_content(const bool& single_port) {
         content << sep << SpiceTemplates::get_prech_ymux() << "\n\n";
         content << sep << SpiceTemplates::get_io_nand() << "\n\n";
         content << sep << SpiceTemplates::get_tbuf() << "\n\n";
+        content << sep << SpiceTemplates::get_write_driver() << "\n\n";
+        content << sep << SpiceTemplates::get_sense_amp() << "\n\n";
         content << sep << SpiceTemplates::get_iocolgrp() << "\n\n";
         
         // Generate hierarchy
@@ -718,7 +722,7 @@ std::string SpiceGenerator::generate_spice_content(const bool& single_port) {
         content << sep << generate_sramcol() << "\n";
         content << sep << generate_array() << "\n";
         content << sep << generate_colgrp() << "\n";
-        content << sep << generate_stacked_colgrp() << "\n";
+        // content << sep << generate_stacked_colgrp() << "\n";
         content << sep << generate_stacked_colgrp_mux() << "\n";
     } else {
         LOGD << "Generating dual-port SRAM SPICE netlist...";

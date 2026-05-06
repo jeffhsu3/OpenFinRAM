@@ -260,44 +260,18 @@ std::string SpiceTemplates::get_iocolgrp() {
 + blb[1] blb[2] blb[3] BLPRECHTN BLPRECHBN yseltn[0] yseltn[1] yseltn[2] yseltn[3] yselt[0]
 + yselt[1] yselt[2] yselt[3] yselbn[0] yselbn[1] yselbn[2] yselbn[3] yselb[0] yselb[1] yselb[2] 
 + yselb[3] vdd vss
-M0 51 wrena 46 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M1 47 vss vss vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M2 vss 50 51 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M3 57 44 47 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M4 50 51 vss vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M5 52 45 57 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M6 45 wrena 50 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M7 vss SAE 52 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M8 52 SAE vss vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M9 58 46 52 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M10 D wrenan 50 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M11 53 wrenan 51 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M12 44 47 58 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M13 vss vss 44 vss nmos_rvt L=2e-08 W=3.24e-07 nfin=12
-M15 vss D 53 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M19 vss 49 48 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M22 51 wrenan 46 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M23 47 vdd vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M24 vdd 50 51 vdd pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-M25 vdd 44 47 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M26 50 51 vdd vdd pmos_rvt L=2e-08 W=2.7e-08 nfin=1
-M27 47 SAPRECHN vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M28 45 wrenan 50 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M29 59 SAPRECHN 47 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M30 44 SAPRECHN 59 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M31 vdd SAPRECHN 44 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M32 44 47 vdd vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M33 vdd vdd 44 vdd pmos_rvt L=2e-08 W=1.08e-07 nfin=4
-M35 vdd D 53 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M39 vdd 49 48 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+XWD D wrena wrenan sa san vdd vss write_driver_sram
+XSA sa san sae SAPRECHN qa qan vdd vss sense_amp_sram
 X42 bltn[0] bltn[1] bltn[2] bltn[3] blt[0] blt[1] blt[2] blt[3] yseltn[0] yseltn[1]
-+ yseltn[2] yseltn[3] yselt[0] yselt[1] yselt[2] yselt[3] 46 45 BLPRECHTN vdd 
++ yseltn[2] yseltn[3] yselt[0] yselt[1] yselt[2] yselt[3] san sa BLPRECHTN vdd 
 + vss wrasst_prech_ymux_x4_sram_6t122_v2
 X43 blbn[0] blbn[1] blbn[2] blbn[3] blb[0] blb[1] blb[2] blb[3] yselbn[0] yselbn[1]
-+ yselbn[2] yselbn[3] yselb[0] yselb[1] yselb[2] yselb[3] 46 45 BLPRECHBN vdd 
++ yselbn[2] yselbn[3] yselb[0] yselb[1] yselb[2] yselb[3] san sa BLPRECHBN vdd 
 + vss wrasst_prech_ymux_x4_sram_6t122_v2
-X44 49 44 54 vdd vss io_nand_3f_6f
-X45 54 47 49 vdd vss io_nand_3f_6f
+M19 vss 49 48 vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
+M39 vdd 49 48 vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
+X44 49 qa 54 vdd vss io_nand_3f_6f
+X45 54 qan 49 vdd vss io_nand_3f_6f
 X46 48 oeb_out oe_out vdd vss Q TBUF_INV
 .ENDS)";
 }
