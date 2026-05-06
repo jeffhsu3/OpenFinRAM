@@ -36,6 +36,7 @@ set(SOURCES
     src/main_flow_helpers.cpp
     src/main_layout_helpers.cpp
     src/utils.cpp
+    src/layout_generator.cpp
 )
 
 # Create main executable
