@@ -431,7 +431,7 @@ bool SiliconSmartManager::copy_lib_file() {
 }
 
 bool SiliconSmartManager::run_siliconsmart() {
-    if (!cli_option_.skip_characterization) {
+    if (cli_option_.skip_characterization) {
         LOGI << "SiliconSmart characterization skipped as per configuration.";
         return true;
     }
