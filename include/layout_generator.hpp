@@ -47,6 +47,12 @@ public:
 
     bool write_layout();
 
+    bool add_ctrl_decode_gate_fin_wrappers();
+
+    bool create_and_add_sram_filler_cells();
+
+    bool run_sram_gds_integration_and_writeback();
+
     // 將 cell 及其相依 cell 複製到目標 Library（避免重複加入）
     void add_cell_with_deps(gdstk::Library& target_lib, gdstk::Cell* source_cell);
 
@@ -58,6 +64,8 @@ private:
     gdstk::Library sram_lib;
 
     SramCellSet sram_cells_;
+
+    gdstk::Library ctrl_decode_gds;
 };
 
 #endif // LAYOUT_GENERATOR_HPP
