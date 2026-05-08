@@ -381,29 +381,31 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
         }
 
         if (cli_options_.single_port) {
-            // yseltn
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yseltn[" << bank << "]";
-            }
-            oss << "\n+";
+            for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
+                // yseltn
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yseltn[" << i + 4 * bank << "]";
+                }
+                oss << "\n+";
 
-            // yselt
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselt[" << bank << "]";
-            }
-            oss << "\n+";
+                // yselt
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselt[" << i + 4 * bank << "]";
+                }
+                oss << "\n+";
 
-            // yselbn
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselbn[" << bank << "]";
-            }
-            oss << "\n+";
+                // yselbn
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselbn[" << i + 4 * bank << "]";
+                }
+                oss << "\n+";
 
-            // yselb
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselb[" << bank << "]";
+                // yselb
+                for (int i = 0; i < 4; ++i) {
+                    oss << " yselb[" << i + 4 * bank << "]";
+                }
+                oss << "\n+";
             }
-            oss << "\n+";
         } else {
             // yseltn
             for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
@@ -524,11 +526,11 @@ bool SpiceIntegrator::flatten_netlist(const std::string& input_path, const std::
                     if (inc_line == "*.BUSDELIMITER [ ") {
                         continue; // Skip bus delimiter lines
                     }
-                    if (inc_line.find(".SUBCKT") != std::string::npos && inc_line.find("ctrl_decode") != std::string::npos) {
-                        LOGD << "Add power ports to ctrl_decode instance";
-                        outfile << inc_line << " VDD VSS\n";
-                        continue;
-                    }
+                    // if (inc_line.find(".SUBCKT") != std::string::npos && inc_line.find("ctrl_decode") != std::string::npos) {
+                    //     LOGD << "Add power ports to ctrl_decode instance";
+                    //     outfile << inc_line << " VDD VSS\n";
+                    //     continue;
+                    // }
                     outfile << inc_line << "\n";
                 }
         } else {
@@ -616,8 +618,8 @@ bool SpiceIntegrator::integrate_sram() {
     // Parse control circuit ports
     LOGD << "  ▶ Parsing control circuit ports...";
     std::vector<std::string> ctrl_ports = parse_ctrl_ports(ctrl_netlist_path);
-    ctrl_ports.push_back("VDD");
-    ctrl_ports.push_back("VSS");
+    // ctrl_ports.push_back("VDD");
+    // ctrl_ports.push_back("VSS");
     
     if (ctrl_ports.empty()) {
         LOGE << "  ✗ Error: Could not parse control ports";
