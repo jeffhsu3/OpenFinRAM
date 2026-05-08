@@ -137,7 +137,7 @@ define_parameters default {
     set path_constraint_mode off	
 
     set job_scheduler standalone
-    set run_list_maxsize 16
+    set run_list_maxsize 64
     set normal_queue {bnormal -R rusage[mem=16000]} 
 }
 
@@ -193,7 +193,22 @@ bool SiliconSmartManager::gen_template() {
                             + "x" + std::to_string(cli_option_.num_data_bits) + 
                             "x" + std::to_string(cli_option_.num_banks);
 
-    std::string content = R"(set_memory_type multi_port_ram
+    std::string content;
+
+    if (cli_option_.single_port) {
+        content = R"(set_memory_type single_port_ram
+set_memory_name )" + cell_name + R"(
+
+create_readwrite_port A
+set_clock clk -active r -port A
+set_address_bus A -width )" + std::to_string(addr_width) + R"( -port A
+set_data_bus D -width )" + std::to_string(data_width) + R"( -port A
+set_write_enable we_n -active L -port A
+set_read_enable oe_n -active L -port A
+set_chip_enable ce_n -active L -port A
+set_data_output Q -width )" + std::to_string(data_width) + R"( -port A)";
+    } else {
+        content = R"(set_memory_type multi_port_ram
 set_memory_name )" + cell_name + R"(
 set_separate_statetable_mode ON
 
@@ -213,6 +228,7 @@ set_read_enable oe_n_b -active L -port B
 set_chip_enable ce_n_b -active L -port B
 set_data_output q_b -width )" + std::to_string(data_width) + R"( -port B
 )";
+    }
 
     std::string filePath = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp() + "/template.tcl");
     std::ofstream out(filePath);
@@ -228,27 +244,40 @@ set_data_output q_b -width )" + std::to_string(data_width) + R"( -port B
 
 std::string SiliconSmartManager::get_port_list() {
     std::ostringstream ss;
-    ss << "vdd vss clk rst_n ce_n_a we_n_a oe_n_a ";
-
     int addr_width = get_addr_width(cli_option_);
     int data_width = cli_option_.num_data_bits;
 
-    for (int i = 0; i < addr_width; ++i) {
-        ss << "a_a_" << i << " ";
-    }
-    for (int i = 0; i < data_width; ++i) {
-        ss << "d_a_" << i << " ";
-    }
-    for (int i = 0; i < data_width; ++i) {
-        ss << "q_a_" << i << " ";
-    }
+    if (cli_option_.single_port) {
+        ss << "vdd vss clk rst_n ce_n we_n oe_n ";
+        for (int i = 0; i < addr_width; ++i) {
+            ss << "A_" << i << " ";
+        }
+        for (int i = 0; i < data_width; ++i) {
+            ss << "D_" << i << " ";
+        }
+        for (int i = 0; i < data_width; ++i) {
+            ss << "Q_" << i << " ";
+        }
+    } else {
+        ss << "vdd vss clk rst_n ce_n_a we_n_a oe_n_a ";
 
-    ss << "ce_n_b oe_n_b ";
-    for (int i = 0; i < addr_width; ++i) {
-        ss << "a_b_" << i << " ";
-    }
-    for (int i = 0; i < data_width; ++i) {
-        ss << "q_b_" << i << " ";
+        for (int i = 0; i < addr_width; ++i) {
+            ss << "a_a_" << i << " ";
+        }
+        for (int i = 0; i < data_width; ++i) {
+            ss << "d_a_" << i << " ";
+        }
+        for (int i = 0; i < data_width; ++i) {
+            ss << "q_a_" << i << " ";
+        }
+
+        ss << "ce_n_b oe_n_b ";
+        for (int i = 0; i < addr_width; ++i) {
+            ss << "a_b_" << i << " ";
+        }
+        for (int i = 0; i < data_width; ++i) {
+            ss << "q_b_" << i << " ";
+        }
     }
     return ss.str();
 }
@@ -257,8 +286,48 @@ bool SiliconSmartManager::gen_inst() {
     std::string cell_name = "sram_x" + std::to_string(cli_option_.num_wls * 2) 
                             + "x" + std::to_string(cli_option_.num_data_bits) + 
                             "x" + std::to_string(cli_option_.num_banks);
-    std::string content = R"(set_netlist_file [get_location]/netlists/)" + cell_name + 
-    R"(.sp
+    std::string content;
+
+    if (cli_option_.single_port) {
+        content = R"(set_netlist_file [get_location]/netlists/)" + cell_name + R"(.sp
+
+set_cell_type memory
+
+##
+## Pin definitions.
+##
+add_pin rst_n default -input -async
+add_pin A sis_address -input
+add_pin D sis_data -input
+add_pin we_n default -input
+add_pin oe_n default -input
+add_pin ce_n default -input
+add_pin clk default -clock
+add_pin Q sis_data -output
+
+add_forbidden_state {!we_n & !oe_n}
+
+add_pin mem_int default -internal -spice_node {xdata_top/x0_0/x1/x4/x0/q}
+add_pin state0 default -internal -spice_node {xctrl/state[0]} -no_model
+add_pin state1 default -internal -spice_node {xctrl/state[1]} -no_model
+
+set_subckt_ports { )" + get_port_list() + R"( }
+add_table {
+    rst_n clk we_n ce_n oe_n A D   : mem mem_2 iqa state0 state1 : mem mem_2 iqa state0 state1
+    L     -   -    -    -    - -   : -   -     -   -      -      : n   n     n   1      1
+    H     r   L    L    H    L 0/1 : -   -     -   -      -      : 0/1 n     n   n      n
+    H     r   L    L    H    H 0/1 : -   -     -   -      -      : n   0/1   n   n      n
+    H     r   H    L    L    L -   : 0/1 -     -   -      -      : n   n     0/1 n      n
+    H     r   H    L    L    H -   : -   0/1   -   -      -      : n   n     0/1 n      n
+    H     r   -    H    -    - -   : -   -     -   -      -      : n   n     n   n      n
+    H     -   -    -    -    - -   : -   -     -   -      -      : n   n     n   n      n
+}
+add_function Q iqa
+add_function mem_int mem
+
+define_parameters )" + cell_name + R"( { set liberty_blackbox_model 1 })";
+    } else {
+        content = R"(set_netlist_file [get_location]/netlists/)" + cell_name + R"(.sp
 
 set_cell_type memory
 
@@ -314,6 +383,7 @@ add_function mem_int mem
 
 define_parameters )" + cell_name + R"( { set liberty_blackbox_model 1 }
 )" ;
+    }
 
     // Mkdir control directory if it doesn't exist
     std::string control_dir = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp() + "/control");
@@ -336,7 +406,36 @@ define_parameters )" + cell_name + R"( { set liberty_blackbox_model 1 }
     return true;
 }
 
+bool SiliconSmartManager::copy_lib_file() {
+    std::string cell_name = "sram_x" + std::to_string(cli_option_.num_wls * 2) 
+                            + "x" + std::to_string(cli_option_.num_data_bits) + 
+                            "x" + std::to_string(cli_option_.num_banks);
+
+    // Unzip
+    std::string src_path = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp() + "/testcase/models/liberty/cells");
+    std::string cmd = "bash -c 'cd " + src_path + " && gunzip " + cell_name + "_PVT_0P7V_25C.lib.gz'";
+    if (system(cmd.c_str()) != 0) {
+        LOGE << "Failed to unzip library file: " << cell_name << "_PVT_0P7V_25C.lib.gz";
+        return false;
+    }
+
+    // Copy the unzipped .lib file to ./tmp/sis_{timestamp}/netlist/sis_model.lib
+    src_path += "/" + cell_name + "_PVT_0P7V_25C.lib";
+    std::string dst_path = join_path(get_current_dir_name(), "results/" + cell_name + "_" + get_run_timestamp() + "/" + cell_name + ".lib");
+
+    if (!copy_file(src_path, dst_path)) {
+        LOGE << "Failed to copy library file from " << src_path << " to " << dst_path;
+        return false;
+    }
+    return true;
+}
+
 bool SiliconSmartManager::run_siliconsmart() {
+    if (!cli_option_.skip_characterization) {
+        LOGI << "SiliconSmart characterization skipped as per configuration.";
+        return true;
+    }
+
     std::string sis_dir = join_path(get_current_dir_name(), "tmp/sis_" + get_run_timestamp());
 
     // Make ./tmp/sis directory
@@ -437,6 +536,11 @@ bool SiliconSmartManager::run_siliconsmart() {
     int ret = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
     if (ret != 0) {
         LOGE << "SiliconSmart execution failed with exit code: " << ret;
+        return false;
+    }
+
+    if (!copy_lib_file()) {
+        LOGE << "Failed to copy generated .lib file to results directory";
         return false;
     }
 

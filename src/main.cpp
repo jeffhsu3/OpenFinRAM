@@ -47,7 +47,7 @@ int main(int argc, char **argv) {
     LOGI << "Starting OpenFinRAM application";
 
     // Parse CLI options
-    MainCliOptions cli_options = parse_main_cli_options(argc, argv);
+    MainCliOptions cli_options = parseMainCliOptions(argc, argv);
 
     // Generate SPICE netlist
     LOGI << "=== Generating SPICE Netlist ===";
@@ -100,50 +100,6 @@ int main(int argc, char **argv) {
         LOGE << "Layout generation failed!";
         return 1;
     }
-
-    // // ========================================================================
-    // // 讀取 Innovus 產生的 GDS 檔案並添加 Gate polygons
-    // // ========================================================================
-    // LOGI << "========================================================================";
-    // LOGI << "Reading Innovus generated GDS file and adding Gate polygons";
-    // LOGI << "========================================================================";
-    
-    // std::string gds_path = join_path(get_current_dir_name(), "tmp/innovus/ctrl_decode.gds");
-    // LOGI << "Reading GDS file: " << gds_path;
-    
-    // // 讀取 GDS 檔案
-    // gdstk::ErrorCode gds_error_code = gdstk::ErrorCode::NoError;
-    // gdstk::Library gds_lib = gdstk::read_gds(gds_path.c_str(), 0, 1e-2, nullptr, &gds_error_code);
-    
-    // if (gds_error_code == gdstk::ErrorCode::NoError && gds_lib.cell_array.count > 0) {
-    //     LOGI << "Successfully read GDS file";
-    //     LOGI << "Number of cells in library: " << gds_lib.cell_array.count;
-
-    //     add_ctrl_decode_gate_fin_wrappers(gds_lib, g_layer_map);
-        
-    //     // ================================================================
-    //     // 建立 Filler Top 和 Bottom cells
-    //     // ================================================================
-    //     create_and_add_sram_filler_cells(gds_lib, sram_filler_lib, num_wls, g_layer_map);
-
-    //     // ================================================================
-    //     run_sram_gds_integration_and_writeback(
-    //         gds_lib,
-    //         gds_path,
-    //         sram_array,
-    //         filler_cgedge,
-    //         io_colgrp,
-    //         sram_cell_size,
-    //         num_wls,
-    //         num_data_bits,
-    //         addr_width,
-    //         num_banks,
-    //         g_layer_map);
-    // } else {
-    //     LOGW << "Failed to read GDS file or no cells found";
-    // }
-
-    // consolidate_output_artifacts(num_wls, num_data_bits, num_banks);
 
     // // // ========================================================================
     // // // Run LVS (create lvs folder, generate _run_control.svrf, run calibre)
