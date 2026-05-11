@@ -84,7 +84,8 @@ public:
                           int num_ysel,
                           int addr_width,
                           int num_mux,
-                          bool spice_only) const;
+                          bool spice_only,
+                          double col_width) const;
     
     // 產生 global net connect 命令
     std::string generate_global_net_commands() const;

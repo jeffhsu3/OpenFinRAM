@@ -179,8 +179,8 @@ double InnovusTclGenerator::calculate_floorplan_height(double width) const {
         return 0.0;
     }
     
-    // 目標 utilization: 最高 85%
-    const double max_utilization = 0.80;
+    // 目標 utilization: 最高 90%
+    const double max_utilization = 0.90;
     
     // 計算最小高度 = Cell Area / Width
     double min_height = qor_report_.cell_area / width;
@@ -191,13 +191,13 @@ double InnovusTclGenerator::calculate_floorplan_height(double width) const {
     // 計算 utilization
     double utilization = qor_report_.cell_area / (width * aligned_height);
     
-    // 如果 utilization 超過 85%，增加高度
+    // 如果 utilization 超過 90%，增加高度
     if (utilization > max_utilization) {
         LOGI << "Initial utilization " << (utilization * 100.0) 
              << "% exceeds maximum " << (max_utilization * 100.0) 
              << "%, increasing height...";
         
-        // 計算滿足 85% utilization 的目標高度
+        // 計算滿足 90% utilization 的目標高度
         double target_height = qor_report_.cell_area / (width * max_utilization);
         
         // 對齊到 site height
@@ -261,7 +261,8 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
                                            int num_ysel,
                                            int addr_width,
                                            int num_mux,
-                                           bool spice_only) const {
+                                           bool spice_only,
+                                           double col_width) const {
     
     if (!qor_report_.valid) {
         LOGE << "QoR report not valid, cannot generate run.tcl";
@@ -316,6 +317,8 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
 
     // file << "set_dont_touch delay_cell_BUF* true\n\n";
     file << "set_dont_touch [get_cells -hier *] true\n\n";
+
+    file << "setDesignMode -topRoutingLayer M5\n\n";
     
     // ========================================================================
     // 3. Floorplan
@@ -336,10 +339,34 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
     // 6. Physical Pins - 根據固定規則計算位置
     // ========================================================================
     if (!spice_only) {
-        double colgrp_width = (width + 0.054 * 2) / num_mux;
+        // Pin to place
+        // clk, rst_n, ce_n, we_n, oe_n, A[]
+        int total_ctrl_pin = 5 + addr_width;
+        double ctrl_pin_width = 0.024;
+        double ctrl_pin_spacing = 0.072;
+        double ctrl_pin_total_height = ctrl_pin_width * total_ctrl_pin + ctrl_pin_spacing * (total_ctrl_pin - 1);
+
+        // Calculate the starting point
+        double start_y = (height - ctrl_pin_total_height) / 2;
+
+        // Adjust to M4 routing track (start y must be 0.024 * 2n, n=1,2,...)
+        start_y = std::ceil(start_y / (0.024 * 2)) * (0.024 * 2);
+
+        // Create physical pins for control signals and address pins using M4 (layer 4)
+        std::vector<std::string> ctrl_and_addr_pins = {"clk", "rst_n", "ce_n", "we_n", "oe_n"};
+        for (int i = 0; i < addr_width; ++i) {
+            ctrl_and_addr_pins.push_back("A[" + std::to_string(i) + "]");
+        }
+        for (size_t i = 0; i < ctrl_and_addr_pins.size(); ++i) {
+            double y_pos = start_y + i * (ctrl_pin_width + ctrl_pin_spacing);
+            file << "createPhysicalPin " << ctrl_and_addr_pins[i] << " -layer 4"
+                 << " -rect 0.0 " << y_pos << " 0.20 " << (y_pos + ctrl_pin_width) << "\n";
+        }
+
+
         for (int mux = 0; mux < num_mux; ++mux) {
             const double pin_width = 0.018;
-            double x_pos = 0.207 + mux * (colgrp_width);  // WLT 第一根位置
+            double x_pos = 0.207 + mux * (col_width + 0.027);  // WLT 第一根位置
             
             // WLT pins
             file << "# WLT (Word Line Top) pins\n";
@@ -383,11 +410,11 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             }
             file << "\n";
 
-            // oe_n pin
-            if (mux == 0) {
-                file << "createPhysicalPin oe_n -layer 3"
-                    << " -rect " << x_pos << " 0.05 " << x_pos + pin_width << " " << height - 0.05 << "\n\n";
-            }
+            // // oe_n pin
+            // if (mux == 0) {
+            //     file << "createPhysicalPin oe_n -layer 3"
+            //         << " -rect " << x_pos << " 0.05 " << x_pos + pin_width << " " << height - 0.05 << "\n\n";
+            // }
             
             // wrena, saprechn, sae, wrenan (跟 yselt 最右邊 spacing 0.255, 兩根 spacing 0.018)
             x_pos += 0.273 - 0.036;  // 減去上面多加的 spacing
@@ -432,8 +459,8 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
 
                     x_left = x_pos;
                     x_right = x_pos + pin_width;
-                    file << "createPhysicalPin A[" << i << "] -layer 3"
-                        << " -rect " << x_left << " 0.05 " << x_right << " " << height - 0.05 << "\n";
+                    // file << "createPhysicalPin A[" << i << "] -layer 3"
+                    //     << " -rect " << x_left << " 0.05 " << x_right << " " << height - 0.05 << "\n";
                     x_pos += 0.036;
                 }
                 file << "\n";
@@ -444,8 +471,8 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
                 for (const char* sig : ctrl_signals_2) {
                     x_left = x_pos;
                     x_right = x_pos + pin_width;
-                    file << "createPhysicalPin " << sig << " -layer 3"
-                        << " -rect " << x_left << " 0.05 " << x_right << " " << height - 0.05 << "\n";
+                    // file << "createPhysicalPin " << sig << " -layer 3"
+                    //     << " -rect " << x_left << " 0.05 " << x_right << " " << height - 0.05 << "\n";
                     x_pos += 0.036;
                 }
                 file << "\n";
@@ -511,7 +538,7 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             std::vector<PowerStripe> power_stripes;
             
             // VDD
-            x_pos = 0.063 + mux * (colgrp_width);
+            x_pos = 0.063 + mux * (col_width + 0.027);
             x_right = x_pos + pin_width;
             if (mux == 0) {
                 file << "createPGPin VDD -geom M3 " << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "\n";  
@@ -541,7 +568,7 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
 
             // VSS
-            x_pos = 0.099 + mux * (colgrp_width);
+            x_pos = 0.099 + mux * (col_width + 0.027);
             x_right = x_pos + pin_width;
             if (mux == 0) {
                 file << "createPGPin VSS -geom M3 " << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "\n";
@@ -774,7 +801,7 @@ bool InnovusTclGenerator::run_innovus(const std::string& tcl_file,
         "set_analysis_view -setup {typical_view} -hold {typical_view}\n";
 
     const std::string timing_sdc_content =
-        "create_clock -name clk -period 10.0 [get_ports clk]\n";
+        "create_clock -name clk -period 1.0 [get_ports clk]\n";
 
     if (!write_file_if_missing(default_globals_path, default_globals_content)) {
         LOGE << "Failed to create " << default_globals_path;

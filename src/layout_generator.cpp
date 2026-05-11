@@ -1255,10 +1255,11 @@ bool LayoutGenerator::create_muxed_colgrp() {
     LOGI << "  stacked_colgrp size: " << stacked_width << " x " << stacked_height;
 
     // 建立新的 Cell
-    char muxed_name[96];
-    snprintf(muxed_name, sizeof(muxed_name), "stacked_colgrp_x%dx%lux%lu", cli_options_.num_wls, cli_options_.num_data_bits / 2, cli_options_.num_banks);
+    // char muxed_name[96];
+    // snprintf(muxed_name, sizeof(muxed_name), "stacked_colgrp_x%dx%lux%lu", cli_options_.num_wls, cli_options_.num_data_bits / 2, cli_options_.num_banks);
+    std::string muxed_name = "stacked_colgrp_x" + std::to_string(cli_options_.num_wls) + "x" + std::to_string(cli_options_.num_data_bits / 2) + "x" + std::to_string(cli_options_.num_banks);
     gdstk::Cell* muxed_cell = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
-    muxed_cell->init(muxed_name);
+    muxed_cell->init(muxed_name.c_str());
 
     // 水平堆疊 stacked_colgrp
     gdstk::Reference* ref = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
@@ -1374,6 +1375,11 @@ bool LayoutGenerator::add_ctrl_decode_gate_fin_wrappers() {
     }
 
     LOGI << "Working with cell: " << ctrl_decode_cell->name;
+
+    // Reduce the label size
+    for (int i = 0; i < ctrl_decode_cell->label_array.count; ++i) {
+        ctrl_decode_cell->label_array[i]->magnification = 0.02;
+    }
 
     OpenFinRAM::CellSize cell_size = OpenFinRAM::get_cell_size(ctrl_decode_cell, layer_map_);
 
@@ -1775,7 +1781,7 @@ bool LayoutGenerator::create_and_add_sram_filler_cells() {
 
 bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
     int test_num_bits = cli_options_.num_data_bits / 2;
-    int num_stacked_rows = cli_options_.num_data_bits / 2;
+    int num_stacked_rows = cli_options_.num_data_bits;
     int addr_width = get_addr_width(cli_options_);
     int num_banks = cli_options_.num_banks;
 
@@ -1797,8 +1803,9 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
         
         // 尋找 stacked_colgrp cell
         gdstk::Cell* stacked_colgrp_cell = nullptr;
+        std::string expected_name = "stacked_colgrp_x" + std::to_string(cli_options_.num_wls) + "x" + std::to_string(cli_options_.num_data_bits / 2) + "x" + std::to_string(cli_options_.num_banks);
         for (uint64_t i = 0; i < sram_array_lib.cell_array.count; i++) {
-            if (strncmp(sram_array_lib.cell_array[i]->name, "stacked_colgrp_x", 16) == 0) {
+            if (strcmp(sram_array_lib.cell_array[i]->name, expected_name.c_str()) == 0) {
                 stacked_colgrp_cell = sram_array_lib.cell_array[i];
                 LOGI << "Found stacked_colgrp cell: " << stacked_colgrp_cell->name;
                 break;
@@ -1942,7 +1949,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                 LOGI << "Successfully copied stacked_colgrp and all dependencies";
             
                 // 創建新的 SRAM cell
-                std::string sram_cell_name_str = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows);
+                std::string sram_cell_name_str = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows) + "x" + std::to_string(num_banks);
                 const char* sram_cell_name = sram_cell_name_str.c_str();
                 
                 // 先檢查是否已存在
@@ -2038,11 +2045,13 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                 LOGI << "  data_bits (num_stacked_rows) = " << num_stacked_rows;
                 LOGI << "========================================================================";
                 
-                // 取得 M3 pin layer 用於添加 pins
+                // 取得 M4 pin layer 用於添加 pins
                 const OpenFinRAM::LayerDef* sram_m3_pin_layer = layer_map_.get_layer("M3", OpenFinRAM::LayerPurpose::Pin);
+                const OpenFinRAM::LayerDef* sram_m4_pin_layer = layer_map_.get_layer("M4", OpenFinRAM::LayerPurpose::Pin);
                 
-                if (sram_m3_pin_layer != nullptr) {
-                    gdstk::Tag pin_tag = gdstk::make_tag(sram_m3_pin_layer->layer_number, sram_m3_pin_layer->datatype);
+                if (sram_m4_pin_layer != nullptr) {
+                    gdstk::Tag pin_tag_m3 = gdstk::make_tag(sram_m3_pin_layer->layer_number, sram_m3_pin_layer->datatype);
+                    gdstk::Tag pin_tag_m4 = gdstk::make_tag(sram_m4_pin_layer->layer_number, sram_m4_pin_layer->datatype);
                     
                     // 首先，使用 flatten 將 sram_cell 展平以獲取所有 labels 的絕對位置
                     // 創建一個臨時的 sram_cell 副本用於 flatten
@@ -2092,7 +2101,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* vdd_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         vdd_pin->init("vdd");
                         vdd_pin->origin = {fixed_pins[0].x, fixed_pins[0].y};
-                        vdd_pin->tag = pin_tag;
+                        vdd_pin->tag = pin_tag_m3;
+                        vdd_pin->magnification = 0.02;
                         sram_cell->label_array.append(vdd_pin);
                         LOGI << "  Added vdd pin at (" << fixed_pins[0].x << ", " << fixed_pins[0].y << ")";
                     } else {
@@ -2100,7 +2110,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* vdd_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         vdd_pin->init("vdd");
                         vdd_pin->origin = {0.125, y_offset / 2.0};
-                        vdd_pin->tag = pin_tag;
+                        vdd_pin->tag = pin_tag_m3;
+                        vdd_pin->magnification = 0.02;
                         sram_cell->label_array.append(vdd_pin);
                         LOGW << "  VDD not found, using default position";
                     }
@@ -2110,7 +2121,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* vss_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         vss_pin->init("vss");
                         vss_pin->origin = {fixed_pins[1].x, fixed_pins[1].y};
-                        vss_pin->tag = pin_tag;
+                        vss_pin->tag = pin_tag_m3;
+                        vss_pin->magnification = 0.02;
                         sram_cell->label_array.append(vss_pin);
                         LOGI << "  Added vss pin at (" << fixed_pins[1].x << ", " << fixed_pins[1].y << ")";
                     } else {
@@ -2118,7 +2130,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* vss_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         vss_pin->init("vss");
                         vss_pin->origin = {0.162, y_offset / 2.0};
-                        vss_pin->tag = pin_tag;
+                        vss_pin->tag = pin_tag_m3;
+                        vss_pin->magnification = 0.02;
                         sram_cell->label_array.append(vss_pin);
                         LOGW << "  VSS not found, using default position";
                     }
@@ -2175,7 +2188,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                             LOGW << "  " << ctrl_pins[j].search_name << " not found, using default position";
                         }
                         
-                        ctrl_pin->tag = pin_tag;
+                        ctrl_pin->tag = pin_tag_m4;
+                        ctrl_pin->magnification = 0.02;
                         sram_cell->label_array.append(ctrl_pin);
                         LOGI << "  Added " << ctrl_pins[j].pin_name << " pin at (" 
                                 << ctrl_pin->origin.x << ", " << ctrl_pin->origin.y << ")";
@@ -2211,7 +2225,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* addr_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         addr_pin->init(addr_name);
                         addr_pin->origin = {ax, ay};
-                        addr_pin->tag = pin_tag;
+                        addr_pin->tag = pin_tag_m4;
+                        addr_pin->magnification = 0.02;
                         sram_cell->label_array.append(addr_pin);
                         
                         if (found) {
@@ -2327,7 +2342,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* d_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         d_pin->init(d_name);
                         d_pin->origin = {d_pins[d].x, d_pins[d].y};
-                        d_pin->tag = pin_tag;
+                        d_pin->tag = pin_tag_m3;
+                        d_pin->magnification = 0.02;
                         sram_cell->label_array.append(d_pin);
                         
                         if (d_pins[d].found) {
@@ -2346,7 +2362,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* q_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         q_pin->init(q_name);
                         q_pin->origin = {q_pins[q].x, q_pins[q].y};
-                        q_pin->tag = pin_tag;
+                        q_pin->tag = pin_tag_m3;
+                        q_pin->magnification = 0.02;
                         sram_cell->label_array.append(q_pin);
                         
                         if (q_pins[q].found) {

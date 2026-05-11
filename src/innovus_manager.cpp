@@ -39,8 +39,15 @@ bool InnovusManager::run_innovus_flow() {
     int addr_width = std::ceil(std::log2(cli_options_.num_wls)) 
                    + std::ceil(std::log2(cli_options_.num_banks))
                    + 1 + 2; // +1 for top/bottom, +2 for ysel
-    double sram_width = 10.0; // Tmp value
     
+    double sram_width = 10.0;
+    if (cli_options_.single_port) {
+        //           dummy fin   iocolgrp   bitcell/dummy/tapcell
+        sram_width = (0.108 * 2 + 2.376    + 0.108 * ((cli_options_.num_wls + 3) * 2)) * cli_options_.num_banks - 0.108;
+    } else {
+        sram_width = 15.0; // Tmp value for dual-port
+    }
+
     if (tcl_generator.generate_run_tcl(sram_width, 
         0.0, 
         output_tcl_path, 
@@ -49,7 +56,8 @@ bool InnovusManager::run_innovus_flow() {
         num_ysel, 
         addr_width, 
         cli_options_.num_banks,
-        cli_options_.spice_only)) {
+        cli_options_.spice_only,
+        sram_width / cli_options_.num_banks)) {
         LOGI << "run.tcl generated successfully at: " << output_tcl_path;
     } else {
         LOGE << "Failed to generate run.tcl";
