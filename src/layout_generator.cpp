@@ -1784,6 +1784,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
     int num_stacked_rows = cli_options_.num_data_bits;
     int addr_width = get_addr_width(cli_options_);
     int num_banks = cli_options_.num_banks;
+    std::string sram_cell_name_str = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows) + "x" + std::to_string(num_banks);
 
     // 創建 SRAM cell：組合 stacked_colgrp + ctrl_decode_with_filler + stacked_colgrp
     // ================================================================
@@ -1949,7 +1950,6 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                 LOGI << "Successfully copied stacked_colgrp and all dependencies";
             
                 // 創建新的 SRAM cell
-                std::string sram_cell_name_str = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows) + "x" + std::to_string(num_banks);
                 const char* sram_cell_name = sram_cell_name_str.c_str();
                 
                 // 先檢查是否已存在
@@ -3192,7 +3192,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
     
     // 寫回 GDS 檔案（在釋放 sram_array_lib 之前）
     LOGI << "Writing modified GDS back to file...";
-    std::string output_gds_path = join_path(get_current_dir_name(), "tmp/innovus_" + get_run_timestamp() + "/ctrl_decode.gds.tmp");
+    std::string output_gds_path = join_path(get_current_dir_name(), "results/" + sram_cell_name_str + "_" + get_run_timestamp() + "/" + sram_cell_name_str + ".gds");
+    LOGD << "Output GDS to: " << output_gds_path;
     gdstk::ErrorCode write_error = ctrl_decode_gds.write_gds(output_gds_path.c_str(), 0, NULL);
     
     if (write_error == gdstk::ErrorCode::NoError) {
