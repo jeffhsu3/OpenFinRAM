@@ -120,7 +120,7 @@ bool export_lef(const std::string& project_root,
                              " -strmFile " + gds_path +
                              " -logFile ./log_read_gds.txt"
                              " -snapToGrid -attachTechFileOfLib asap7_TechLib"
-                             " -layerMap " + join_path(cur_path, "tech/TechLib/asap7_TechLib.layermap") + "'";
+                             " -layerMap " + join_path(cur_path, "tech/TechLib/asap7_TechLib.layermap") + "' > /dev/null 2>&1";
 
     LOGD << "Running command: " << strmin_cmd;
 
@@ -147,7 +147,7 @@ bool export_lef(const std::string& project_root,
     //     *log_path = abstract_log_path;
     // }
 
-    std::string abstract_cmd = "tcsh -c 'abstract -nogui -replay export_lef.il -log my_abstract.log'";
+    std::string abstract_cmd = "tcsh -c 'abstract -nogui -replay export_lef.il -log my_abstract.log' > /dev/null 2>&1";
 
     int abstract_status = std::system(abstract_cmd.c_str());
     if (abstract_status != 0) {
