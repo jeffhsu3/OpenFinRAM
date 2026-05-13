@@ -481,7 +481,7 @@ bool SiliconSmartManager::run_siliconsmart() {
     }
 
     // Run siliconsmart characterization
-    std::string cmd = "cd " + sis_dir + "; siliconsmart ./run.tcl";
+    std::string cmd = "cd " + sis_dir + "; siliconsmart ./run.tcl >& /dev/null";
     LOGI << "Running SiliconSmart with command: tcsh -c '" << cmd << "'";
 
     pid_t child_pid = fork();
