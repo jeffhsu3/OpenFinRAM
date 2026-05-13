@@ -86,6 +86,7 @@ std::string SynthesisManager::generate_tcl_content() const {
         << "set_dont_touch $DELAY_CELLS true\n\n"
 
         << "set_dont_use asap7sc7p5t_AO_RVT_TT/AOI211xp5_ASAP7_75t_R\n"
+        << "set_dont_use asap7sc7p5t_OA_RVT_TT/OAI31xp33_ASAP7_75t_R\n"
         << "set_dont_use asap7sc7p5t_OA_RVT_TT/OAI32xp33_ASAP7_75t_R\n"
         << "set_dont_use asap7sc7p5t_OA_RVT_TT/OAI221xp5_ASAP7_75t_R\n\n";
 
