@@ -688,7 +688,7 @@ bool LayoutGenerator::create_colgrp() {
     
     // 建立 cell 名稱: colgrp_x{num_wls}x{num_data_bits/2}
     char colgrp_name[64];
-    snprintf(colgrp_name, sizeof(colgrp_name), "colgrp_x%dx%d", cli_options_.num_wls, cli_options_.num_data_bits / 2);
+    snprintf(colgrp_name, sizeof(colgrp_name), "colgrp_x%dx%d", cli_options_.num_wls, cli_options_.num_data_bits);
     
     // 建立新的 Cell
     gdstk::Cell* colgrp_cell = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
@@ -1041,7 +1041,7 @@ bool LayoutGenerator::create_stacked_colgrp() {
     
     // 建立新的 Cell
     char stacked_name[64];
-    snprintf(stacked_name, sizeof(stacked_name), "stacked_colgrp_x%dx%lu", cli_options_.num_wls, cli_options_.num_data_bits / 2);
+    snprintf(stacked_name, sizeof(stacked_name), "stacked_colgrp_x%dx%lu", cli_options_.num_wls * 2, cli_options_.num_data_bits / 2);
     gdstk::Cell* stacked_cell = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
     stacked_cell->init(stacked_name);
     
@@ -1256,8 +1256,8 @@ bool LayoutGenerator::create_muxed_colgrp() {
 
     // 建立新的 Cell
     // char muxed_name[96];
-    // snprintf(muxed_name, sizeof(muxed_name), "stacked_colgrp_x%dx%lux%lu", cli_options_.num_wls, cli_options_.num_data_bits / 2, cli_options_.num_banks);
-    std::string muxed_name = "stacked_colgrp_x" + std::to_string(cli_options_.num_wls) + "x" + std::to_string(cli_options_.num_data_bits / 2) + "x" + std::to_string(cli_options_.num_banks);
+    // snprintf(muxed_name, sizeof(muxed_name), "stacked_colgrp_x%dx%lux%lu", cli_options_.num_wls, cli_options_.num_data_bits, cli_options_.num_banks);
+    std::string muxed_name = "stacked_colgrp_x" + std::to_string(cli_options_.num_wls * 2) + "x" + std::to_string(cli_options_.num_data_bits / 2) + "x" + std::to_string(cli_options_.num_banks);
     gdstk::Cell* muxed_cell = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
     muxed_cell->init(muxed_name.c_str());
 
@@ -1298,7 +1298,8 @@ bool LayoutGenerator::write_layout() {
     gdstk::Library output_sram_lib = {};
     output_sram_lib.init("SRAM_LIB", sram_lib.unit, sram_lib.precision);
 
-    const char* sram_output = "sram_array_test.gds";
+    std::string sram_output_str = "tmp/sram_array_test_" + get_run_timestamp() + ".gds";
+    const char* sram_output = sram_output_str.c_str();
     LOGD << "Writing SRAM library to: " << sram_output;
     
     add_cell_with_deps(output_sram_lib, sram_cells_.bitcell);
@@ -1379,6 +1380,7 @@ bool LayoutGenerator::add_ctrl_decode_gate_fin_wrappers() {
     // Reduce the label size
     for (int i = 0; i < ctrl_decode_cell->label_array.count; ++i) {
         ctrl_decode_cell->label_array[i]->magnification = 0.02;
+        ctrl_decode_cell->label_array[i]->rotation = M_PI_2;
     }
 
     OpenFinRAM::CellSize cell_size = OpenFinRAM::get_cell_size(ctrl_decode_cell, layer_map_);
@@ -1780,11 +1782,11 @@ bool LayoutGenerator::create_and_add_sram_filler_cells() {
 }
 
 bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
-    int test_num_bits = cli_options_.num_data_bits / 2;
-    int num_stacked_rows = cli_options_.num_data_bits;
+    int num_wls = cli_options_.num_wls;
+    int num_data_bits = cli_options_.num_data_bits;
     int addr_width = get_addr_width(cli_options_);
     int num_banks = cli_options_.num_banks;
-    std::string sram_cell_name_str = "sram_x" + std::to_string(test_num_bits * 2) + "x" + std::to_string(num_stacked_rows) + "x" + std::to_string(num_banks);
+    std::string sram_cell_name_str = "sram_x" + std::to_string(num_wls * 2) + "x" + std::to_string(num_data_bits) + "x" + std::to_string(num_banks);
 
     // 創建 SRAM cell：組合 stacked_colgrp + ctrl_decode_with_filler + stacked_colgrp
     // ================================================================
@@ -1793,7 +1795,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
     LOGI << "========================================================================";
     
     // 讀取包含 stacked_colgrp 的 GDS 檔案
-    const char* sram_array_gds_path = "sram_array_test.gds";
+    std::string sram_array_gds_path_str = "tmp/sram_array_test_" + get_run_timestamp() + ".gds";
+    const char* sram_array_gds_path = sram_array_gds_path_str.c_str();
     LOGI << "Reading SRAM array GDS file: " << sram_array_gds_path;
     
     gdstk::ErrorCode sram_array_error = gdstk::ErrorCode::NoError;
@@ -1804,7 +1807,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
         
         // 尋找 stacked_colgrp cell
         gdstk::Cell* stacked_colgrp_cell = nullptr;
-        std::string expected_name = "stacked_colgrp_x" + std::to_string(cli_options_.num_wls) + "x" + std::to_string(cli_options_.num_data_bits / 2) + "x" + std::to_string(cli_options_.num_banks);
+        std::string expected_name = "stacked_colgrp_x" + std::to_string(cli_options_.num_wls * 2) + "x" + std::to_string(cli_options_.num_data_bits / 2) + "x" + std::to_string(cli_options_.num_banks);
         for (uint64_t i = 0; i < sram_array_lib.cell_array.count; i++) {
             if (strcmp(sram_array_lib.cell_array[i]->name, expected_name.c_str()) == 0) {
                 stacked_colgrp_cell = sram_array_lib.cell_array[i];
@@ -1852,13 +1855,13 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
             ctrl_filler_cell = ctrl_decode_gds.get_cell("ctrl_decode_with_filler");
             
             // 取得 filler_top 和 filler_bottom 的尺寸
-            // 名稱格式: FILLER_{test_num_bits*2}x2_top/bottom
+            // 名稱格式: FILLER_{num_data_bits}x2_top/bottom
             char filler_top_name[128];
             char filler_bottom_name[128];
             snprintf(filler_top_name, sizeof(filler_top_name), "FILLER_%lux%lu_top", 
-                        (unsigned long)(test_num_bits * 2), 2UL);
+                        (unsigned long)(num_data_bits), 2UL);
             snprintf(filler_bottom_name, sizeof(filler_bottom_name), "FILLER_%lux%lu_bottom", 
-                        (unsigned long)(test_num_bits * 2), 2UL);
+                        (unsigned long)(num_data_bits), 2UL);
             
             LOGI << "Looking for filler cells:";
             LOGI << "  Top: " << filler_top_name;
@@ -2037,21 +2040,23 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                 
                 // ================================================================
                 // 6. 添加 SRAM Top Level Pins
-                // Pins: vdd, vss, clk, rst_n, ce_n, we_n, A[addr_width-1:0], D[num_stacked_rows-1:0], Q[num_stacked_rows-1:0]
+                // Pins: vdd, vss, clk, rst_n, ce_n, we_n, A[addr_width-1:0], D[num_data_bits-1:0], Q[num_data_bits-1:0]
                 // ================================================================
                 LOGI << "========================================================================";
                 LOGI << "Adding SRAM Top Level Pins";
                 LOGI << "  addr_width = " << addr_width;
-                LOGI << "  data_bits (num_stacked_rows) = " << num_stacked_rows;
+                LOGI << "  data_bits (num_data_bits) = " << num_data_bits;
                 LOGI << "========================================================================";
                 
                 // 取得 M4 pin layer 用於添加 pins
                 const OpenFinRAM::LayerDef* sram_m3_pin_layer = layer_map_.get_layer("M3", OpenFinRAM::LayerPurpose::Pin);
                 const OpenFinRAM::LayerDef* sram_m4_pin_layer = layer_map_.get_layer("M4", OpenFinRAM::LayerPurpose::Pin);
+                const OpenFinRAM::LayerDef* sram_m5_pin_layer = layer_map_.get_layer("M5", OpenFinRAM::LayerPurpose::Pin);
                 
                 if (sram_m4_pin_layer != nullptr) {
                     gdstk::Tag pin_tag_m3 = gdstk::make_tag(sram_m3_pin_layer->layer_number, sram_m3_pin_layer->datatype);
                     gdstk::Tag pin_tag_m4 = gdstk::make_tag(sram_m4_pin_layer->layer_number, sram_m4_pin_layer->datatype);
+                    gdstk::Tag pin_tag_m5 = gdstk::make_tag(sram_m5_pin_layer->layer_number, sram_m4_pin_layer->datatype);
                     
                     // 首先，使用 flatten 將 sram_cell 展平以獲取所有 labels 的絕對位置
                     // 創建一個臨時的 sram_cell 副本用於 flatten
@@ -2148,10 +2153,13 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                     
                     CtrlPinInfo ctrl_pins[] = {
                         {"clk", "clk", 0.0, 0.0, false},
-                        {"rst_n", "rst_n", 0.0, 0.0, false},
                         {"ce_n", "ce_n", 0.0, 0.0, false},
                         {"oe_n", "oe_n", 0.0, 0.0, false},
-                        {"we_n", "we_n", 0.0, 0.0, false}
+                        {"we_n", "we_n", 0.0, 0.0, false},
+                        {"sdel[0]", "sdel[0]", 0.0, 0.0, false},
+                        {"sdel[1]", "sdel[1]", 0.0, 0.0, false},
+                        {"sdel[2]", "sdel[2]", 0.0, 0.0, false},
+                        {"sdel[3]", "sdel[3]", 0.0, 0.0, false}
                     };
                     
                     // 搜尋 ctrl pins
@@ -2159,7 +2167,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* label = temp_sram->label_array[i];
                         if (label->text == nullptr) continue;
                         
-                        for (int j = 0; j < 5; ++j) {
+                        for (int j = 0; j < 8; ++j) {
                             if (!ctrl_pins[j].found && strcasecmp(label->text, ctrl_pins[j].search_name) == 0) {
                                 ctrl_pins[j].x = label->origin.x;
                                 ctrl_pins[j].y = label->origin.y;
@@ -2176,7 +2184,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                     double ctrl_pin_y_base = y_offset / 2.0;  // 預設 y 基準位置
                     double ctrl_pin_spacing = 0.05;
                     
-                    for (int j = 0; j < 5; ++j) {
+                    for (int j = 0; j < 8; ++j) {
                         gdstk::Label* ctrl_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         ctrl_pin->init(ctrl_pins[j].pin_name);
                         
@@ -2188,7 +2196,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                             LOGW << "  " << ctrl_pins[j].search_name << " not found, using default position";
                         }
                         
-                        ctrl_pin->tag = pin_tag_m4;
+                        ctrl_pin->tag = pin_tag_m5;
                         ctrl_pin->magnification = 0.02;
                         sram_cell->label_array.append(ctrl_pin);
                         LOGI << "  Added " << ctrl_pins[j].pin_name << " pin at (" 
@@ -2225,7 +2233,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* addr_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         addr_pin->init(addr_name);
                         addr_pin->origin = {ax, ay};
-                        addr_pin->tag = pin_tag_m4;
+                        addr_pin->tag = pin_tag_m5;
                         addr_pin->magnification = 0.02;
                         sram_cell->label_array.append(addr_pin);
                         
@@ -2237,18 +2245,18 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                     }
                     
                     // ================================================================
-                    // 添加 Data Input/Output pins: D[0] to D[num_stacked_rows-1], Q[0] to Q[num_stacked_rows-1]
+                    // 添加 Data Input/Output pins: D[0] to D[num_data_bits-1], Q[0] to Q[num_data_bits-1]
                     // 
-                    // 由於設計使用兩個 stacked_colgrp（底部和頂部），每個都有 D[0:num_stacked_rows/2-1] 和 Q[0:num_stacked_rows/2-1]
+                    // 由於設計使用兩個 stacked_colgrp（底部和頂部），每個都有 D[0:num_data_bits/2-1] 和 Q[0:num_data_bits/2-1]
                     // 需要區分它們：
                     // - 底部 stacked_colgrp 的 D[i]/Q[i] → 對應 top cell 的 D[i]/Q[i]
-                    // - 頂部 stacked_colgrp 的 D[i]/Q[i] → 對應 top cell 的 D[i+num_stacked_rows/2]/Q[i+num_stacked_rows/2]
+                    // - 頂部 stacked_colgrp 的 D[i]/Q[i] → 對應 top cell 的 D[i+num_data_bits/2]/Q[i+num_data_bits/2]
                     // 
                     // 使用 y 座標來區分：ctrl_decode 的 y 位置作為分界線
                     // ================================================================
                     
-                    uint64_t total_data_bits = num_stacked_rows;
-                    uint64_t half_data_bits = num_stacked_rows / 2;
+                    uint64_t total_data_bits = num_data_bits;
+                    uint64_t half_data_bits = num_data_bits / 2;
                     LOGI << "  Adding Data pins: D[0:" << (total_data_bits - 1) << "] and Q[0:" << (total_data_bits - 1) << "]";
                     LOGI << "    Bottom stacked_colgrp: D[0:" << (half_data_bits - 1) << "], Q[0:" << (half_data_bits - 1) << "]";
                     LOGI << "    Top stacked_colgrp: D[" << half_data_bits << ":" << (total_data_bits - 1) << "], Q[" << half_data_bits << ":" << (total_data_bits - 1) << "]";
@@ -2342,7 +2350,12 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* d_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         d_pin->init(d_name);
                         d_pin->origin = {d_pins[d].x, d_pins[d].y};
-                        d_pin->tag = pin_tag_m3;
+                        if (cli_options_.num_banks >= 2) {
+                            d_pin->tag = pin_tag_m4;
+                        } else {
+                            d_pin->tag = pin_tag_m3;
+                        }
+                        
                         d_pin->magnification = 0.02;
                         sram_cell->label_array.append(d_pin);
                         
@@ -2362,7 +2375,12 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* q_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         q_pin->init(q_name);
                         q_pin->origin = {q_pins[q].x, q_pins[q].y};
-                        q_pin->tag = pin_tag_m3;
+                        if (cli_options_.num_banks >= 2) {
+                            q_pin->tag = pin_tag_m4;
+                        } else {
+                            q_pin->tag = pin_tag_m3;
+                        }
+                        
                         q_pin->magnification = 0.02;
                         sram_cell->label_array.append(q_pin);
                         
@@ -2523,7 +2541,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                                 add_x_left(vdd_via_xs, right_array_x_start + array_size.width - vdd_x_in_dummy + 0.064 - power_via_width / 2.0);
 
                                 // 左側 array 右邊 dummy (sramcol 右側)
-                                const double left_array_right_dummy_x = left_array_x_start + test_num_bits * cell_width;
+                                const double left_array_right_dummy_x = left_array_x_start + num_wls * cell_width;
                                 add_x_left(vss_via_xs, left_array_right_dummy_x + vss_x_in_dummy - 0.0195 - power_via_width / 2.0 + dummy_width);
                                 add_x_left(vdd_via_xs, left_array_right_dummy_x + vdd_x_in_dummy - 0.064 - power_via_width / 2.0 + 0.198);
 
@@ -2720,7 +2738,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                             auto add_power_m4_v3_in_region = [&](double region_y_min, double region_y_max, const char* region_name) {
                                 LOGI << "  Adding VDD/VSS M4/V3 in " << region_name
                                         << " region y=[" << region_y_min << ", " << region_y_max << "]";
-                                const uint64_t rows_per_region = num_stacked_rows / 2;
+                                const uint64_t rows_per_region = num_data_bits / 2;
                                 const double row_pitch = (rows_per_region > 0) ? (stacked_size.height / rows_per_region) : 1.08;
 
                                 auto pick_label_in_row = [&](const char* target, double row_min, double row_max, double row_center) -> const PowerLabel* {
@@ -3020,7 +3038,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
 
                                 auto add_dq_pair_in_region = [&](double region_y_min, double region_y_max, const char* region_name) {
                                     (void)region_name;
-                                    const uint64_t rows_per_region = num_stacked_rows / 2;
+                                    const uint64_t rows_per_region = num_data_bits / 2;
                                     const double row_pitch = (rows_per_region > 0) ? (stacked_size.height / rows_per_region) : 1.08;
 
                                     for (uint64_t row = 0; row < rows_per_region; ++row) {

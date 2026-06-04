@@ -199,6 +199,8 @@ bool SiliconSmartManager::gen_template() {
         content = R"(set_memory_type single_port_ram
 set_memory_name )" + cell_name + R"(
 
+set_extramargin_adjustment_mode ON
+
 create_readwrite_port A
 set_clock clk -active r -port A
 set_address_bus A -width )" + std::to_string(addr_width) + R"( -port A
@@ -206,7 +208,10 @@ set_data_bus D -width )" + std::to_string(data_width) + R"( -port A
 set_write_enable we_n -active L -port A
 set_read_enable oe_n -active L -port A
 set_chip_enable ce_n -active L -port A
-set_data_output Q -width )" + std::to_string(data_width) + R"( -port A)";
+set_data_output Q -width )" + std::to_string(data_width) + R"( -port A
+set_extramargin_adjustment sdel -width 4 -port A
+
+)";
     } else {
         content = R"(set_memory_type multi_port_ram
 set_memory_name )" + cell_name + R"(
@@ -248,7 +253,7 @@ std::string SiliconSmartManager::get_port_list() {
     int data_width = cli_option_.num_data_bits;
 
     if (cli_option_.single_port) {
-        ss << "vdd vss clk rst_n ce_n we_n oe_n ";
+        ss << "vdd vss clk sdel_0 sdel_1 sdel_2 sdel_3 ce_n we_n oe_n ";
         for (int i = 0; i < addr_width; ++i) {
             ss << "A_" << i << " ";
         }
@@ -296,7 +301,10 @@ set_cell_type memory
 ##
 ## Pin definitions.
 ##
-add_pin rst_n default -input -async
+add_pin sdel_0 default -input
+add_pin sdel_1 default -input
+add_pin sdel_2 default -input
+add_pin sdel_3 default -input
 add_pin A sis_address -input
 add_pin D sis_data -input
 add_pin we_n default -input
@@ -308,19 +316,19 @@ add_pin Q sis_data -output
 add_forbidden_state {!we_n & !oe_n}
 
 add_pin mem_int default -internal -spice_node {xdata_top/x0_0/x1/x4/x0/q}
-add_pin state0 default -internal -spice_node {xctrl/state[0]} -no_model
-add_pin state1 default -internal -spice_node {xctrl/state[1]} -no_model
+
+set_pins_to_bus_map -pins {sdel_0 sdel_1 sdel_2 sdel_3} -bus sdel
 
 set_subckt_ports { )" + get_port_list() + R"( }
 add_table {
-    rst_n clk we_n ce_n oe_n A D   : mem mem_2 iqa state0 state1 : mem mem_2 iqa state0 state1
-    L     -   -    -    -    - -   : -   -     -   -      -      : n   n     n   1      1
-    H     r   L    L    H    L 0/1 : -   -     -   -      -      : 0/1 n     n   n      n
-    H     r   L    L    H    H 0/1 : -   -     -   -      -      : n   0/1   n   n      n
-    H     r   H    L    L    L -   : 0/1 -     -   -      -      : n   n     0/1 n      n
-    H     r   H    L    L    H -   : -   0/1   -   -      -      : n   n     0/1 n      n
-    H     r   -    H    -    - -   : -   -     -   -      -      : n   n     n   n      n
-    H     -   -    -    -    - -   : -   -     -   -      -      : n   n     n   n      n
+clk oe_n we_n ce_n A   D   :   mem mem_2 iqa :   mem mem_2 iqa 
+r   H    L    L    L   L/H :   -   -     -   :   L/H n     n   
+r   H    L    L    H   L/H :   -   -     -   :   n   L/H   n   
+r   L    H    L    L   -   :   L/H -     -   :   n   n     L/H 
+r   L    H    L    H   -   :   -   L/H   -   :   n   n     L/H 
+r   -    -    H    -   -   :   -   -     -   :   n   n     n   
+-   -    -    -    -   -   :   -   -     -   :   n   n     n   
+
 }
 add_function Q iqa
 add_function mem_int mem

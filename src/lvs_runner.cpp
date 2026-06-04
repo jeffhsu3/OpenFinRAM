@@ -87,7 +87,7 @@ bool run_lvs(const std::string& project_root,
              const std::string& cell_name,
              std::string* log_path,
              std::string* error) {
-    const std::string lvs_dir = project_root + "/lvs";
+    const std::string lvs_dir = project_root + "/tmp/lvs_" + get_run_timestamp();
     if (!ensure_directory_exists(lvs_dir, error)) {
         return false;
     }

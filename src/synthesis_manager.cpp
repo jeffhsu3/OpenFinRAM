@@ -46,17 +46,13 @@ std::string SynthesisManager::generate_parameter_string() const {
     std::ostringstream oss;
     oss << "ADDR_WIDTH=" << addr_width
         << ",NUM_WL=" << cli_options_.num_wls
-        << ",NUM_BANK=" << cli_options_.num_banks
-        << ",WL_BUF=" << cli_options_.num_wl_buf
-        << ",SAE_BUF=" << cli_options_.num_sae_buf;
+        << ",NUM_BANK=" << cli_options_.num_banks;
     return oss.str();
 }
 
 std::string SynthesisManager::generate_tcl_content() const {
     std::ostringstream oss;
-    int addr_width = std::ceil(std::log2(cli_options_.num_wls)) 
-                   + std::ceil(std::log2(cli_options_.num_banks))
-                   + 1 + 2; // +1 for top/bottom, +2 for ysel
+    int addr_width = get_addr_width(cli_options_);
 
     oss << "# Design Compiler synthesis script (Version 2)\n"
         << "# Configuration:\n"
@@ -77,12 +73,12 @@ std::string SynthesisManager::generate_tcl_content() const {
         << "rename_design [current_design] ctrl_decode\n"
         << "link\n\n"
 
-        << "create_clock -name clk -period 1.0 [get_ports clk]\n"
-        << "set_clock_uncertainty 0.1 [get_clocks clk]\n"
-        << "set_input_transition 0.05 [all_inputs]\n\n"
+        << "create_clock -name clk -period 0.2 [get_ports clk]\n"
+        << "set_clock_uncertainty 0.02 [get_clocks clk]\n"
+        << "set_input_transition 0.01 [all_inputs]\n\n"
         
         << "# Prevent delay cells from being optimized\n"
-        << "set DELAY_CELLS [get_cells {*delay_*/*}]\n"
+        << "set DELAY_CELLS [get_cells {*u_phase_*/*u_*}]\n"
         << "set_dont_touch $DELAY_CELLS true\n\n"
 
         << "set_dont_use asap7sc7p5t_AO_RVT_TT/AOI211xp5_ASAP7_75t_R\n"
@@ -105,10 +101,12 @@ std::string SynthesisManager::generate_tcl_content() const {
         << "# Compile and generate netlist\n"
         << "compile\n"
         << "report_qor > qor_report.txt\n"
-        << "define_name_rules NO_CASE_CONFLICT -case_insensitive\n"
+        << "ungroup -all -flatten\n"
+        << "define_name_rules NO_CASE_CONFLICT -case_insensitive -allowed \"A-Za-z0-9_\"\n"
         << "change_names -rules NO_CASE_CONFLICT -hierarchy\n"
         << "change_names -rules verilog -hierarchy\n"
         << "write_file -hierarchy -format verilog -output " << syn_path_ << "/netlist.v\n"
+        << "write_sdc ./timing.sdc\n"
         << "exit\n";
 
     return oss.str();
@@ -270,7 +268,7 @@ bool SynthesisManager::predict_capacitance() {
         signal_map["YSELT"] = {"yselt", "yseltn", "yselb", "yselbn"};
         signal_map["BLPRECHTN"] = {"blprechtn", "blprechbn"};
         signal_map["WRENA"] = {"wrena", "wrenan"};
-        signal_map["SAE"] = {"sae", "oeb_out", "oe_out"};
+        signal_map["SAE"] = {"sae", "saprechn", "oeb_out", "oe_out"};
     } else {
         signal_map["WLT"] = {"wlt_A", "wlt_B", "wlb_A", "wlb_B"};
         signal_map["YSELT"] = {"yselt_A", "yseltn_A", "yselb_A", "yselbn_A", "yselt_B", "yseltn_B", "yselb_B", "yselbn_B"};

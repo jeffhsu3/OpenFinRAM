@@ -1,180 +1,186 @@
-module ctrl_decode #(
-    parameter ADDR_WIDTH = 10,
-    parameter NUM_WL     = 32,
-    parameter NUM_BANK  = 2,    // MUX 分組數量 
-    // 時序參數 
-    parameter WL_BUF     = 5,
-    parameter SAE_BUF    = 15
-)(
-    input  logic                  clk,
-    input  logic                  rst_n,
-    input  logic                  ce_n,
-    input  logic                  we_n,
-    input  logic [ADDR_WIDTH-1:0] A,
-    input  logic                  oe_n,       // 系統輸出致能 
-    
-    // 使用二維陣列定義輸出接腳 (SystemVerilog 特性)
-    output logic [NUM_BANK-1:0][NUM_WL-1:0] wlt,       
-    output logic [NUM_BANK-1:0][NUM_WL-1:0] wlb,       
-    output logic [NUM_BANK-1:0]             blprechtn, 
-    output logic [NUM_BANK-1:0]             blprechbn, 
-    output logic [NUM_BANK-1:0][3:0]        yselt,     
-    output logic [NUM_BANK-1:0][3:0]        yseltn,    
-    output logic [NUM_BANK-1:0][3:0]        yselb,     
-    output logic [NUM_BANK-1:0][3:0]        yselbn,    
-    output logic [NUM_BANK-1:0]             sae,       
-    output logic [NUM_BANK-1:0]             saprechn,  
-    output logic [NUM_BANK-1:0]             wrena,     
-    output logic [NUM_BANK-1:0]             wrenan,    
-    output logic [NUM_BANK-1:0]             oeb_out,   // 輸出至 NOR2 閘 
-    output logic [NUM_BANK-1:0]             oe_out     // 直接控制輸出 OE 
+module delay_tap_select #(
+    parameter integer SHORT_BUF_COUNT = 4,
+    parameter integer LONG_BUF_COUNT  = 12
+) (
+    input  A,
+    input  S,
+    output Y
 );
 
-    // --- 1. 地址解碼 (Address Decoding) --- 
-    function integer clog2;
-        input integer value;
-        begin
-            value = value - 1; 
-            for (clog2 = 0; value > 0; clog2 = clog2 + 1) 
-                value = value >> 1;
-        end
-    endfunction
+    wire short_tap;
+    wire long_tap;
 
-    localparam ROW_BITS      = clog2(NUM_WL); 
-    localparam Y_BITS        = 2; 
-    localparam SLICE_BITS = (NUM_BANK > 1) ? clog2(NUM_BANK) : 1;
-    localparam BANK_BIT_IDX  = ROW_BITS + Y_BITS; 
-    localparam SLICE_BIT_IDX = BANK_BIT_IDX + 1; 
-
-    wire [ROW_BITS-1:0]   row_sel_d   = A[ROW_BITS-1 : 0]; 
-    wire [1:0]            col_sel_d   = A[BANK_BIT_IDX-1 : ROW_BITS]; 
-    wire                  bank_sel_d  = A[BANK_BIT_IDX]; 
-    wire [SLICE_BITS-1:0] slice_sel_d = (NUM_BANK > 1) ? A[SLICE_BIT_IDX + SLICE_BITS - 1 : SLICE_BIT_IDX] : 1'b0;
-
-    logic [ROW_BITS-1:0]   row_sel_r;
-    logic [1:0]            col_sel_r;
-    logic                  bank_sel_r;
-    logic [SLICE_BITS-1:0] slice_sel_r;
-
-    // --- 2. 時序控制邏輯 --- 
-    localparam IDLE  = 2'b11; 
-    localparam READ  = 2'b01; 
-    localparam WRITE = 2'b10; 
-    
-    logic [1:0] state; 
-    logic [1:0] next_state; // 確保這行存在於模組內部的頂層
-    wire start_op = !ce_n;
-
-    wire read_req  = (state == READ)  && !ce_n;
-    wire write_req = (state == WRITE) && !ce_n;
-
-    wire prech_off = (read_req || write_req) && clk;
-
-    wire wl_any_fire;
-    delay_cell #(.BUF_COUNT(WL_BUF)) u_delay_wl (
-        .A(prech_off),
-        .Y(wl_any_fire)      // 讀寫共用真實的物理 WL 延遲
+    delay_cell #(
+        .BUF_COUNT(SHORT_BUF_COUNT)
+    ) u_short_delay (
+        .A(A),
+        .Y(short_tap)
     );
 
-    wire wl_read_fire = wl_any_fire && read_req;
-    
-    wire sae_raw;
-    delay_cell #(.BUF_COUNT(SAE_BUF)) u_delay_sae (
-        .A(wl_read_fire),
-        .Y(sae_raw)          // SAE 嚴格跟隨 Read WL 之後觸發
+    delay_cell #(
+        .BUF_COUNT(LONG_BUF_COUNT)
+    ) u_long_delay (
+        .A(A),
+        .Y(long_tap)
     );
 
-    // Latch decoded address at transaction start to keep outputs stable across a cycle.
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            row_sel_r   <= '0;
-            col_sel_r   <= '0;
-            bank_sel_r  <= 1'b0;
-            slice_sel_r <= '0;
-        end else if (start_op) begin
-            row_sel_r   <= row_sel_d;
-            col_sel_r   <= col_sel_d;
-            bank_sel_r  <= bank_sel_d;
-            slice_sel_r <= slice_sel_d;
+    assign Y = S ? long_tap : short_tap;
+
+endmodule
+
+module ctrl_decode #(
+    parameter integer ADDR_WIDTH = 8,
+    parameter integer NUM_WL     = 32,
+    parameter integer NUM_BANK   = 4
+) (
+    input  wire        clk,
+    input  wire        CE_N,
+    input  wire        WE_N,
+    input  wire        OE_N,
+    input  wire [2:0]  sdel,
+    input  wire [ADDR_WIDTH-1:0] A,
+    output logic [NUM_BANK-1:0][NUM_WL-1:0] wlt,
+    output logic [NUM_BANK-1:0][NUM_WL-1:0] wlb,
+    output logic [NUM_BANK-1:0]             blprechtn,
+    output logic [NUM_BANK-1:0]             blprechbn,
+    output logic [NUM_BANK-1:0][3:0]        yselt,
+    output logic [NUM_BANK-1:0][3:0]        yseltn,
+    output logic [NUM_BANK-1:0][3:0]        yselb,
+    output logic [NUM_BANK-1:0][3:0]        yselbn,
+    output logic [NUM_BANK-1:0]             sae,
+    output logic [NUM_BANK-1:0]             saprechn,
+    output logic [NUM_BANK-1:0]             wrena,
+    output logic [NUM_BANK-1:0]             wrenan,
+    output logic [NUM_BANK-1:0]             oeb_out,
+    output logic [NUM_BANK-1:0]             oe_out
+);
+
+    localparam integer COL_SEL_BITS  = 2;
+    localparam integer ROW_ADDR_WIDTH = $clog2(NUM_WL);
+
+    localparam integer ROW_ADDR_LSB = 0;
+    localparam integer ROW_ADDR_MSB = ROW_ADDR_WIDTH - 1;
+    localparam integer COL_ADDR_LSB = ROW_ADDR_WIDTH;
+    localparam integer COL_ADDR_MSB = ROW_ADDR_WIDTH + COL_SEL_BITS - 1;
+
+    localparam integer BANK_SEL_BITS = (NUM_BANK > 1) ? $clog2(NUM_BANK) : 0;
+    localparam integer BANK_ADDR_BIT = ADDR_WIDTH - BANK_SEL_BITS - 1;
+
+    reg [ADDR_WIDTH-1:0] A_q;
+    reg [4:0] sdel_q;
+    reg       CEN_q;
+    reg       WEN_q;
+    reg       OEN_q;
+
+    wire access_q;
+    wire read_q;
+    wire write_q;
+
+    wire phase_blprech;
+    wire phase_wl;
+    wire phase_sae;
+
+    reg [3:0] ysel_onehot;
+    wire [ROW_ADDR_WIDTH-1:0] row_addr_q;
+
+    assign row_addr_q = A_q[ROW_ADDR_MSB:ROW_ADDR_LSB];
+
+    assign access_q = ~CEN_q & (~WEN_q | ~OEN_q);
+    assign read_q   = ~CEN_q &  WEN_q & ~OEN_q;
+    assign write_q  = ~CEN_q & ~WEN_q;
+
+    always @(*) begin
+        if (!clk) begin
+            A_q    <= A;
+            sdel_q <= sdel;
+            CEN_q  <= CE_N;
+            WEN_q  <= WE_N;
+            OEN_q  <= OE_N;
         end
     end
 
-    // --- 3. 組合邏輯 (二維陣列處理) --- 
-    always_comb begin
-        // 預設狀態
-        wlt        = '0;
-        wlb        = '0;
-        blprechtn  = '0; // 0 為 Precharge ON 
-        blprechbn  = '0;
-        sae        = '0;
-        saprechn   = '0;
-        oeb_out    = '1; 
-        
-        for (int i = 0; i < NUM_BANK; i++) begin
-            yselt[i]  = 4'b0000;
-            yselb[i]  = 4'b0000;
-            yseltn[i] = 4'b1111;
-            yselbn[i] = 4'b1111;
-            wrena[i]  = 1'b0;
-            wrenan[i] = 1'b1;
+    delay_tap_select #(
+        .SHORT_BUF_COUNT(4),
+        .LONG_BUF_COUNT(12)
+    ) u_phase_blprech (
+        .A(clk),
+        .S(sdel_q[0]),
+        .Y(phase_blprech)
+    );
+
+    delay_tap_select #(
+        .SHORT_BUF_COUNT(4),
+        .LONG_BUF_COUNT(12)
+    ) u_phase_wl (
+        .A(phase_blprech),
+        .S(sdel_q[1]),
+        .Y(phase_wl)
+    );
+
+    delay_tap_select #(
+        .SHORT_BUF_COUNT(4),
+        .LONG_BUF_COUNT(12)
+    ) u_phase_sae (
+        .A(phase_wl),
+        .S(sdel_q[2]),
+        .Y(phase_sae)
+    );
+
+    wire [NUM_BANK-1:0] bank_sel;
+    generate
+        if (NUM_BANK > 1) begin : g_bank_decode
+            wire [BANK_SEL_BITS-1:0] bank_addr_q = A_q[ADDR_WIDTH-1 : ADDR_WIDTH-BANK_SEL_BITS];
+            assign bank_sel = (1'b1 << bank_addr_q);
+        end else begin : g_single_bank
+            assign bank_sel = 1'b1;
         end
+    endgenerate
 
-        // 整合 Read 與 Write 共用的 Precharge 與 WL 邏輯
-        if (read_req || write_req) begin
-            // 直接以 prech_off 驅動，避免 glitch
-            if (bank_sel_r) begin 
-                blprechtn[slice_sel_r] = prech_off;
-                blprechbn[slice_sel_r] = 1'b0; 
-            end else begin 
-                blprechtn[slice_sel_r] = 1'b0; 
-                blprechbn[slice_sel_r] = prech_off; 
-            end
-            
-            // WL 共用同一條 Delay 路徑
-            if (wl_any_fire) begin 
-                if (bank_sel_r) wlt[slice_sel_r][row_sel_r] = 1'b1; 
-                else            wlb[slice_sel_r][row_sel_r] = 1'b1; 
-            end
-
-            // Y-Mux 共用邏輯
-            if (bank_sel_r) begin 
-                yselt[slice_sel_r]  = (4'b0001 << col_sel_r); 
-                yseltn[slice_sel_r] = ~yselt[slice_sel_r]; 
-            end else begin 
-                yselb[slice_sel_r]  = (4'b0001 << col_sel_r); 
-                yselbn[slice_sel_r] = ~yselb[slice_sel_r]; 
-            end
-
-            // 處理 Read 專屬訊號
-            if (read_req) begin
-                oeb_out[slice_sel_r]  = oe_n;
-                sae[slice_sel_r]      = sae_raw; 
-                saprechn[slice_sel_r] = sae_raw; 
-            end
-
-            // 處理 Write 專屬訊號
-            if (write_req) begin
-                wrena[slice_sel_r]  = clk; 
-                wrenan[slice_sel_r] = ~clk;
-            end
-        end
-
-        oe_out = ~oeb_out;
+    always @(*) begin
+        ysel_onehot = 4'b0000;
+        ysel_onehot[A_q[COL_ADDR_MSB:COL_ADDR_LSB]] = 1'b1;
     end
 
-    // --- 4. 狀態機切換 (FSM) --- 
-    always_ff @(posedge clk or negedge rst_n) begin
-        if (!rst_n) state <= IDLE; 
-        else state <= next_state; 
-    end
-    
-    always_comb begin
-        next_state = IDLE; 
-        if (!ce_n) begin
-            if (!we_n && oe_n)      next_state = WRITE;
-            else if (we_n && !oe_n) next_state = READ;
-            else                    next_state = IDLE;
+    genvar i;
+    generate
+        for (i = 0; i < NUM_BANK; i = i + 1) begin : g_bank_logic
+            wire bank_active = bank_sel[i];
+
+            wire wlenat_int = access_q & phase_wl & bank_active &  A_q[BANK_ADDR_BIT];
+            wire wlenab_int = access_q & phase_wl & bank_active & ~A_q[BANK_ADDR_BIT];
+
+            assign wlt[i] = wlenat_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
+            assign wlb[i] = wlenab_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
+
+            assign blprechtn[i] = (access_q & bank_active) ? phase_blprech : 1'b0;
+            assign blprechbn[i] = (access_q & bank_active) ? phase_blprech : 1'b0;
+
+            assign wrena[i]  = write_q & phase_wl & bank_active;
+            assign wrenan[i] = ~wrena[i];
+
+            assign oe_out[i]  = read_q & bank_active;
+            assign oeb_out[i] = ~oe_out[i];
+
+            assign sae[i]       = read_q & phase_sae & bank_active;
+            assign saprechn[i]  = sae[i];
+
+            always @(*) begin
+                yselt[i]  = 4'b0000;
+                yseltn[i] = 4'b1111;
+                yselb[i]  = 4'b0000;
+                yselbn[i] = 4'b1111;
+
+                if (access_q & bank_active) begin
+                    if (A_q[BANK_ADDR_BIT]) begin
+                        yselt[i]  = ysel_onehot;
+                        yseltn[i] = ~ysel_onehot;
+                    end else begin
+                        yselb[i]  = ysel_onehot;
+                        yselbn[i] = ~ysel_onehot;
+                    end
+                end
+            end
         end
-    end
+    endgenerate
 
 endmodule

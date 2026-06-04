@@ -110,7 +110,7 @@ std::map<std::string, std::string> SpiceIntegrator::build_port_mapping() const {
     
     // Basic control signals (updated to ce_n and we_n)
     port_map["clk"] = "clk";
-    port_map["rst_n"] = "rst_n";
+    // port_map["rst_n"] = "rst_n";
     port_map["ce_n"] = "ce_n";
     port_map["we_n"] = "we_n";
     port_map["saprechn"] = "saprechn";
@@ -193,7 +193,7 @@ std::string SpiceIntegrator::generate_subckt_header() const {
         oss << ".SUBCKT sram_x" << cli_options_.num_wls * 2
             << "x" << cli_options_.num_data_bits
             << "x" << cli_options_.num_banks
-            << " vdd vss clk rst_n ce_n we_n oe_n";
+            << " vdd vss clk sdel[0] sdel[1] sdel[2] sdel[3] ce_n we_n oe_n";
         
         // Address ports
         for (uint64_t i = 0; i < get_addr_width(cli_options_); ++i) {

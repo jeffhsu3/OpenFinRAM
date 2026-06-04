@@ -57,7 +57,7 @@ bool InnovusManager::run_innovus_flow() {
         addr_width, 
         cli_options_.num_banks,
         cli_options_.spice_only,
-        sram_width / cli_options_.num_banks)) {
+        (sram_width + 0.108) / cli_options_.num_banks)) {
         LOGI << "run.tcl generated successfully at: " << output_tcl_path;
     } else {
         LOGE << "Failed to generate run.tcl";

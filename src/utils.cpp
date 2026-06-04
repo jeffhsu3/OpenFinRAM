@@ -56,7 +56,8 @@ std::string get_current_timestamp() {
 }
 
 const std::string& get_run_timestamp() {
-    static const std::string ts = get_current_timestamp();
+    // static const std::string ts = get_current_timestamp();
+    static const std::string ts = "";
     return ts;
 }
 

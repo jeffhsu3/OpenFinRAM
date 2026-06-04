@@ -313,9 +313,10 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
     // 2. 初始化設計
     // ========================================================================
     file << "source Default.globals\n";
+    file << "set init_design_uniquify 1\n";
     file << "init_design\n\n";
 
-    // file << "set_dont_touch delay_cell_BUF* true\n\n";
+    // file << "set_dont_touch [get_cells -hier *delay*] true\n\n";
     file << "set_dont_touch [get_cells -hier *] true\n\n";
 
     file << "setDesignMode -topRoutingLayer M5\n\n";
@@ -344,57 +345,60 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
         int total_ctrl_pin = 5 + addr_width;
         double ctrl_pin_width = 0.024;
         double ctrl_pin_spacing = 0.072;
-        double ctrl_pin_total_height = ctrl_pin_width * total_ctrl_pin + ctrl_pin_spacing * (total_ctrl_pin - 1);
+        double ctrl_pin_total_width = ctrl_pin_width * total_ctrl_pin + ctrl_pin_spacing * (total_ctrl_pin - 1);
 
         // Calculate the starting point
-        double start_y = (height - ctrl_pin_total_height) / 2;
+        double start_x = (width - ctrl_pin_total_width) / 2;
 
-        // Adjust to M4 routing track (start y must be 0.024 * 2n, n=1,2,...)
-        start_y = std::ceil(start_y / (0.024 * 2)) * (0.024 * 2);
-
-        // Create physical pins for control signals and address pins using M4 (layer 4)
-        std::vector<std::string> ctrl_and_addr_pins = {"clk", "rst_n", "ce_n", "we_n", "oe_n"};
+        // Create physical pins for control signals and address pins using M5 (layer 5)
+        std::vector<std::string> ctrl_and_addr_pins = {"clk", "ce_n", "we_n", "oe_n", "sdel[3]", "sdel[2]", "sdel[1]", "sdel[0]"};
         for (int i = 0; i < addr_width; ++i) {
             ctrl_and_addr_pins.push_back("A[" + std::to_string(i) + "]");
         }
         for (size_t i = 0; i < ctrl_and_addr_pins.size(); ++i) {
-            double y_pos = start_y + i * (ctrl_pin_width + ctrl_pin_spacing);
-            file << "createPhysicalPin " << ctrl_and_addr_pins[i] << " -layer 4"
-                 << " -rect 0.0 " << y_pos << " 0.20 " << (y_pos + ctrl_pin_width) << "\n";
+            double x_pos = start_x + i * (ctrl_pin_width + ctrl_pin_spacing);
+            file << "createPhysicalPin " << ctrl_and_addr_pins[i] << " -layer 5"
+                 << " -rect " << x_pos << " " << height / 2.0 - 0.150 << " " 
+                 << (x_pos + ctrl_pin_width) << " " << height / 2.0 + 0.150 << "\n";
         }
 
+        const double bot_pin_start_y = -0.150;
+        const double top_pin_end_y = height + 0.150;
 
         for (int mux = 0; mux < num_mux; ++mux) {
             const double pin_width = 0.018;
-            double x_pos = 0.207 + mux * (col_width + 0.027);  // WLT 第一根位置
+            double x_pos = 0.207 + mux * col_width;  // WLT 第一根位置
             
             // WLT pins
             file << "# WLT (Word Line Top) pins\n";
             for (int i = 0; i < num_wlt; ++i) {
                 double x_left = x_pos;
                 double x_right = x_pos + pin_width;
-                file << "createPhysicalPin wlt[" << i + mux * num_wlt << "] -layer 3"
-                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+                int current_idx = i + (mux * num_wlt);
+
+                file << "createPhysicalPin wlt[" << current_idx << "] -allowOutsideBoundary -layer 3"
+                    << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
                 x_pos += 0.108;  // spacing to next WLT
             }
             file << "\n";
-            
+
             // blprechtn (跟 WLT 最右邊 spacing 0.303)
             x_pos += 0.321 - 0.108;  // 減去上面多加的 spacing
             file << "# blprechtn pin\n";
             double x_left = x_pos;
             double x_right = x_pos + pin_width;
-            file << "createPhysicalPin blprechtn[" << mux << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n\n";
-            
+            file << "createPhysicalPin blprechtn[" << mux << "] -allowOutsideBoundary -layer 3"
+                << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n\n";
+
             // yseltn (跟 blprechtn spacing 0.054, 兩根 spacing 0.018)
             x_pos += 0.072;
             file << "# yseltn pins\n";
             for (int i = 0; i < num_ysel; ++i) {
                 x_left = x_pos;
                 x_right = x_pos + pin_width;
-                file << "createPhysicalPin yseltn[" << i + mux * num_ysel << "] -layer 3"
-                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+
+                file << "createPhysicalPin yseltn[" << i + (mux * 4) << "] -allowOutsideBoundary -layer 3"
+                    << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
                 x_pos += 0.036;
             }
             file << "\n";
@@ -404,17 +408,18 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             for (int i = 0; i < num_ysel; ++i) {
                 x_left = x_pos;
                 x_right = x_pos + pin_width;
-                file << "createPhysicalPin yselt[" << i + mux * num_ysel << "] -layer 3"
-                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+
+                file << "createPhysicalPin yselt[" << i + (mux * 4) << "] -allowOutsideBoundary -layer 3"
+                    << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
                 x_pos += 0.036;
             }
-            file << "\n";
+            // file << "\n";
 
-            // // oe_n pin
-            // if (mux == 0) {
-            //     file << "createPhysicalPin oe_n -layer 3"
-            //         << " -rect " << x_pos << " 0.05 " << x_pos + pin_width << " " << height - 0.05 << "\n\n";
-            // }
+            // // // // oe_n pin
+            // // // if (mux == 0) {
+            // // //     file << "createPhysicalPin oe_n -layer 3"
+            // // //         << " -rect " << x_pos << " 0.05 " << x_pos + pin_width << " " << height - 0.05 << "\n\n";
+            // // // }
             
             // wrena, saprechn, sae, wrenan (跟 yselt 最右邊 spacing 0.255, 兩根 spacing 0.018)
             x_pos += 0.273 - 0.036;  // 減去上面多加的 spacing
@@ -427,8 +432,8 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
                 }
                 x_left = x_pos;
                 x_right = x_pos + pin_width;
-                file << "createPhysicalPin " << sig << "[" << mux << "] -layer 3"
-                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+                file << "createPhysicalPin " << sig << "[" << mux << "] -allowOutsideBoundary -layer 3"
+                    << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
                 if (std::string(sig) == "wrenan") {
                     wrenan_left = x_left;  // 記錄 wrenan 的位置
                 }
@@ -436,12 +441,12 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             }
 
             // oeb_out pin
-            file << "createPhysicalPin oeb_out[" << mux << "] -layer 3"
-                << " -rect " << x_pos + 0.387 + 0.412 << " -0.150 " << x_pos + 0.387 + 0.412 + pin_width << " " << height + 0.150 << "\n";
+            file << "createPhysicalPin oeb_out[" << mux << "] -allowOutsideBoundary -layer 3"
+                << " -rect " << x_pos + 0.799 << " " << bot_pin_start_y << " " << x_pos + 0.799 + pin_width << " " << top_pin_end_y << "\n";
 
             // oe_out pin
-            file << "createPhysicalPin oe_out[" << mux << "] -layer 3"
-                << " -rect " << x_pos + 0.459 + 0.561 << " -0.150 " << x_pos + 0.459 + 0.561 + pin_width << " " << height + 0.150 << "\n";
+            file << "createPhysicalPin oe_out[" << mux << "] -allowOutsideBoundary -layer 3"
+                << " -rect " << x_pos + 1.02 << " " << bot_pin_start_y << " " << x_pos + 1.02 + pin_width << " " << top_pin_end_y << "\n";
 
             file << "\n";
             
@@ -485,8 +490,9 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             for (int i = 0; i < num_ysel; ++i) {
                 x_left = x_pos;
                 x_right = x_pos + pin_width;
-                file << "createPhysicalPin yselb[" << i + mux * num_ysel << "] -layer 3"
-                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+
+                file << "createPhysicalPin yselb[" << i + (mux * 4) << "] -allowOutsideBoundary -layer 3"
+                    << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
                 x_pos += 0.036;
             }
             file << "\n";
@@ -496,8 +502,9 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             for (int i = 0; i < num_ysel; ++i) {
                 x_left = x_pos;
                 x_right = x_pos + pin_width;
-                file << "createPhysicalPin yselbn[" << i + mux * num_ysel << "] -layer 3"
-                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+
+                file << "createPhysicalPin yselbn[" << i + (mux * 4) << "] -allowOutsideBoundary -layer 3"
+                    << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
                 x_pos += 0.036;
             }
             file << "\n";
@@ -507,8 +514,8 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             file << "# blprechbn pin\n";
             x_left = x_pos;
             x_right = x_pos + pin_width;
-            file << "createPhysicalPin blprechbn[" << mux << "] -layer 3"
-                << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n\n";
+            file << "createPhysicalPin blprechbn[" << mux << "] -allowOutsideBoundary -layer 3"
+                << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
             
             // WLB pins (跟 blprechbn 距離 0.303, 兩根 spacing 0.09)
             x_pos += 0.321;
@@ -516,8 +523,9 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             for (int i = 0; i < num_wlb; ++i) {
                 x_left = x_pos;
                 x_right = x_pos + pin_width;
-                file << "createPhysicalPin wlb[" << i + mux * num_wlb << "] -layer 3"
-                    << " -rect " << x_left << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+
+                file << "createPhysicalPin wlb[" << i + (mux * num_wlt) << "] -allowOutsideBoundary -layer 3"
+                    << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
                 x_pos += 0.108;
             }
             file << "\n";
@@ -538,72 +546,72 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             std::vector<PowerStripe> power_stripes;
             
             // VDD
-            x_pos = 0.063 + mux * (col_width + 0.027);
+            x_pos = 0.063 + mux * col_width;
             x_right = x_pos + pin_width;
             if (mux == 0) {
-                file << "createPGPin VDD -geom M3 " << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "\n";  
+                file << "createPGPin VDD -geom M3 " << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";  
             }
-            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
             
             
             x_pos += 0.099 * 2 + num_wlt * 0.108;
             x_right = x_pos + pin_width;
-            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
 
             x_pos += 0.648;
             x_right = x_pos + 0.09;
-            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VDD", x_pos, x_right, 0.09});
 
             x_pos += 1.404 + 0.54;
             x_right = x_pos + pin_width;
-            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
 
             x_pos += 0.099 * 2 + num_wlb * 0.108;
             x_right = x_pos + pin_width;
-            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n\n";
+            file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n\n";
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
 
             // VSS
-            x_pos = 0.099 + mux * (col_width + 0.027);
+            x_pos = 0.099 + mux * col_width;
             x_right = x_pos + pin_width;
             if (mux == 0) {
-                file << "createPGPin VSS -geom M3 " << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "\n";
+                file << "createPGPin VSS -geom M3 " << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
             }
-            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " -0.150 " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
 
             x_pos += 0.063 + 0.045 + num_wlt * 0.108;
             x_right = x_pos + pin_width;
-            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
 
             x_pos += 0.846;
             x_right = x_pos + 0.018;
-            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VSS", x_pos, x_right, 0.018});
 
             x_pos += 0.396;
             x_right = x_pos + 0.026;
-            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VSS", x_pos, x_right, 0.026});
 
             // x_pos += 0.153;
             // x_right = x_pos + 0.036;
-            // file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            // file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             // power_stripes.push_back({"VSS", x_pos, x_right, 0.036});
 
             x_pos += 0.918 + 0.54;
             x_right = x_pos + pin_width;
-            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n";
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
 
             x_pos += 0.063 + 0.045 + num_wlb * 0.108;
             x_right = x_pos + pin_width;
-            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << -0.150 << " " << x_right << " " << height + 0.150 << "} -shape STRIPE\n\n";
+            file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n\n";
             power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
             
             // ========================================================================
@@ -698,9 +706,24 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
     // 7. 註解：後續步驟
     // ========================================================================
     // file << "# TODO: Add createPhysicalPin commands for other ports\n";
+
+    file << "setAnalysisMode -analysisType onChipVariation -cppr both\n";
+
     file << "\nplace_design\n";
-    // file << "create_ccopt_clock_tree_spec\n";
-    // file << "ccopt_design\n";
+
+    file << "set_interactive_constraint_modes [all_constraint_modes]\n";
+    file << "set_sense -stop_propagation [get_pins u_phase_*/A]\n";
+    file << "set_interactive_constraint_modes {}\n";
+
+    file << "create_ccopt_clock_tree_spec\n";
+    // file << "timeDesign -preCTS\n";
+    file << "ccopt_design -cts\n";
+    file << "timeDesign -postCTS\n";
+    file << "optDesign -postCTS\n";
+    // file << "optDesign -postCTS -hold\n";
+    // file << "setAnalysisMode -analysisType onChipVariation -cppr both\n";
+
+
     file << "sroute -connect corePin\n";
     file << "routeDesign\n\n";
     file << "addFiller -cell {DECAPx10_ASAP7_75t_R  } -prefix FILLER_DECAP_\n";
@@ -754,7 +777,7 @@ bool InnovusTclGenerator::run_innovus(const std::string& tcl_file,
     // Ensure required Innovus setup files exist (hard-coded defaults)
     const std::string default_globals_path = work_dir + "/Default.globals";
     const std::string default_view_path = work_dir + "/Default.view";
-    const std::string timing_sdc_path = work_dir + "/timing.sdc";
+    const std::string timing_sdc_path = join_path(get_executable_directory(), "tmp/syn_" + get_run_timestamp() + "/timing.sdc");
 
     const std::string default_globals_content =
         "###############################################################\n"
@@ -795,13 +818,13 @@ bool InnovusTclGenerator::run_innovus(const std::string& tcl_file,
         "create_op_cond -name typical_opc -library_file {" + join_path(get_executable_directory(), "tech/lib/asap7sc7p5t_SEQ_RVT_TT.lib") + "} -P {1} -V {0.7} -T {25}\n"
         "create_op_cond -name typical_opc -library_file {" + join_path(get_executable_directory(), "tech/lib/asap7sc7p5t_SIMPLE_RVT_TT.lib") + "} -P {1} -V {0.7} -T {25}\n"
         "create_library_set -name AllLib -timing {" + join_path(get_executable_directory(), "tech/lib/asap7sc7p5t_AO_RVT_TT.lib") + " " + join_path(get_executable_directory(), "tech/lib/asap7sc7p5t_INVBUF_RVT_TT.lib") + " " + join_path(get_executable_directory(), "tech/lib/asap7sc7p5t_OA_RVT_TT.lib") + " " + join_path(get_executable_directory(), "tech/lib/asap7sc7p5t_SEQ_RVT_TT.lib") + " " + join_path(get_executable_directory(), "tech/lib/asap7sc7p5t_SIMPLE_RVT_TT.lib") + "}\n"
-        "create_constraint_mode -name delay1ns2 -sdc_files {timing.sdc}\n"
+        "create_constraint_mode -name delay1ns2 -sdc_files {" + timing_sdc_path + "}\n"
         "create_delay_corner -name typical_dc -rc_corner {typical_rc} -early_library_set {AllLib} -late_library_set {AllLib}\n"
         "create_analysis_view -name typical_view -constraint_mode {delay1ns2} -delay_corner {typical_dc}\n"
         "set_analysis_view -setup {typical_view} -hold {typical_view}\n";
 
-    const std::string timing_sdc_content =
-        "create_clock -name clk -period 1.0 [get_ports clk]\n";
+    // const std::string timing_sdc_content =
+    //     "create_clock -name clk -period 1.0 [get_ports clk]\n";
 
     if (!write_file_if_missing(default_globals_path, default_globals_content)) {
         LOGE << "Failed to create " << default_globals_path;
@@ -811,10 +834,10 @@ bool InnovusTclGenerator::run_innovus(const std::string& tcl_file,
         LOGE << "Failed to create " << default_view_path;
         return false;
     }
-    if (!write_file_if_missing(timing_sdc_path, timing_sdc_content)) {
-        LOGE << "Failed to create " << timing_sdc_path;
-        return false;
-    }
+    // if (!write_file_if_missing(timing_sdc_path, timing_sdc_content)) {
+    //     LOGE << "Failed to create " << timing_sdc_path;
+    //     return false;
+    // }
 
     // 檢查 TCL 檔案是否存在
     std::ifstream tcl_check(tcl_file);

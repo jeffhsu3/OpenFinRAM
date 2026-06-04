@@ -13,7 +13,9 @@
 #include "siliconsmart_generator.hpp"
 #include "siliconsmart_manager.hpp"
 #include "lvs_runner.hpp"
+#include "lvs_manager.hpp"
 #include "lef_extractor.hpp"
+#include "lef_manager.hpp"
 #include "layout_generator.hpp"
 #include "main_config_helpers.hpp"
 #include "main_flow_helpers.hpp"
@@ -101,50 +103,17 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // // // ========================================================================
-    // // // Run LVS (create lvs folder, generate _run_control.svrf, run calibre)
-    // // // ========================================================================
-    // // {
-    // //     std::string sram_cell_name = "sram_x" + std::to_string(num_wls * 2) + "x" + std::to_string(num_data_bits);
-    // //     std::string lvs_log_path;
-    // //     std::string lvs_error;
+    // Run LVS (create lvs folder, generate _run_control.svrf, run calibre)
+    LvsManager lvs_manager(cli_options);
+    if (!lvs_manager.run_lvs()) {
+        LOGE << "LVS failed!";
+        return 1;
+    }
 
-    // //     LOGI << "Running LVS for cell: " << sram_cell_name;
-    // //     bool lvs_ok = OpenFinRAM::run_lvs(".", "../innovus/ctrl_decode.gds.tmp", "../sram.sp", sram_cell_name, &lvs_log_path, &lvs_error);
-
-    // //     if (lvs_ok) {
-    // //         LOGI << "LVS completed. CORRECT.";
-    // //     } else {
-    // //         LOGW << "LVS failed or not correct. Log: " << lvs_log_path;
-    // //         if (!lvs_error.empty()) {
-    // //             LOGW << "LVS error: " << lvs_error;
-    // //         }
-    // //     }
-    // // }
-
-    // // // ========================================================================
-    // // // Export LEF (create cds.lib, import GDS, run abstract)
-    // // // ========================================================================
-    // // {
-    // //     std::string sram_cell_name = "sram_x" + std::to_string(num_wls * 2) + "x" + std::to_string(num_data_bits);
-    // //     std::string lef_log_path;
-    // //     std::string lef_error;
-
-    // //     LOGI << "Exporting LEF for cell: " << sram_cell_name;
-    // //     bool lef_ok = OpenFinRAM::export_lef(".", sram_cell_name, "./innovus/ctrl_decode.gds.tmp", &lef_log_path, &lef_error);
-
-    // //     if (lef_ok) {
-    // //         LOGI << "LEF export completed. Log: " << lef_log_path;
-    // //     } else {
-    // //         LOGW << "LEF export failed. Log: " << lef_log_path;
-    // //         if (!lef_error.empty()) {
-    // //             LOGW << "LEF export error: " << lef_error;
-    // //         }
-    // //     }
-    // // }
-
-    // // 釋放資源
-    // sram_filler_lib.free_all();
-
-    // return 0;
+    // Export LEF file for the generated SRAM layout
+    LefManager lef_manager(cli_options);
+    if (!lef_manager.export_lef()) {
+        LOGE << "LEF export failed!";
+        return 1;
+    }
 }
