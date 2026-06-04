@@ -489,6 +489,11 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
 }
 
 bool SpiceGenerator::generate() {
+    if (!directory_exists(join_path(get_executable_directory(), "tmp"))) {
+        LOGD << "Creating tmp directory: " << join_path(get_executable_directory(), "tmp");
+        create_directory(join_path(get_executable_directory(), "tmp"), nullptr);
+    }
+
     std::string output_path = join_path(get_current_dir_name(), "tmp/sram_colgrp_" + get_run_timestamp() + ".sp");
     std::string content = generate_spice_content(config_.single_port);
     
