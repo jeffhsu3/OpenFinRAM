@@ -34,10 +34,10 @@ module ctrl_decode #(
     parameter integer NUM_BANK   = 4
 ) (
     input  wire        clk,
-    input  wire        CE_N,
-    input  wire        WE_N,
-    input  wire        OE_N,
-    input  wire [2:0]  sdel,
+    input  wire        ce_n,
+    input  wire        we_n,
+    input  wire        oe_n,
+    input  wire [3:0]  sdel,
     input  wire [ADDR_WIDTH-1:0] A,
     output logic [NUM_BANK-1:0][NUM_WL-1:0] wlt,
     output logic [NUM_BANK-1:0][NUM_WL-1:0] wlb,
@@ -64,10 +64,10 @@ module ctrl_decode #(
     localparam integer COL_ADDR_MSB = ROW_ADDR_WIDTH + COL_SEL_BITS - 1;
 
     localparam integer BANK_SEL_BITS = (NUM_BANK > 1) ? $clog2(NUM_BANK) : 0;
-    localparam integer BANK_ADDR_BIT = ADDR_WIDTH - BANK_SEL_BITS - 1;
+    localparam integer BANK_ADDR_BIT = ROW_ADDR_WIDTH + COL_SEL_BITS;
 
     reg [ADDR_WIDTH-1:0] A_q;
-    reg [4:0] sdel_q;
+    reg [3:0] sdel_q;
     reg       CEN_q;
     reg       WEN_q;
     reg       OEN_q;
@@ -79,6 +79,7 @@ module ctrl_decode #(
     wire phase_blprech;
     wire phase_wl;
     wire phase_sae;
+    wire phase_saprech;
 
     reg [3:0] ysel_onehot;
     wire [ROW_ADDR_WIDTH-1:0] row_addr_q;
@@ -89,14 +90,14 @@ module ctrl_decode #(
     assign read_q   = ~CEN_q &  WEN_q & ~OEN_q;
     assign write_q  = ~CEN_q & ~WEN_q;
 
-    always @(*) begin
-        if (!clk) begin
+    always @(posedge clk) begin
+        // if (!clk) begin
             A_q    <= A;
             sdel_q <= sdel;
-            CEN_q  <= CE_N;
-            WEN_q  <= WE_N;
-            OEN_q  <= OE_N;
-        end
+            CEN_q  <= ce_n;
+            WEN_q  <= we_n;
+            OEN_q  <= oe_n;
+        // end
     end
 
     delay_tap_select #(
@@ -126,10 +127,19 @@ module ctrl_decode #(
         .Y(phase_sae)
     );
 
+    delay_tap_select #(
+        .SHORT_BUF_COUNT(2),
+        .LONG_BUF_COUNT(4)
+    ) u_phase_saprech (
+        .A(phase_sae),
+        .S(sdel_q[3]),
+        .Y(phase_saprech)
+    );
+
     wire [NUM_BANK-1:0] bank_sel;
     generate
         if (NUM_BANK > 1) begin : g_bank_decode
-            wire [BANK_SEL_BITS-1:0] bank_addr_q = A_q[ADDR_WIDTH-1 : ADDR_WIDTH-BANK_SEL_BITS];
+            wire [BANK_SEL_BITS-1:0] bank_addr_q = A_q[BANK_ADDR_BIT + BANK_SEL_BITS : BANK_ADDR_BIT + 1];
             assign bank_sel = (1'b1 << bank_addr_q);
         end else begin : g_single_bank
             assign bank_sel = 1'b1;
@@ -146,14 +156,17 @@ module ctrl_decode #(
         for (i = 0; i < NUM_BANK; i = i + 1) begin : g_bank_logic
             wire bank_active = bank_sel[i];
 
-            wire wlenat_int = access_q & phase_wl & bank_active &  A_q[BANK_ADDR_BIT];
-            wire wlenab_int = access_q & phase_wl & bank_active & ~A_q[BANK_ADDR_BIT];
+            wire top_selected    = A_q[BANK_ADDR_BIT];
+            wire bottom_selected = ~A_q[BANK_ADDR_BIT];
+
+            wire wlenat_int = access_q & phase_wl & bank_active &  top_selected;
+            wire wlenab_int = access_q & phase_wl & bank_active & bottom_selected;
 
             assign wlt[i] = wlenat_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
             assign wlb[i] = wlenab_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
 
-            assign blprechtn[i] = (access_q & bank_active) ? phase_blprech : 1'b0;
-            assign blprechbn[i] = (access_q & bank_active) ? phase_blprech : 1'b0;
+            assign blprechtn[i] = (access_q & bank_active & top_selected) ? phase_blprech : 1'b0;
+            assign blprechbn[i] = (access_q & bank_active & bottom_selected) ? phase_blprech : 1'b0;
 
             assign wrena[i]  = write_q & phase_wl & bank_active;
             assign wrenan[i] = ~wrena[i];
@@ -162,7 +175,7 @@ module ctrl_decode #(
             assign oeb_out[i] = ~oe_out[i];
 
             assign sae[i]       = read_q & phase_sae & bank_active;
-            assign saprechn[i]  = sae[i];
+            assign saprechn[i]  = read_q & phase_saprech & bank_active;
 
             always @(*) begin
                 yselt[i]  = 4'b0000;
