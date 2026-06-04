@@ -2,6 +2,19 @@
 
 This is an SRAM compiler designed for the ASAP7 PDK, leveraging the GDSII Tool Kit (GDSTK) to create SRAM layouts.
 
+# Usage
+
+```
+git clone --recursive https://github.com/shao-chien-lu/OpenFinRAM.git
+mkdir build
+cd build
+cp -r ../tech .
+cmake ..
+make
+
+./OpenFinRAM --num-wls 2 --num-data-bits 4 --num-banks 1 --single-port
+```
+
 ## References
 
 - **ASAP7 PDK**: https://github.com/The-OpenROAD-Project/asap7
