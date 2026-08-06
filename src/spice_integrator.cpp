@@ -598,11 +598,29 @@ bool SpiceIntegrator::integrate_sram() {
     LOGD << "Integrating Control and Datapath";
     LOGD << std::string(70, '=');
     
-    // Verify input files exist
+    // Verify input files exist (support both Innovus and OpenROAD P&R)
     std::string ctrl_netlist_path = join_path(get_current_dir_name(), "tmp/innovus_" + get_run_timestamp() + "/netlist_for_lvs.sp");
+    std::string ctrl_netlist_openroad = join_path(get_current_dir_name(), "tmp/openroad_" + get_run_timestamp() + "/netlist_for_lvs.sp");
+    // Prefer whichever exists; if use_openroad flag, prefer openroad
+    if (cli_options_.use_openroad || cli_options_.openroad_only) {
+        if (file_exists(ctrl_netlist_openroad)) ctrl_netlist_path = ctrl_netlist_openroad;
+    } else {
+        // commercial path: keep innovus, but fallback to openroad if innovus missing (for bring-up)
+        if (!file_exists(ctrl_netlist_path) && file_exists(ctrl_netlist_openroad)) {
+            ctrl_netlist_path = ctrl_netlist_openroad;
+        }
+    }
+    // final fallback: if still missing, try the alternate location
+    if (!file_exists(ctrl_netlist_path)) {
+        if (file_exists(ctrl_netlist_openroad)) ctrl_netlist_path = ctrl_netlist_openroad;
+        else if (file_exists(join_path(get_current_dir_name(), "tmp/syn_" + get_run_timestamp() + "/netlist.sp"))) {
+            // Yosys synthesis netlist can be used directly for LVS bring-up
+            ctrl_netlist_path = join_path(get_current_dir_name(), "tmp/syn_" + get_run_timestamp() + "/netlist.sp");
+        }
+    }
     if (!file_exists(ctrl_netlist_path)) {
         LOGE << "  ✗ Error: Control netlist not found: " 
-             << ctrl_netlist_path;
+             << ctrl_netlist_path << " (also checked " << ctrl_netlist_openroad << ")";
         return false;
     }
     

@@ -18,6 +18,8 @@ set(SOURCES
     src/cell_utils.cpp
     src/spice_generator.cpp
     src/synthesis_manager.cpp
+    src/yosys_manager.cpp
+    src/yosys_tcl_generator.cpp
     src/spice_converter.cpp
     src/spice_integrator.cpp
     src/spice_include_resolver.cpp
@@ -27,6 +29,8 @@ set(SOURCES
     src/spice_simulator.cpp
     src/innovus_tcl_generator.cpp
     src/innovus_manager.cpp
+    src/openroad_manager.cpp
+    src/openroad_tcl_generator.cpp
     src/filler_generator.cpp
     src/siliconsmart_generator.cpp
     src/siliconsmart_manager.cpp
@@ -47,3 +51,6 @@ add_executable(OpenFinRAM ${SOURCES})
 # Link libraries
 find_package(Threads REQUIRED)
 target_link_libraries(OpenFinRAM gdstk argparse Threads::Threads)
+
+include(GNUInstallDirs)
+install(TARGETS OpenFinRAM RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

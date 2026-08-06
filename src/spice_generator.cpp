@@ -489,9 +489,20 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
 }
 
 bool SpiceGenerator::generate() {
-    if (!directory_exists(join_path(get_executable_directory(), "tmp"))) {
-        LOGD << "Creating tmp directory: " << join_path(get_executable_directory(), "tmp");
-        create_directory(join_path(get_executable_directory(), "tmp"), nullptr);
+    // Ensure tmp exists at both executable dir and CWD (supports running from repo root with /tmp/build binary)
+    std::string tmp_exec = join_path(get_executable_directory(), "tmp");
+    std::string tmp_cwd = join_path(get_current_dir_name(), "tmp");
+    if (!directory_exists(tmp_exec)) {
+        LOGD << "Creating tmp directory: " << tmp_exec;
+        create_directory(tmp_exec, nullptr);
+    }
+    if (!directory_exists(tmp_cwd)) {
+        LOGD << "Creating tmp directory: " << tmp_cwd;
+        create_directory(tmp_cwd, nullptr);
+        // Also create via executable dir as fallback if CWD tmp creation failed due to permissions
+        if (!directory_exists(tmp_cwd) && !directory_exists(tmp_exec)) {
+            create_directory(tmp_exec, nullptr);
+        }
     }
 
     std::string output_path = join_path(get_current_dir_name(), "tmp/sram_colgrp_" + get_run_timestamp() + ".sp");

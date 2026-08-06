@@ -16,6 +16,7 @@ bool InnovusManager::run_innovus_flow() {
     tcl_generator.set_design_name("ctrl_decode");
     tcl_generator.set_site_name("asap7sc7p5t");
     tcl_generator.set_site_height(0.27);
+    tcl_generator.set_bitcell_width(cli_options_.bitcell_width);
     tcl_generator.set_cpu_count(8, 0);
 
     std::string qor_file_path = join_path(get_executable_directory(), "tmp/syn_" + get_run_timestamp() + "/qor_report.txt");
@@ -43,7 +44,7 @@ bool InnovusManager::run_innovus_flow() {
     double sram_width = 10.0;
     if (cli_options_.single_port) {
         //           dummy fin   iocolgrp   bitcell/dummy/tapcell
-        sram_width = (0.108 * 2 + 2.376    + 0.108 * ((cli_options_.num_wls + 3) * 2)) * cli_options_.num_banks - 0.108;
+        sram_width = (cli_options_.bitcell_width * 2 + 2.376    + cli_options_.bitcell_width * ((cli_options_.num_wls + 3) * 2)) * cli_options_.num_banks - cli_options_.bitcell_width;
     } else {
         sram_width = 15.0; // Tmp value for dual-port
     }
@@ -57,7 +58,7 @@ bool InnovusManager::run_innovus_flow() {
         addr_width, 
         cli_options_.num_banks,
         cli_options_.spice_only,
-        (sram_width + 0.108) / cli_options_.num_banks)) {
+        (sram_width + cli_options_.bitcell_width) / cli_options_.num_banks)) {
         LOGI << "run.tcl generated successfully at: " << output_tcl_path;
     } else {
         LOGE << "Failed to generate run.tcl";

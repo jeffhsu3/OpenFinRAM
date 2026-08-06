@@ -54,6 +54,45 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .default_value(unsigned{10})
         .scan<'u', unsigned>();
 
+    program.add_argument("--use-yosys")
+        .help("Use Yosys for synthesis (open-source, instead of Design Compiler). Implies --single-port ASAP7 flow.")
+        .default_value(false)
+        .implicit_value(true);
+
+    program.add_argument("--use-openroad")
+        .help("Use OpenROAD for P&R (open-source, instead of Innovus). Pairs with --use-yosys.")
+        .default_value(false)
+        .implicit_value(true);
+
+    program.add_argument("--openroad")
+        .help("Alias for --use-yosys --use-openroad (single-port ASAP7 open-source flow).")
+        .default_value(false)
+        .implicit_value(true);
+
+    program.add_argument("--openroad-path")
+        .help("Path to OpenROAD checkout/binary (default: ~/iv3/repos/OpenROAD)")
+        .default_value(std::string(""))
+        ;
+
+    program.add_argument("--platform-path")
+        .help("Path to ASAP7 platform (default: <openroad>/platform/asap7)")
+        .default_value(std::string(""));
+
+    program.add_argument("--bitcell-width")
+        .help("Custom push-rule bitcell width (um). Default: 0.108 for logic-rule ASAP7.")
+        .default_value(double{0.108})
+        .scan<'f', double>();
+
+    program.add_argument("--bitcell-height")
+        .help("Custom push-rule bitcell height (um). Default: 0.27 for logic-rule ASAP7.")
+        .default_value(double{0.27})
+        .scan<'f', double>();
+
+    program.add_argument("--num-rows-per-mux")
+        .help("Number of bitcell rows per IO column group (multiplexing factor). Default: 4.")
+        .default_value(unsigned{4})
+        .scan<'u', unsigned>();
+
     try {
         program.parse_args(argc, argv);
     } catch (const std::exception& e) {
@@ -73,6 +112,33 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.output_sp_name        = program.get<std::string>("--output-sp-name");
     options.output_gds_name       = program.get<std::string>("--output-gds-name");
     options.spice_only            = program.get<bool>("--spice-only");
+    options.use_yosys             = program.get<bool>("--use-yosys");
+    options.use_openroad          = program.get<bool>("--use-openroad");
+    options.openroad_only         = program.get<bool>("--openroad");
+    options.openroad_path         = program.get<std::string>("--openroad-path");
+    options.platform_path         = program.get<std::string>("--platform-path");
+    options.bitcell_width         = program.get<double>("--bitcell-width");
+    options.bitcell_height        = program.get<double>("--bitcell-height");
+    options.num_rows_per_mux      = program.get<unsigned>("--num-rows-per-mux");
+
+    if (options.openroad_only) {
+        options.use_yosys = true;
+        options.use_openroad = true;
+    }
+    // defaults for pinned OpenROAD checkout
+    if (options.openroad_path.empty()) {
+        const char* home = std::getenv("HOME");
+        std::string home_str = home ? home : "";
+        options.openroad_path = home_str + "/iv3/repos/OpenROAD";
+    }
+    if (options.platform_path.empty()) {
+        options.platform_path = options.openroad_path + "/platform/asap7";
+    }
+    // open-source flow is single-port focused; warn if dual-port requested
+    if ((options.use_yosys || options.use_openroad) && !options.single_port) {
+        LOGW << "OpenROAD/Yosys flow is validated for --single-port; forcing single_port=true";
+        options.single_port = true;
+    }
 
     if (options.num_wls % 2 != 0) {
         LOGE << "Error: --num-wls must be an even number.";
@@ -94,7 +160,11 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
          << ", skip_characterization=" << (options.skip_characterization ? 1 : 0)
          << ", output_sp_name=" << options.output_sp_name
          << ", output_gds_name=" << options.output_gds_name
-         << ", spice_only=" << (options.spice_only ? 1 : 0);
+         << ", spice_only=" << (options.spice_only ? 1 : 0)
+         << ", use_yosys=" << (options.use_yosys ? 1 : 0)
+         << ", use_openroad=" << (options.use_openroad ? 1 : 0)
+         << ", openroad_path=" << options.openroad_path
+         << ", platform_path=" << options.platform_path;
 
     return options;
 }

@@ -443,7 +443,7 @@ gdstk::Cell* create_filler_top(
         ref->init(lib.dummy_corner_v2_lr);
         // For x_reflection only: X is mirrored, Y stays same
         // Place at right_x, need to align boundary
-        ref->origin = {right_x + dummy_corner_bnd.max.x - 0.108, base_y + dummy_corner_bnd.max.y};
+        ref->origin = {right_x + dummy_corner_bnd.max.x - config.bitcell_width, base_y + dummy_corner_bnd.max.y};
         ref->x_reflection = true;
         ref->magnification = 1.0;
         filler_cell->reference_array.append(ref);

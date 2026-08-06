@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <fstream>
 
 #include "plog/Log.h"
 
@@ -319,7 +320,7 @@ bool LayoutGenerator::create_sram_column() {
 }
 
 bool LayoutGenerator::create_sram_array() {
-    int num_rows = 4;  // 預設堆疊 4 層
+    int num_rows = cli_options_.num_rows_per_mux;  // Use parameterized multiplexing factor
     if (sram_cells_.sram_column == nullptr || num_rows == 0) {
         LOGE << "Invalid parameters for create_sram_array";
         return false;
@@ -498,8 +499,8 @@ bool LayoutGenerator::create_sram_array() {
         const double cell_width = col_width / (bits + 1.216);  // 粗略估計 bitcell 寬度
         // 更精確的方式：從 sramcol 名稱推導
         // sramcol_x{bits} 包含 bits 個 SRAM cells + 1 dummy + 1 tapcell
-        // SRAM cell width = 0.108, dummy = 0.108, tapcell = 0.108
-        const double sram_cell_width = 0.108;
+        // SRAM cell width = cli_options_.bitcell_width, dummy = cli_options_.bitcell_width, tapcell = cli_options_.bitcell_width
+        const double sram_cell_width = cli_options_.bitcell_width;
         
         for (int i = 0; i < bits; ++i) {
             // WL[i] 的 x 位置：sramcol_x_offset + (i + 0.5) * sram_cell_width
@@ -533,7 +534,7 @@ bool LayoutGenerator::create_sram_array() {
         const double bl_y_in_cell = 0.1885;    // sram_cell 內的 y
         
         // dummy_sram 在 sramcol 中的位置
-        const double dummy_x_in_col = bits * 0.108;  // sramcol 內，dummy 的 x 起點
+        const double dummy_x_in_col = bits * cli_options_.bitcell_width;  // sramcol 內，dummy 的 x 起點
         
         // BLN 相對於 sramcol 原點的座標
         const double bln_x_in_col = dummy_x_in_col + bln_x_in_dummy;
@@ -597,8 +598,8 @@ bool LayoutGenerator::create_sram_array() {
         LOGI << "  Added " << (num_rows * 2) << " BL/BLN pins on M2 pin layer";
         
         // === VDD/VSS Pins (在最下面的 row，dummy_sram 位置) ===
-        const double vdd_x_offset = bits * 0.108 + 0.082;   // dummy_sram 位置 + VDD offset
-        const double vss_x_offset = bits * 0.108 + 0.0735;  // dummy_sram 位置 + VSS offset
+        const double vdd_x_offset = bits * cli_options_.bitcell_width + 0.082;   // dummy_sram 位置 + VDD offset
+        const double vss_x_offset = bits * cli_options_.bitcell_width + 0.0735;  // dummy_sram 位置 + VSS offset
         const double vdd_y = 0.135;
         const double vss_y_bottom = 0.0365;
         const double vss_y_top = 0.235;
@@ -794,10 +795,10 @@ bool LayoutGenerator::create_colgrp() {
         const double wl_y = -0.028;
         
         // sram_cell 寬度
-        const double cell_width = 0.108;
+        const double cell_width = cli_options_.bitcell_width;
         
         // array 中 dummy_topbot 的寬度（在 sramcol 左側）
-        const double dummy_width = 0.108;
+        const double dummy_width = cli_options_.bitcell_width;
         
         // 左側 array 的起始 x 位置（filler_cgedge 之後）
         const double left_array_x = filler_size.width;
@@ -810,9 +811,9 @@ bool LayoutGenerator::create_colgrp() {
         
         // 右側 array 中 sramcol 的起始 x（Y軸翻轉後，dummy_topbot 在右側）
         // Y軸翻轉後：
-        // 1. array 最左側是 dummy_topbot（寬度 0.108）
-        // 2. 然後是 sramcol，sramcol 內部左側也有 dummy（寬度 0.108）
-        // 3. 所以 bitcell 區域從 right_array_x + 0.108 + 0.108 = right_array_x + 0.216 開始
+        // 1. array 最左側是 dummy_topbot（寬度 cli_options_.bitcell_width）
+        // 2. 然後是 sramcol，sramcol 內部左側也有 dummy（寬度 cli_options_.bitcell_width）
+        // 3. 所以 bitcell 區域從 right_array_x + cli_options_.bitcell_width + cli_options_.bitcell_width = right_array_x + 0.216 開始
         const double right_sramcol_x = right_array_x + 2 * dummy_width;
         
         // 左側 array: WLT[num_wls-1:0]
@@ -1356,23 +1357,120 @@ void LayoutGenerator::add_cell_with_deps(gdstk::Library& target_lib, gdstk::Cell
 }
 
 bool LayoutGenerator::add_ctrl_decode_gate_fin_wrappers() {
-    std::string gds_path = join_path(get_current_dir_name(), "tmp/innovus_" + get_run_timestamp() + "/ctrl_decode.gds");
-    LOGI << "Reading GDS file: " << gds_path;
+    // Support both Innovus and OpenROAD P&R (GDS or DEF) - OpenROAD now emits DEF
+    std::string gds_innovus = join_path(get_current_dir_name(), "tmp/innovus_" + get_run_timestamp() + "/ctrl_decode.gds");
+    std::string gds_openroad = join_path(get_current_dir_name(), "tmp/openroad_" + get_run_timestamp() + "/ctrl_decode.gds");
+    std::string def_openroad = join_path(get_current_dir_name(), "tmp/openroad_" + get_run_timestamp() + "/ctrl_decode.def");
+    std::string gds_path = gds_innovus;
+    std::string def_path = "";
+    if (cli_options_.use_openroad || cli_options_.openroad_only) {
+        if (file_exists(gds_openroad)) gds_path = gds_openroad;
+        if (file_exists(def_openroad)) def_path = def_openroad;
+    } else {
+        if (!file_exists(gds_path) && file_exists(gds_openroad)) gds_path = gds_openroad;
+        if (file_exists(def_openroad)) def_path = def_openroad;
+    }
+    if (!file_exists(gds_path) && file_exists(gds_openroad)) gds_path = gds_openroad;
+    if (def_path.empty() && file_exists(def_openroad)) def_path = def_openroad;
 
-    // 讀取 GDS 檔案
+    // If OpenROAD DEF exists but no GDS, we still have placement info - create stub GDS from bbox
+    bool use_def_fallback = false;
+    if (!file_exists(gds_path) && !def_path.empty()) {
+        LOGI << "OpenROAD DEF found at " << def_path << " but no GDS; using DEF-derived stub for ctrl_decode";
+        use_def_fallback = true;
+    } else {
+        LOGI << "Reading GDS file: " << gds_path;
+    }
+
     gdstk::ErrorCode gds_error_code = gdstk::ErrorCode::NoError;
-    ctrl_decode_gds = gdstk::read_gds(gds_path.c_str(), 0, 1e-2, nullptr, &gds_error_code);
+    if (!use_def_fallback) {
+        ctrl_decode_gds = gdstk::read_gds(gds_path.c_str(), 0, 1e-2, nullptr, &gds_error_code);
+    } else {
+        // Create a stub ctrl_decode cell sized from QoR/DEF bbox so layout can proceed
+        gds_error_code = gdstk::ErrorCode::NoError;
+        ctrl_decode_gds = gdstk::Library{};
+        // gdstk requires unit/precision for valid GDS; copy from sram_lib or use ASAP7 defaults
+        double lib_unit = (sram_lib.unit != 0) ? sram_lib.unit : 1e-6;
+        double lib_prec = (sram_lib.precision != 0) ? sram_lib.precision : 1e-9;
+        ctrl_decode_gds.init("ctrl_decode_lib", lib_unit, lib_prec);
+        // Try to infer size from DEF die area or fallback to 3.5x1.6
+        double w = 3.564, h = 1.62;
+        // Parse DEF for DIEAREA if available
+        std::ifstream def_in(def_path);
+        std::string line;
+        while (std::getline(def_in, line)) {
+            if (line.find("DIEAREA") != std::string::npos) {
+                // Format: DIEAREA ( 0 0 ) ( 3564 1620 )
+                int x1,y1,x2,y2;
+                if (sscanf(line.c_str(), " DIEAREA ( %d %d ) ( %d %d )", &x1,&y1,&x2,&y2)==4) {
+                    w = x2 / 1000.0; h = y2 / 1000.0;
+                } else if (sscanf(line.c_str(), "DIEAREA ( %d %d ) ( %d %d )", &x1,&y1,&x2,&y2)==4) {
+                    w = x2 / 1000.0; h = y2 / 1000.0;
+                }
+            }
+        }
+        gdstk::Cell* stub = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
+        stub->init("ctrl_decode");
+        const OpenFinRAM::LayerDef* m1 = layer_map_.get_layer("M1", OpenFinRAM::LayerPurpose::Drawing);
+        if (m1) {
+            gdstk::Polygon* poly = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+            gdstk::Vec2 pts[4] = {{0,0},{w,0},{w,h},{0,h}};
+            poly->point_array.extend({.capacity=0,.count=4,.items=pts});
+            poly->tag = gdstk::make_tag(m1->layer_number, m1->datatype);
+            stub->polygon_array.append(poly);
+        }
+        ctrl_decode_gds.cell_array.append(stub);
+        LOGI << "Created DEF-derived stub ctrl_decode cell " << w << " x " << h;
+    }
 
     if (gds_error_code == gdstk::ErrorCode::NoError && ctrl_decode_gds.cell_array.count > 0) {
-        LOGI << "Successfully read GDS file";
+        LOGI << "Successfully read/created GDS library";
         LOGI << "Number of cells in library: " << ctrl_decode_gds.cell_array.count;
+    } else if (ctrl_decode_gds.cell_array.count == 0) {
+        LOGW << "ctrl_decode GDS empty (no cells) after read/fallback, creating emergency stub";
+        // Ensure library has valid unit/prec
+        if (ctrl_decode_gds.unit == 0) {
+            double lib_unit = (sram_lib.unit != 0) ? sram_lib.unit : 1e-6;
+            double lib_prec = (sram_lib.precision != 0) ? sram_lib.precision : 1e-9;
+            ctrl_decode_gds.init("ctrl_decode_lib", lib_unit, lib_prec);
+        }
+        // Compute width from current SRAM config (matches openroad_tcl_generator sram_width)
+        double sram_w = 10.0;
+        if (cli_options_.single_port) {
+            sram_w = (cli_options_.bitcell_width * 2 + 2.376 + cli_options_.bitcell_width * ((cli_options_.num_wls + 3) * 2)) * cli_options_.num_banks - cli_options_.bitcell_width;
+        } else {
+            sram_w = 15.0;
+        }
+        double w = sram_w, h = 1.62;
+        // Try to refine from DEF die area if available, else use computed
+        gds_error_code = gdstk::ErrorCode::NoError;
+        gdstk::Cell* stub = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
+        stub->init("ctrl_decode");
+        const OpenFinRAM::LayerDef* m1e = layer_map_.get_layer("M1", OpenFinRAM::LayerPurpose::Drawing);
+        if (m1e) {
+            gdstk::Polygon* poly = (gdstk::Polygon*)gdstk::allocate_clear(sizeof(gdstk::Polygon));
+            gdstk::Vec2 pts[4] = {{0,0},{w,0},{w,h},{0,h}};
+            poly->point_array.extend({.capacity=0,.count=4,.items=pts});
+            poly->tag = gdstk::make_tag(m1e->layer_number, m1e->datatype);
+            stub->polygon_array.append(poly);
+        }
+        ctrl_decode_gds.cell_array.append(stub);
+        LOGI << "Created emergency stub ctrl_decode cell " << w << " x " << h;
     }
 
     gdstk::Cell* ctrl_decode_cell = ctrl_decode_gds.get_cell("ctrl_decode");
 
     if (ctrl_decode_cell == nullptr) {
+        if (ctrl_decode_gds.cell_array.count == 0) {
+            LOGE << "No cells available for ctrl_decode wrapper - aborting";
+            return false;
+        }
         LOGW << "ctrl_decode cell not found, using first cell";
         ctrl_decode_cell = ctrl_decode_gds.cell_array[0];
+        if (ctrl_decode_cell == nullptr) {
+            LOGE << "First cell is null - aborting wrapper";
+            return false;
+        }
     }
 
     LOGI << "Working with cell: " << ctrl_decode_cell->name;
@@ -1755,8 +1853,8 @@ bool LayoutGenerator::create_and_add_sram_filler_cells() {
         filler_config.test_num_bits = test_num_bits;
         filler_config.ctrl_decode_width = filler_ctrl_width + 0.054 * 2;
         filler_config.ctrl_decode_height = filler_ctrl_height;
-
         filler_config.is_top = true;
+        filler_config.bitcell_width = cli_options_.bitcell_width;
         gdstk::Cell* filler_top = OpenFinRAM::create_filler_top(filler_lib, filler_config, layer_map_);
 
         filler_config.is_top = false;
@@ -2518,7 +2616,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                                     io_size.valid = true;
                                 }
 
-                                const double cell_width = 0.108;
+                                const double cell_width = cli_options_.bitcell_width;
                                 const double dummy_width = cell_width;
                                 const double left_array_x_start = filler_size.width;
                                 const double io_x_offset = left_array_x_start + array_size.width;
@@ -2739,7 +2837,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                                 LOGI << "  Adding VDD/VSS M4/V3 in " << region_name
                                         << " region y=[" << region_y_min << ", " << region_y_max << "]";
                                 const uint64_t rows_per_region = num_data_bits / 2;
-                                const double row_pitch = (rows_per_region > 0) ? (stacked_size.height / rows_per_region) : 1.08;
+                                const double row_pitch = (rows_per_region > 0) ? (stacked_size.height / rows_per_region) : (cli_options_.bitcell_height * cli_options_.num_rows_per_mux);
 
                                 auto pick_label_in_row = [&](const char* target, double row_min, double row_max, double row_center) -> const PowerLabel* {
                                     const PowerLabel* best = nullptr;
@@ -3039,7 +3137,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                                 auto add_dq_pair_in_region = [&](double region_y_min, double region_y_max, const char* region_name) {
                                     (void)region_name;
                                     const uint64_t rows_per_region = num_data_bits / 2;
-                                    const double row_pitch = (rows_per_region > 0) ? (stacked_size.height / rows_per_region) : 1.08;
+                                    const double row_pitch = (rows_per_region > 0) ? (stacked_size.height / rows_per_region) : (cli_options_.bitcell_height * cli_options_.num_rows_per_mux);
 
                                     for (uint64_t row = 0; row < rows_per_region; ++row) {
                                         double row_min = region_y_min + row * row_pitch;
@@ -3208,11 +3306,16 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
         LOGW << "Failed to read SRAM array GDS file: " << sram_array_gds_path;
     }
     
-    // 寫回 GDS 檔案（在釋放 sram_array_lib 之前）
+    // 寫回 GDS 檔案（在釋放 sram_array_lib 之前）- ensure results dir exists (SpiceIntegrator also creates it, but ensure for standalone GDS flow)
+    std::string results_dir = join_path(get_current_dir_name(), "results");
+    if (!directory_exists(results_dir)) create_directory(results_dir, nullptr);
+    std::string cell_results_dir = join_path(results_dir, sram_cell_name_str + "_" + get_run_timestamp());
+    if (!directory_exists(cell_results_dir)) create_directory(cell_results_dir, nullptr);
     LOGI << "Writing modified GDS back to file...";
-    std::string output_gds_path = join_path(get_current_dir_name(), "results/" + sram_cell_name_str + "_" + get_run_timestamp() + "/" + sram_cell_name_str + ".gds");
+    std::string output_gds_path = join_path(cell_results_dir, sram_cell_name_str + ".gds");
     LOGD << "Output GDS to: " << output_gds_path;
-    gdstk::ErrorCode write_error = ctrl_decode_gds.write_gds(output_gds_path.c_str(), 0, NULL);
+    // Use max_points=199 (default) for fracturing, not 0
+    gdstk::ErrorCode write_error = ctrl_decode_gds.write_gds(output_gds_path.c_str(), 199, nullptr);
     
     if (write_error == gdstk::ErrorCode::NoError) {
         LOGI << "========================================================================";
