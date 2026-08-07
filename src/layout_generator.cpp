@@ -1361,9 +1361,10 @@ bool LayoutGenerator::add_ctrl_decode_gate_fin_wrappers() {
     std::string gds_innovus = join_path(get_current_dir_name(), "tmp/innovus_" + get_run_timestamp() + "/ctrl_decode.gds");
     std::string gds_openroad = join_path(get_current_dir_name(), "tmp/openroad_" + get_run_timestamp() + "/ctrl_decode.gds");
     std::string def_openroad = join_path(get_current_dir_name(), "tmp/openroad_" + get_run_timestamp() + "/ctrl_decode.def");
+    const bool openroad_mode = cli_options_.use_openroad || cli_options_.openroad_only;
     std::string gds_path = gds_innovus;
     std::string def_path = "";
-    if (cli_options_.use_openroad || cli_options_.openroad_only) {
+    if (openroad_mode) {
         if (file_exists(gds_openroad)) gds_path = gds_openroad;
         if (file_exists(def_openroad)) def_path = def_openroad;
     } else {
@@ -1373,7 +1374,13 @@ bool LayoutGenerator::add_ctrl_decode_gate_fin_wrappers() {
     if (!file_exists(gds_path) && file_exists(gds_openroad)) gds_path = gds_openroad;
     if (def_path.empty() && file_exists(def_openroad)) def_path = def_openroad;
 
-    // If OpenROAD DEF exists but no GDS, we still have placement info - create stub GDS from bbox
+    if (openroad_mode && !file_exists(gds_openroad)) {
+        LOGE << "OpenROAD ctrl_decode.gds is missing; a DEF-derived placeholder is no longer accepted";
+        return false;
+    }
+
+    // Retain the legacy DEF stub only for non-OpenROAD integration. OpenROAD
+    // mode is required to consume the merged GDS checked above.
     bool use_def_fallback = false;
     if (!file_exists(gds_path) && !def_path.empty()) {
         LOGI << "OpenROAD DEF found at " << def_path << " but no GDS; using DEF-derived stub for ctrl_decode";
@@ -2073,18 +2080,18 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                 double y_offset = 0.0;
                 double max_width = 0.0;
                 
-                // // 1. 底部：filler_bottom
-                // if (filler_bottom_cell != nullptr && filler_bottom_size.valid) {
-                //     LOGI << "Adding filler_bottom at y=" << y_offset;
-                //     gdstk::Reference* filler_bottom_ref = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
-                //     filler_bottom_ref->init(filler_bottom_cell);
-                //     filler_bottom_ref->origin = {-filler_bottom_size.min.x - 0.054, y_offset - filler_bottom_size.min.y};
-                //     filler_bottom_ref->magnification = 1.0;
-                //     sram_cell->reference_array.append(filler_bottom_ref);
-                    
-                //     y_offset += filler_bottom_size.height - 0.054;
-                //     max_width = std::max(max_width, filler_bottom_size.width);
-                // }
+                // 1. 底部：filler_bottom
+                if (filler_bottom_cell != nullptr && filler_bottom_size.valid) {
+                    LOGI << "Adding filler_bottom at y=" << y_offset;
+                    gdstk::Reference* filler_bottom_ref = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
+                    filler_bottom_ref->init(filler_bottom_cell);
+                    filler_bottom_ref->origin = {-filler_bottom_size.min.x - 0.054, y_offset - filler_bottom_size.min.y};
+                    filler_bottom_ref->magnification = 1.0;
+                    sram_cell->reference_array.append(filler_bottom_ref);
+
+                    y_offset += filler_bottom_size.height - 0.054;
+                    max_width = std::max(max_width, filler_bottom_size.width);
+                }
                 
                 // 2. 底部：stacked_colgrp
                 LOGI << "Adding bottom stacked_colgrp at y=" << y_offset;
@@ -2123,18 +2130,18 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                 
                 y_offset += stacked_size.height + 0.0675 - 0.027;
                 
-                // // 5. 頂部：filler_top
-                // if (filler_top_cell != nullptr && filler_top_size.valid) {
-                //     LOGI << "Adding filler_top at y=" << y_offset;
-                //     gdstk::Reference* filler_top_ref = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
-                //     filler_top_ref->init(filler_top_cell);
-                //     filler_top_ref->origin = {-filler_top_size.min.x - 0.054, y_offset - filler_top_size.min.y - 0.027};
-                //     filler_top_ref->magnification = 1.0;
-                //     sram_cell->reference_array.append(filler_top_ref);
-                    
-                //     y_offset += filler_top_size.height;
-                //     max_width = std::max(max_width, filler_top_size.width);
-                // }
+                // 5. 頂部：filler_top
+                if (filler_top_cell != nullptr && filler_top_size.valid) {
+                    LOGI << "Adding filler_top at y=" << y_offset;
+                    gdstk::Reference* filler_top_ref = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
+                    filler_top_ref->init(filler_top_cell);
+                    filler_top_ref->origin = {-filler_top_size.min.x - 0.054, y_offset - filler_top_size.min.y - 0.027};
+                    filler_top_ref->magnification = 1.0;
+                    sram_cell->reference_array.append(filler_top_ref);
+
+                    y_offset += filler_top_size.height;
+                    max_width = std::max(max_width, filler_top_size.width);
+                }
                 
                 // ================================================================
                 // 6. 添加 SRAM Top Level Pins

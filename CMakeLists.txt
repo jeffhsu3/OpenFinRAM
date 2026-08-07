@@ -36,6 +36,7 @@ set(SOURCES
     src/siliconsmart_manager.cpp
     src/lvs_runner.cpp
     src/lef_extractor.cpp
+    src/liberty_estimator.cpp
     src/main_config_helpers.cpp
     src/main_flow_helpers.cpp
     src/main_layout_helpers.cpp
@@ -53,4 +54,15 @@ find_package(Threads REQUIRED)
 target_link_libraries(OpenFinRAM gdstk argparse Threads::Threads)
 
 include(GNUInstallDirs)
+file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/scripts")
+configure_file(
+    "${CMAKE_SOURCE_DIR}/scripts/def_to_gds.py"
+    "${CMAKE_BINARY_DIR}/scripts/def_to_gds.py"
+    COPYONLY
+)
+
 install(TARGETS OpenFinRAM RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(
+    PROGRAMS "${CMAKE_SOURCE_DIR}/scripts/def_to_gds.py"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/OpenFinRAM/scripts"
+)

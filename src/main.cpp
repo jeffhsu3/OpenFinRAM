@@ -18,6 +18,7 @@
 #include "lvs_manager.hpp"
 #include "lef_extractor.hpp"
 #include "lef_manager.hpp"
+#include "liberty_estimator.hpp"
 #include "layout_generator.hpp"
 #include "main_config_helpers.hpp"
 #include "main_flow_helpers.hpp"
@@ -98,7 +99,8 @@ int main(int argc, char **argv) {
 
     // Run siliconsmart characterization
     SiliconSmartManager sis_manager(cli_options);
-    if (!sis_manager.run_siliconsmart()) {
+    const bool characterization_ok = sis_manager.run_siliconsmart();
+    if (!characterization_ok) {
         LOGW << "SiliconSmart characterization failed, skipping.";
     }
 
@@ -128,5 +130,25 @@ int main(int argc, char **argv) {
     if (!lef_manager.export_lef()) {
         LOGE << "LEF export failed!";
         return 1;
+    }
+
+    // Leave a usable early-PPA timing model when characterization was
+    // explicitly skipped or could not run. A successful SiliconSmart model is
+    // never overwritten by this estimated fallback.
+    if (cli_options.skip_characterization || !characterization_ok) {
+        const std::string cell_name =
+            "sram_x" + std::to_string(cli_options.num_wls * 2) + "x" +
+            std::to_string(cli_options.num_data_bits) + "x" +
+            std::to_string(cli_options.num_banks);
+        const std::string result_dir =
+            "./results/" + cell_name + "_" + get_run_timestamp();
+        std::string liberty_error;
+        if (!OpenFinRAM::export_estimated_liberty(
+                cli_options,
+                result_dir + "/" + cell_name + ".lef",
+                result_dir + "/" + cell_name + ".lib",
+                &liberty_error)) {
+            LOGW << "Estimated Liberty export failed: " << liberty_error;
+        }
     }
 }

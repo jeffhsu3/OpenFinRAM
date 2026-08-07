@@ -1,163 +1,425 @@
 #include "lef_extractor.hpp"
 
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <gdstk/gdstk.hpp>
 
-#include <cerrno>
-#include <cstdlib>
-#include <cstring>
+#include <algorithm>
+#include <cctype>
+#include <cmath>
 #include <fstream>
+#include <iomanip>
+#include <limits>
+#include <map>
+#include <memory>
+#include <sstream>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 #include "plog/Log.h"
-#include "utils.hpp"
 
 namespace OpenFinRAM {
+namespace {
 
-static bool ensure_directory_exists(const std::string& dir_path, std::string* error) {
-    struct stat st;
-    if (stat(dir_path.c_str(), &st) == 0) {
-        if (S_ISDIR(st.st_mode)) {
-            return true;
-        }
-        if (error) {
-            *error = "Path exists but is not a directory: " + dir_path;
-        }
-        return false;
+constexpr uint16_t kBoundaryLayer = 100;
+constexpr uint16_t kDrawingPurpose = 0;
+constexpr uint16_t kPinPurpose = 251;
+
+struct Rect {
+    double x_min = 0;
+    double y_min = 0;
+    double x_max = 0;
+    double y_max = 0;
+};
+
+struct PortShape {
+    std::string layer;
+    Rect rect;
+};
+
+struct MacroPin {
+    std::string name;
+    std::string direction;
+    std::string use;
+    std::vector<PortShape> shapes;
+};
+
+void free_polygon_array(gdstk::Array<gdstk::Polygon*>& polygons) {
+    for (uint64_t i = 0; i < polygons.count; ++i) {
+        polygons[i]->clear();
+        gdstk::free_allocation(polygons[i]);
     }
+    polygons.clear();
+}
 
-    if (mkdir(dir_path.c_str(), 0755) != 0) {
-        if (error) {
-            *error = "Failed to create directory: " + dir_path + ", error: " + std::strerror(errno);
-        }
-        return false;
+struct LayerGeometry {
+    gdstk::Array<gdstk::Polygon*> pin_polygons = {};
+    gdstk::Array<gdstk::Polygon*> drawing_polygons = {};
+
+    ~LayerGeometry() {
+        free_polygon_array(pin_polygons);
+        free_polygon_array(drawing_polygons);
     }
+};
 
+std::string lowercase(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return value;
+}
+
+const char* metal_layer_name(uint16_t layer) {
+    switch (layer) {
+        case 19: return "M1";
+        case 20: return "M2";
+        case 30: return "M3";
+        case 40: return "M4";
+        case 50: return "M5";
+        case 60: return "M6";
+        case 70: return "M7";
+        case 80: return "M8";
+        case 90: return "M9";
+        default: return nullptr;
+    }
+}
+
+double minimum_metal_width(uint16_t layer) {
+    if (layer == 19 || layer == 20 || layer == 30) return 0.018;
+    if (layer == 40 || layer == 50) return 0.024;
+    if (layer == 60 || layer == 70) return 0.032;
+    return 0.040;
+}
+
+void extend_bounds(const Rect& rect, Rect& bounds, bool& valid) {
+    if (!valid) {
+        bounds = rect;
+        valid = true;
+        return;
+    }
+    bounds.x_min = std::min(bounds.x_min, rect.x_min);
+    bounds.y_min = std::min(bounds.y_min, rect.y_min);
+    bounds.x_max = std::max(bounds.x_max, rect.x_max);
+    bounds.y_max = std::max(bounds.y_max, rect.y_max);
+}
+
+bool polygon_bounds(const gdstk::Polygon* polygon, Rect& rect) {
+    gdstk::Vec2 min;
+    gdstk::Vec2 max;
+    polygon->bounding_box(min, max);
+    if (!(min.x < max.x && min.y < max.y)) return false;
+    rect = {min.x, min.y, max.x, max.y};
     return true;
 }
 
-static bool remove_path_if_exists(const std::string& path, bool is_dir, std::string* error) {
-    struct stat st;
-    if (stat(path.c_str(), &st) != 0) {
-        return true;
+bool find_macro_bounds(const gdstk::Cell* top, Rect& bounds, bool& used_boundary) {
+    bool valid = false;
+    const gdstk::Tag boundary_tag = gdstk::make_tag(kBoundaryLayer, kDrawingPurpose);
+
+    // The final OpenFinRAM top cell has a direct BOUNDARY polygon.  Prefer it
+    // so intentional fin/metal overhang does not enlarge the placement size.
+    for (uint64_t i = 0; i < top->polygon_array.count; ++i) {
+        gdstk::Polygon* polygon = top->polygon_array[i];
+        if (polygon->tag != boundary_tag) continue;
+        Rect rect;
+        if (polygon_bounds(polygon, rect)) extend_bounds(rect, bounds, valid);
     }
 
-    if (is_dir) {
-        std::string cmd = "rm -rf \"" + path + "\"";
-        int rc = std::system(cmd.c_str());
-        if (rc != 0) {
-            if (error) {
-                *error = "Failed to remove directory: " + path + ", status: " + std::to_string(rc);
+    if (!valid) {
+        gdstk::Array<gdstk::Polygon*> boundaries = {};
+        top->get_polygons(true, true, -1, true, boundary_tag, boundaries);
+        for (uint64_t i = 0; i < boundaries.count; ++i) {
+            Rect rect;
+            if (polygon_bounds(boundaries[i], rect)) extend_bounds(rect, bounds, valid);
+        }
+        free_polygon_array(boundaries);
+    }
+
+    used_boundary = valid;
+    if (!valid) {
+        gdstk::Vec2 min;
+        gdstk::Vec2 max;
+        top->bounding_box(min, max);
+        if (min.x < max.x && min.y < max.y) {
+            bounds = {min.x, min.y, max.x, max.y};
+            valid = true;
+        }
+    }
+    return valid;
+}
+
+bool clip_to_macro(Rect& rect, const Rect& macro) {
+    rect.x_min = std::max(rect.x_min, macro.x_min);
+    rect.y_min = std::max(rect.y_min, macro.y_min);
+    rect.x_max = std::min(rect.x_max, macro.x_max);
+    rect.y_max = std::min(rect.y_max, macro.y_max);
+    return rect.x_min < rect.x_max && rect.y_min < rect.y_max;
+}
+
+bool find_containing_polygon(const gdstk::Array<gdstk::Polygon*>& polygons,
+                             const gdstk::Vec2& point,
+                             const Rect& macro,
+                             Rect& result) {
+    bool found = false;
+    double best_area = std::numeric_limits<double>::infinity();
+    for (uint64_t i = 0; i < polygons.count; ++i) {
+        gdstk::Polygon* polygon = polygons[i];
+        if (!polygon->contain(point)) continue;
+
+        Rect candidate;
+        if (!polygon_bounds(polygon, candidate) || !clip_to_macro(candidate, macro)) continue;
+        const double area = (candidate.x_max - candidate.x_min) *
+                            (candidate.y_max - candidate.y_min);
+        if (area < best_area) {
+            best_area = area;
+            result = candidate;
+            found = true;
+        }
+    }
+    return found;
+}
+
+Rect fallback_pin_rect(const gdstk::Vec2& point, uint16_t layer, const Rect& macro) {
+    const double width = minimum_metal_width(layer);
+    Rect rect = {point.x - width / 2.0, point.y - width / 2.0,
+                 point.x + width / 2.0, point.y + width / 2.0};
+
+    // Shift, instead of merely clipping, a fallback rectangle at an edge so
+    // it retains a legal minimum width whenever the macro is large enough.
+    if (rect.x_min < macro.x_min) {
+        rect.x_max += macro.x_min - rect.x_min;
+        rect.x_min = macro.x_min;
+    }
+    if (rect.x_max > macro.x_max) {
+        rect.x_min -= rect.x_max - macro.x_max;
+        rect.x_max = macro.x_max;
+    }
+    if (rect.y_min < macro.y_min) {
+        rect.y_max += macro.y_min - rect.y_min;
+        rect.y_min = macro.y_min;
+    }
+    if (rect.y_max > macro.y_max) {
+        rect.y_min -= rect.y_max - macro.y_max;
+        rect.y_max = macro.y_max;
+    }
+    clip_to_macro(rect, macro);
+    return rect;
+}
+
+void classify_pin(MacroPin& pin) {
+    const std::string name = lowercase(pin.name);
+    if (name == "vdd" || name == "vcc" || name == "vpwr") {
+        pin.direction = "INOUT";
+        pin.use = "POWER";
+    } else if (name == "vss" || name == "gnd" || name == "vgnd") {
+        pin.direction = "INOUT";
+        pin.use = "GROUND";
+    } else if (name == "q" || name.rfind("q[", 0) == 0 ||
+               name == "dataout" || name.rfind("dataout[", 0) == 0) {
+        pin.direction = "OUTPUT";
+        pin.use = "SIGNAL";
+    } else {
+        pin.direction = "INPUT";
+        pin.use = "SIGNAL";
+    }
+}
+
+bool rect_touches_boundary(const Rect& rect, double width, double height) {
+    constexpr double epsilon = 1e-6;
+    return rect.x_min <= epsilon || rect.y_min <= epsilon ||
+           rect.x_max >= width - epsilon || rect.y_max >= height - epsilon;
+}
+
+std::string build_lef(const std::string& cell_name,
+                      const Rect& macro,
+                      const std::vector<MacroPin>& pins,
+                      bool used_boundary) {
+    const double width = macro.x_max - macro.x_min;
+    const double height = macro.y_max - macro.y_min;
+    const double foreign_x = std::abs(macro.x_min) < 5e-10 ? 0.0 : -macro.x_min;
+    const double foreign_y = std::abs(macro.y_min) < 5e-10 ? 0.0 : -macro.y_min;
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(6);
+    out << "# Generated directly from GDS by OpenFinRAM (gdstk)\n";
+    if (!used_boundary) {
+        out << "# WARNING: no GDS BOUNDARY geometry was found; SIZE uses the full GDS bounding box.\n";
+    }
+    out << "VERSION 5.8 ;\n";
+    out << "BUSBITCHARS \"[]\" ;\n";
+    out << "DIVIDERCHAR \"/\" ;\n\n";
+    out << "MACRO " << cell_name << "\n";
+    out << "  CLASS BLOCK ;\n";
+    out << "  ORIGIN 0 0 ;\n";
+    // FOREIGN locates the original GDS cell origin in the normalized LEF
+    // coordinate system.  This preserves stream-out alignment when GDS has a
+    // negative BOUNDARY origin (for example, the SRAM filler overhang).
+    out << "  FOREIGN " << cell_name << " " << foreign_x << " " << foreign_y << " ;\n";
+    out << "  SIZE " << width << " BY " << height << " ;\n";
+    out << "  SYMMETRY X Y ;\n";
+
+    for (const MacroPin& pin : pins) {
+        out << "  PIN " << pin.name << "\n";
+        out << "    DIRECTION " << pin.direction << " ;\n";
+        out << "    USE " << pin.use << " ;\n";
+        bool abutment = false;
+        for (const PortShape& shape : pin.shapes) {
+            if (rect_touches_boundary(shape.rect, width, height)) {
+                abutment = true;
+                break;
             }
-            return false;
         }
-        return true;
+        if (abutment) out << "    SHAPE ABUTMENT ;\n";
+        out << "    PORT\n";
+        std::string current_layer;
+        for (const PortShape& shape : pin.shapes) {
+            if (shape.layer != current_layer) {
+                current_layer = shape.layer;
+                out << "      LAYER " << current_layer << " ;\n";
+            }
+            out << "        RECT " << shape.rect.x_min << " " << shape.rect.y_min << " "
+                << shape.rect.x_max << " " << shape.rect.y_max << " ;\n";
+        }
+        out << "    END\n";
+        out << "  END " << pin.name << "\n";
     }
 
-    if (std::remove(path.c_str()) != 0) {
-        if (error) {
-            *error = "Failed to remove file: " + path + ", error: " + std::strerror(errno);
-        }
-        return false;
+    // Match the widely used FakeRAM abstraction convention: the hard macro
+    // blocks routing across every layer used internally.  Explicit PIN shapes
+    // remain available to the router even where they overlap this OBS box.
+    out << "  OBS\n";
+    for (int level = 1; level <= 5; ++level) {
+        out << "    LAYER M" << level << " ;\n";
+        out << "      RECT 0 0 " << width << " " << height << " ;\n";
     }
-
-    return true;
+    out << "  END\n";
+    out << "END " << cell_name << "\n\n";
+    out << "END LIBRARY\n";
+    return out.str();
 }
 
-static bool write_text_file(const std::string& file_path, const std::string& content, std::string* error) {
-    std::ofstream out(file_path);
-    if (!out) {
-        if (error) {
-            *error = "Failed to open file for writing: " + file_path;
-        }
-        return false;
-    }
-    out << content;
-    return true;
-}
-
-static std::string build_export_lef_il(const std::string& cell_name) {
-    std::string il;
-    il += "absSkillMode()\n";
-    il += "absSetLibrary(\"" + cell_name  + "_gds\")\n";
-    il += "absSelectCellFrom(\"" + cell_name + "\" \"" + cell_name + "\")\n";
-    il += "absDisableUpdate()\n";
-    il += "absSetBinOption(\"Core\" \"PinsTextPinMap\" \"(M1 M1)(M2 M2)(M3 M3)(M4 M4)(M5 M5)\")\n";
-    il += "absSetBinOption(\"Core\" \"PinsClockNames\" \"CLK clk\")\n";
-    il += "absSetBinOption(\"Core\" \"PinsOutputNames\" \"^(Y|Q|QN)([.*])?(!)?$\")\n";
-    il += "absSetBinOption(\"Core\" \"PinsBoundaryLayers\" \"BOUNDARY\")\n";
-    il += "absSetBinOption(\"Core\" \"ExtractAntennaGate\" \"(Gate (Gate and Active)) \")\n";
-    il += "absEnableUpdate()\n";
-    il += "absAbstract()\n";
-    il += "absSetOption(\"ExportLEFFile\" \"" + cell_name + ".lef\")\n";
-    il += "absExportLEF()\n";
-    il += "absExit()\n";
-    return il;
-}
+}  // namespace
 
 bool export_lef(const std::string& project_root,
                 const std::string& cell_name,
                 const std::string& gds_path,
-                std::string* log_path,
+                std::string* output_path,
                 std::string* error) {
-    const std::string cds_lib_path = project_root + "/cds.lib";
-    const std::string gds_lib_dir = project_root + "/" + cell_name + "_gds";
-
-    if (!remove_path_if_exists(gds_lib_dir, true, error)) {
-        return false;
-    }
-    if (!remove_path_if_exists(cds_lib_path, false, error)) {
-        return false;
-    }
-
-    std::string cur_path = get_executable_directory();
-    const std::string cds_lib_content = "DEFINE asap7_TechLib " + join_path(cur_path, "tech/TechLib") + "\n";
-    if (!write_text_file(cds_lib_path, cds_lib_content, error)) {
-        return false;
-    }
-
-    std::string strmin_cmd = "tcsh -c 'strmin -library " + cell_name + "_gds" +
-                             " -strmFile " + gds_path +
-                             " -logFile ./log_read_gds.txt"
-                             " -snapToGrid -attachTechFileOfLib asap7_TechLib"
-                             " -layerMap " + join_path(cur_path, "tech/TechLib/asap7_TechLib.layermap") + "' > /dev/null 2>&1";
-
-    LOGD << "Running command: " << strmin_cmd;
-
-    int strmin_status = std::system(strmin_cmd.c_str());
-    if (strmin_status != 0) {
+    gdstk::ErrorCode error_code = gdstk::ErrorCode::NoError;
+    gdstk::Library library = gdstk::read_gds(gds_path.c_str(), 0, 1e-3, nullptr, &error_code);
+    if (error_code != gdstk::ErrorCode::NoError) {
         if (error) {
-            *error = "strmin command failed with status " + std::to_string(strmin_status);
+            *error = "Failed to read GDS '" + gds_path + "' (gdstk error " +
+                     std::to_string(static_cast<int>(error_code)) + ")";
         }
+        library.free_all();
         return false;
     }
 
-    // const std::string cell_dir = project_root + "/" + cell_name;
-    // if (!ensure_directory_exists(cell_dir, error)) {
-    //     return false;
-    // }
-
-    const std::string export_il_path = project_root + "/export_lef.il";
-    if (!write_text_file(export_il_path, build_export_lef_il(cell_name), error)) {
+    gdstk::Cell* top = library.get_cell(cell_name.c_str());
+    if (top == nullptr) {
+        if (error) *error = "GDS does not contain top cell '" + cell_name + "'";
+        library.free_all();
         return false;
     }
 
-    // const std::string abstract_log_path = project_root + "/my_abstract.log";
-    // if (log_path) {
-    //     *log_path = abstract_log_path;
-    // }
+    Rect macro;
+    bool used_boundary = false;
+    if (!find_macro_bounds(top, macro, used_boundary)) {
+        if (error) *error = "Cannot determine macro bounds for '" + cell_name + "'";
+        library.free_all();
+        return false;
+    }
 
-    std::string abstract_cmd = "tcsh -c 'abstract -nogui -replay export_lef.il -log my_abstract.log' > /dev/null 2>&1";
+    std::map<uint16_t, std::unique_ptr<LayerGeometry>> geometry;
+    std::vector<MacroPin> pins;
+    std::unordered_map<std::string, size_t> pin_indices;
+    unsigned fallback_count = 0;
 
-    int abstract_status = std::system(abstract_cmd.c_str());
-    if (abstract_status != 0) {
+    // Interface labels are deliberately copied onto the final top cell by the
+    // layout generator.  Restricting extraction to direct pin-purpose labels
+    // avoids accidentally promoting internal hierarchy labels to macro pins.
+    for (uint64_t i = 0; i < top->label_array.count; ++i) {
+        const gdstk::Label* label = top->label_array[i];
+        if (label->text == nullptr || label->text[0] == '\0') continue;
+        const uint16_t layer = gdstk::get_layer(label->tag);
+        const uint16_t purpose = gdstk::get_type(label->tag);
+        const char* layer_name = metal_layer_name(layer);
+        if (purpose != kPinPurpose || layer_name == nullptr) continue;
+
+        auto geometry_it = geometry.find(layer);
+        if (geometry_it == geometry.end()) {
+            auto layer_geometry = std::make_unique<LayerGeometry>();
+            top->get_polygons(true, true, -1, true,
+                              gdstk::make_tag(layer, kPinPurpose),
+                              layer_geometry->pin_polygons);
+            top->get_polygons(true, true, -1, true,
+                              gdstk::make_tag(layer, kDrawingPurpose),
+                              layer_geometry->drawing_polygons);
+            geometry_it = geometry.emplace(layer, std::move(layer_geometry)).first;
+        }
+
+        Rect pin_rect;
+        bool found_geometry = find_containing_polygon(
+            geometry_it->second->pin_polygons, label->origin, macro, pin_rect);
+        if (!found_geometry) {
+            found_geometry = find_containing_polygon(
+                geometry_it->second->drawing_polygons, label->origin, macro, pin_rect);
+        }
+        if (!found_geometry) {
+            pin_rect = fallback_pin_rect(label->origin, layer, macro);
+            ++fallback_count;
+            LOGW << "No metal polygon contains LEF pin label " << label->text
+                 << " on " << layer_name << "; using a minimum-width rectangle";
+        }
+
+        // Normalize all geometry to the lower-left BOUNDARY corner.
+        pin_rect.x_min -= macro.x_min;
+        pin_rect.x_max -= macro.x_min;
+        pin_rect.y_min -= macro.y_min;
+        pin_rect.y_max -= macro.y_min;
+
+        const std::string pin_name(label->text);
+        auto pin_it = pin_indices.find(pin_name);
+        if (pin_it == pin_indices.end()) {
+            MacroPin pin;
+            pin.name = pin_name;
+            classify_pin(pin);
+            pins.push_back(std::move(pin));
+            pin_it = pin_indices.emplace(pin_name, pins.size() - 1).first;
+        }
+        pins[pin_it->second].shapes.push_back({layer_name, pin_rect});
+    }
+
+    if (pins.empty()) {
         if (error) {
-            *error = "abstract command failed with status " + std::to_string(abstract_status);
+            *error = "No direct metal pin labels (GDS datatype 251) found on top cell '" +
+                     cell_name + "'";
         }
+        library.free_all();
         return false;
     }
 
+    const std::string lef_path = project_root + "/" + cell_name + ".lef";
+    std::ofstream out(lef_path, std::ios::out | std::ios::trunc);
+    if (!out) {
+        if (error) *error = "Failed to open LEF for writing: " + lef_path;
+        library.free_all();
+        return false;
+    }
+    out << build_lef(cell_name, macro, pins, used_boundary);
+    out.close();
+    if (!out) {
+        if (error) *error = "Failed while writing LEF: " + lef_path;
+        library.free_all();
+        return false;
+    }
+
+    if (output_path) *output_path = lef_path;
+    LOGI << "Native LEF export wrote " << pins.size() << " pins to " << lef_path
+         << " (SIZE " << (macro.x_max - macro.x_min) << " x "
+         << (macro.y_max - macro.y_min) << " um, " << fallback_count
+         << " fallback pin rectangles)";
+    library.free_all();
     return true;
 }
 
-} // namespace OpenFinRAM
+}  // namespace OpenFinRAM

@@ -27,7 +27,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .implicit_value(true);
 
     program.add_argument("--skip-characterization")
-        .help("Disable SiliconSmart characterization and verification steps.")
+        .help("Skip SiliconSmart and emit an explicitly estimated early-PPA Liberty model.")
         .default_value(false)
         .implicit_value(true);
 
