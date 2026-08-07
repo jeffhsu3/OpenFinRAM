@@ -236,10 +236,8 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     file << "if {[llength $physical_delay_cells] != 108} { error \"PERIPHERY_STRUCTURE: expected 108 named physical delay inverters, found [llength $physical_delay_cells]\" }\n";
     file << "set physical_delay_inputs [get_cells -hierarchical -quiet {physical_delay_input_*}]\n";
     file << "if {[llength $physical_delay_inputs] != 8} { error \"PERIPHERY_STRUCTURE: expected 8 named delay-chain inputs, found [llength $physical_delay_inputs]\" }\n";
-    // EXTERNAL_WL_DRIVERS: WL BUFx4 drivers are tiled per-row at the array edge
-    // by the layout integrator, so none are expected inside this block.
     file << "set wordline_driver_cells [get_cells -hierarchical -quiet {g_bank_logic*.u_wl*_driver}]\n";
-    file << "if {[llength $wordline_driver_cells] != 0} { error \"PERIPHERY_STRUCTURE: expected 0 in-block wordline drivers (EXTERNAL_WL_DRIVERS), found [llength $wordline_driver_cells]\" }\n";
+    file << "if {[llength $wordline_driver_cells] != " << (2 * num_wlt * num_mux) << "} { error \"PERIPHERY_STRUCTURE: expected " << (2 * num_wlt * num_mux) << " dedicated wordline drivers, found [llength $wordline_driver_cells]\" }\n";
     file << "set_dont_touch $physical_delay_cells\n\n";
 
     // Placement and electrical repair use the per-output array loads from the
@@ -281,9 +279,9 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     file << "set final_delay_cells [get_cells -hierarchical -quiet {physical_delay_*}]\n";
     file << "if {[llength $final_delay_cells] != 108} { error \"PERIPHERY_STRUCTURE: delay topology changed during implementation\" }\n";
     file << "foreach cell $final_delay_cells { if {[get_property $cell ref_name] ne \"INVx1_ASAP7_75t_R\"} { error \"PERIPHERY_STRUCTURE: physical delay cell was resized\" } }\n";
-    // EXTERNAL_WL_DRIVERS: none in this block (tiled at the array edge instead).
     file << "set final_wordline_drivers [get_cells -hierarchical -quiet {g_bank_logic*.u_wl*_driver}]\n";
-    file << "if {[llength $final_wordline_drivers] != 0} { error \"PERIPHERY_STRUCTURE: expected 0 in-block wordline drivers after implementation (EXTERNAL_WL_DRIVERS), found [llength $final_wordline_drivers]\" }\n";
+    file << "if {[llength $final_wordline_drivers] != " << (2 * num_wlt * num_mux) << "} { error \"PERIPHERY_STRUCTURE: wordline driver stage missing after implementation\" }\n";
+    file << "foreach cell $final_wordline_drivers { if {![string match \"BUF*\" [get_property $cell ref_name]]} { error \"PERIPHERY_STRUCTURE: non-buffer cell used as dedicated wordline driver\" } }\n";
     file << "set structure_fd [open periphery_implementation.rpt w]\n";
     file << "puts $structure_fd \"physical_delay_invx1 [llength $final_delay_cells]\"\n";
     file << "puts $structure_fd \"dedicated_wordline_buffers [llength $final_wordline_drivers]\"\n";

@@ -31,7 +31,12 @@ endmodule
 module ctrl_decode #(
     parameter integer ADDR_WIDTH = 8,
     parameter integer NUM_WL     = 32,
-    parameter integer NUM_BANK   = 4
+    parameter integer NUM_BANK   = 1,
+    // 0 = wordline BUFx4 drivers synthesized inside this block (default).
+    // 1 = expose the raw decode on wlt/wlb; the layout integrator tiles a
+    //     per-row BUFx4 driver column at the array edge (keeps 1024 large
+    //     drivers out of the thin central ctrl_decode strip).
+    parameter integer EXTERNAL_WL_DRIVERS = 0
 ) (
     input  wire        clk,
     input  wire        ce_n,
@@ -39,8 +44,8 @@ module ctrl_decode #(
     input  wire        oe_n,
     input  wire [3:0]  sdel,
     input  wire [ADDR_WIDTH-1:0] A,
-    output logic [NUM_BANK-1:0][NUM_WL-1:0] wlt,
-    output logic [NUM_BANK-1:0][NUM_WL-1:0] wlb,
+    output wire  [NUM_BANK-1:0][NUM_WL-1:0] wlt,
+    output wire  [NUM_BANK-1:0][NUM_WL-1:0] wlb,
     output logic [NUM_BANK-1:0]             blprechtn,
     output logic [NUM_BANK-1:0]             blprechbn,
     output logic [NUM_BANK-1:0][3:0]        yselt,
@@ -83,6 +88,8 @@ module ctrl_decode #(
 
     reg [3:0] ysel_onehot;
     wire [ROW_ADDR_WIDTH-1:0] row_addr_q;
+    wire [NUM_BANK-1:0][NUM_WL-1:0] wlt_decode;
+    wire [NUM_BANK-1:0][NUM_WL-1:0] wlb_decode;
 
     assign row_addr_q = A_q[ROW_ADDR_MSB:ROW_ADDR_LSB];
 
@@ -162,8 +169,32 @@ module ctrl_decode #(
             wire wlenat_int = access_q & phase_wl & bank_active &  top_selected;
             wire wlenab_int = access_q & phase_wl & bank_active & bottom_selected;
 
-            assign wlt[i] = wlenat_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
-            assign wlb[i] = wlenab_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
+            assign wlt_decode[i] = wlenat_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
+            assign wlb_decode[i] = wlenab_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
+
+            // Wordlines drive an entire physical bitcell row.  A dedicated
+            // characterized output stage keeps decoder minimization separate
+            // from array drive strength; OpenSTA then checks these cells
+            // against the predicted per-row load in timing.sdc.
+            if (EXTERNAL_WL_DRIVERS) begin : g_wl_ext
+                // Drivers are tiled per-row at the array edge by the layout
+                // integrator; expose the raw decode so it can wire them.
+                assign wlt[i] = wlt_decode[i];
+                assign wlb[i] = wlb_decode[i];
+            end else begin : g_wl_driver
+                for (genvar j = 0; j < NUM_WL; j = j + 1) begin : g_wl_bufs
+                    (* keep, dont_touch *)
+                    BUFx4_ASAP7_75t_R u_wlt_driver (
+                        .A(wlt_decode[i][j]),
+                        .Y(wlt[i][j])
+                    );
+                    (* keep, dont_touch *)
+                    BUFx4_ASAP7_75t_R u_wlb_driver (
+                        .A(wlb_decode[i][j]),
+                        .Y(wlb[i][j])
+                    );
+                end
+            end
 
             assign blprechtn[i] = (access_q & bank_active & top_selected) ? phase_blprech : 1'b0;
             assign blprechbn[i] = (access_q & bank_active & bottom_selected) ? phase_blprech : 1'b0;

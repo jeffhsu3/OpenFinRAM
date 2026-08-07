@@ -264,13 +264,11 @@ bool YosysManager::verify_periphery_structure() {
     const std::size_t expected_dffs =
         static_cast<std::size_t>(get_addr_width(cli_options_) + 7);
     constexpr std::size_t kExpectedDelayInverters = 108;
-    // EXTERNAL_WL_DRIVERS=1: the wordline BUFx4 drivers are tiled per-row at the
-    // array edge by the layout integrator, so NONE remain in ctrl_decode.  (The
-    // former 2*NUM_WL*NUM_BANK expectation guarded the fused-driver build.)
-    const std::size_t expected_wl_drivers = 0;
+    const std::size_t expected_wl_drivers =
+        static_cast<std::size_t>(2 * cli_options_.num_wls * cli_options_.num_banks);
     const bool pass = dff_count == expected_dffs &&
                       invx1_count >= kExpectedDelayInverters &&
-                      bufx4_count == expected_wl_drivers &&
+                      bufx4_count >= expected_wl_drivers &&
                       sdel_d_count == 4;
 
     const std::string report_path = syn_path_ + "/periphery_structure.rpt";

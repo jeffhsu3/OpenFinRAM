@@ -35,7 +35,18 @@ Notes:
 - Yosys script is emitted to `tmp/syn_<ts>/synth.ys` → `netlist.v`/`timing.sdc`/`qor_report.txt` (same contract as DC).
 - OpenROAD TCL is emitted to `tmp/openroad_<ts>/run.tcl` and reads `platform/asap7` LEF/lib (fallback to `tech/lef|lib`).
 - KLayout's Python bindings are required to stream the routed OpenROAD DEF to `ctrl_decode.gds`, merging the ASAP7 standard-cell GDS before final SRAM assembly.
-- `OpenSTA` is invoked via OpenROAD `report_checks`/`report_tns` during P&R.
+- The controller has a real generated SDC: 2.5 ns TT implementation target,
+  propagated-clock CTS, input/output delays, clock uncertainty, transition and
+  capacitance limits, and per-output predicted array loads with 1.5x margin.
+  OpenROAD fails the build for missing timing paths, setup/hold failure, or
+  slew/capacitance/fanout violations; reports are under `tmp/openroad_<ts>/`.
+- The selectable controller delay is a protected 108-`INVx1` physical network.
+  Yosys and OpenROAD both assert its topology. Every WLT/WLB has a dedicated
+  `BUFx4` stage that is checked against its modeled full-row array load.
+- STA currently uses routed global parasitics and the ASAP7 TT Liberty/RC
+  model, not extracted SPEF or SS/FF multi-corner signoff. The 2.5 ns period is
+  a conservative periphery implementation target, not a characterized SRAM
+  frequency claim; use `scripts/characterize_read.py` for the array datapath.
 - Macro LEF is extracted natively from the final merged GDS with GDSTK. Cadence `strmin`/`abstract` and `tcsh` are not required for LEF export.
 - `--skip-characterization` still writes `<cell>.lib`: it is an explicitly marked FakeRAM-style early-PPA estimate (actual LEF area, compact timing tables, no power model). If SiliconSmart is requested but fails, the same estimate is used as a fallback; a successful characterized model is never overwritten.
 - Only single-port is validated for the open-source path; dual-port falls back to commercial flow.

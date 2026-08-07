@@ -76,13 +76,9 @@ std::string YosysTclGenerator::generate_script(
     }
     oss << "read_verilog -sv " << join_path(rtl_path, "delay_cell.v") << "\n";
     oss << "read_verilog -sv " << join_path(rtl_path, "sram_control.v") << "\n";
-    // EXTERNAL_WL_DRIVERS=1: wordline BUFx4 drivers are tiled per-row at the
-    // array edge by the layout integrator, not synthesized into the thin
-    // central ctrl_decode strip (which cannot route 1024 large drivers).
     oss << "chparam -set ADDR_WIDTH " << addr_width
         << " -set NUM_WL " << num_wls
         << " -set NUM_BANK " << num_banks
-        << " -set EXTERNAL_WL_DRIVERS 1"
         << " ctrl_decode\n";
     oss << "hierarchy -check -top ctrl_decode\n";
 
@@ -120,11 +116,8 @@ std::string YosysTclGenerator::generate_script(
     oss << "select -assert-min 108 t:INVx1_ASAP7_75t_R\n";
     oss << "select -assert-count 108 t:INVx1_ASAP7_75t_R a:dont_touch %i\n";
     oss << "select -assert-count 8 t:INVx1_ASAP7_75t_R a:delay_input %i\n";
-    // EXTERNAL_WL_DRIVERS=1 (paired with the chparam above): the wordline BUFx4
-    // drivers are tiled per-row at the array edge by the layout integrator, so
-    // NONE must remain inside the synthesized ctrl_decode strip.  (The former
-    // >=2*NUM_WL*NUM_BANK assertion guarded the fused-driver build.)
-    oss << "select -assert-count 0 t:BUFx4_ASAP7_75t_R\n";
+    oss << "select -assert-min " << (2 * num_wls * num_banks)
+        << " t:BUFx4_ASAP7_75t_R\n";
 
     // Give the protected delay cells stable, legal Verilog names.  OpenROAD
     // can then protect exactly this network instead of every INVx1 in the

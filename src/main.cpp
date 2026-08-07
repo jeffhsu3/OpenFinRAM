@@ -69,7 +69,8 @@ int main(int argc, char **argv) {
         LOGI << "=== Running Yosys Synthesis (OpenROAD single-port ASAP7) ===";
         YosysManager yosys_manager(cli_options);
         if (!yosys_manager.run_synthesis()) {
-            LOGW << "Yosys synthesis failed, skipping due to missing EDA tools.";
+            LOGE << "Yosys periphery synthesis/signoff failed.";
+            return 1;
         }
     } else {
         SynthesisManager synth_manager(cli_options);
@@ -83,7 +84,8 @@ int main(int argc, char **argv) {
         LOGI << "=== Running OpenROAD P&R (single-port ASAP7, platform/asap7) ===";
         OpenRoadManager openroad_manager(cli_options);
         if (!openroad_manager.run_openroad_flow()) {
-            LOGW << "OpenROAD flow failed, skipping due to missing EDA tools or stub mode.";
+            LOGE << "OpenROAD periphery implementation/STA failed.";
+            return 1;
         }
     } else {
         InnovusManager innovus_manager(cli_options);

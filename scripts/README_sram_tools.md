@@ -43,11 +43,16 @@ uv run python scripts/characterize_read.py --mode clkq --simulator xyce \
   --real-device --models tech/models/hspice/7nm_TT.pm
 ```
 
-## Caveat: periphery is not yet sign-off
+## Periphery status and remaining signoff
 
-These measure the datapath/array. The synthesized `ctrl_decode` periphery is
-currently under-built (even-inverter `sdel` delay chains are Boolean-identity
-and get synthesized away; wordline drivers are under-driven for lack of array
-loads; STA/CTS/LVS not yet real). `characterize_read` deliberately uses an
-idealized replica SAE, not the broken `sdel` path — so its timing assumes
-correct control. Fix the periphery before treating density/timing as sign-off.
+The open-source `ctrl_decode` flow now preserves and checks its 108 physical
+delay inverters, uses a dedicated `BUFx4` stage on every WLT/WLB with predicted
+array capacitance, performs propagated-clock CTS, and fails on post-route
+setup/hold or electrical violations. Its current 2.5 ns SDC is a conservative
+TT implementation target using routed global parasitics; it is not yet an
+extracted-SPEF, multi-corner frequency characterization.
+
+`characterize_read` still measures the separate datapath/array and deliberately
+uses an ideal replica-timed SAE. Correlating that replica delay to the selected
+physical `sdel` taps across PVT, producing a characterized macro `.lib`, and
+transistor-level LVS remain signoff work.
