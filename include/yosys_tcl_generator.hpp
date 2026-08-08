@@ -35,6 +35,7 @@ public:
         int addr_width,
         unsigned num_wls,
         unsigned num_banks,
+        unsigned column_mux,
         unsigned num_wl_buf,
         unsigned num_sae_buf,
         double abc_load_ff,

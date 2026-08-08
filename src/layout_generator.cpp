@@ -32,8 +32,13 @@ bool LayoutGenerator::load_sram_gds() {
 }
 
 bool LayoutGenerator::extract_required_cells() {
-    const char* cell_names[] = {"FILLER_BLANK_6t122", "sram_cell_6t_122", "dummy_sram_6t122", "tapcell_sram_6t122", 
+    const char* cell_names[] = {"FILLER_BLANK_6t122", "sram_cell_6t_122", "dummy_sram_6t122", "tapcell_sram_6t122",
                                 "dummy_topbot_v1", "dummy_topbot_v2", "FILLER_cgedge", "iocolgrp_sram_6t122_v2"};
+    // Sub-cells only needed to build a deeper-mux io_colgrp (num_rows_per_mux != 4).
+    // Missing = non-fatal (the fixed 4:1 iocolgrp path does not use them).
+    const char* opt_cell_names[] = {"sram_prech_ymux_6t112_v1", "sram_prech_ymux_6t112_v2",
+                                    "senseamp_sram_6t122", "write_draslatch_02", "srlatch_sram_6t122",
+                                    "dummy_vertical_6t122", "dummy_vertical_array_X64"};
     for (const char* name : cell_names) {
         gdstk::Cell* cell = sram_lib.get_cell(name);
         if (cell == nullptr) {
@@ -59,6 +64,22 @@ bool LayoutGenerator::extract_required_cells() {
                 sram_cells_.io_colgrp = cell;
             }
         }
+    }
+
+    // Optional sub-cells for the deeper-mux io_colgrp builder (non-fatal).
+    for (const char* name : opt_cell_names) {
+        gdstk::Cell* cell = sram_lib.get_cell(name);
+        if (cell == nullptr) {
+            LOGW << "Optional mux sub-cell '" << name << "' not found (deeper-mux io_colgrp unavailable)";
+            continue;
+        }
+        if (strcmp(name, "sram_prech_ymux_6t112_v1") == 0) sram_cells_.ymux_leg_v1 = cell;
+        else if (strcmp(name, "sram_prech_ymux_6t112_v2") == 0) sram_cells_.ymux_leg_v2 = cell;
+        else if (strcmp(name, "senseamp_sram_6t122") == 0) sram_cells_.senseamp = cell;
+        else if (strcmp(name, "write_draslatch_02") == 0) sram_cells_.write_drv = cell;
+        else if (strcmp(name, "srlatch_sram_6t122") == 0) sram_cells_.srlatch = cell;
+        else if (strcmp(name, "dummy_vertical_6t122") == 0) sram_cells_.dummy_vertical = cell;
+        else if (strcmp(name, "dummy_vertical_array_X64") == 0) sram_cells_.dummy_vertical_row = cell;
     }
 
     return true;
@@ -640,7 +661,75 @@ bool LayoutGenerator::create_sram_array() {
     return true;
 }
 
+gdstk::Cell* LayoutGenerator::create_wrasst_ymux(int mux) {
+    if (sram_cells_.ymux_leg_v1 == nullptr || sram_cells_.ymux_leg_v2 == nullptr) {
+        LOGW << "ymux legs unavailable; cannot build wrasst_prech_ymux_x" << mux;
+        return nullptr;
+    }
+    // Legs stack vertically; adjacent legs abut so their M2 sa/san segments form
+    // one shared rail (the extracted x4 wrapper has no pins of its own -> pure
+    // abutment). Pitch/offset are taken from the reference 4:1 cell.
+    const double kLegPitch = 0.2703;  // um: (0.824 - 0.013) / 3 from x4
+    const double kY0 = 0.013;
+    char name[80];
+    snprintf(name, sizeof(name), "wrasst_prech_ymux_x%d_sram_6t122_v2", mux);
+    gdstk::Cell* cell = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
+    cell->init(name);
+    for (int i = 0; i < mux; ++i) {
+        gdstk::Cell* leg = (i % 2 == 0) ? sram_cells_.ymux_leg_v1 : sram_cells_.ymux_leg_v2;
+        gdstk::Reference* ref = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
+        ref->init(leg);
+        ref->origin = {0.0, kY0 + i * kLegPitch};
+        ref->magnification = 1.0;
+        cell->reference_array.append(ref);
+    }
+    sram_lib.cell_array.append(cell);
+    LOGI << "Built " << name << " (" << mux << " tiled legs, height ~"
+         << (mux * kLegPitch) << " um)";
+    return cell;
+}
+
+gdstk::Cell* LayoutGenerator::create_muxed_iocolgrp(int mux) {
+    if (mux == 4 || sram_cells_.senseamp == nullptr || sram_cells_.write_drv == nullptr) {
+        return sram_cells_.io_colgrp;  // use the extracted 4:1 cell
+    }
+    gdstk::Cell* ymux = create_wrasst_ymux(mux);
+    if (ymux == nullptr) return sram_cells_.io_colgrp;
+
+    // Geometry mirrors iocolgrp_sram_6t122_v2: two ymuxes (top blt @ x=0, bottom
+    // blb @ x=RIGHT) sharing one central sense amp / write driver / srlatch.
+    const double kRightYmuxX = 2.376;  // from the reference cell
+    char name[64];
+    snprintf(name, sizeof(name), "iocolgrp_sram_6t122_x%d", mux);
+    gdstk::Cell* cell = (gdstk::Cell*)gdstk::allocate_clear(sizeof(gdstk::Cell));
+    cell->init(name);
+    auto add_ref = [&](gdstk::Cell* src, double x, double y) {
+        gdstk::Reference* r = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
+        r->init(src);
+        r->origin = {x, y};
+        r->magnification = 1.0;
+        cell->reference_array.append(r);
+    };
+    add_ref(ymux, 0.0, 0.0);            // top (blt) mux
+    add_ref(ymux, kRightYmuxX, 0.0);    // bottom (blb) mux
+    add_ref(sram_cells_.srlatch, 1.026, 0.013);
+    add_ref(sram_cells_.write_drv, 0.486, 0.418);
+    add_ref(sram_cells_.senseamp, 0.486, 0.446);
+    sram_lib.cell_array.append(cell);
+    LOGW << "Built best-effort deeper-mux io_colgrp '" << name
+         << "' (mux=" << mux << "). NOTE: leg tiling + shared sa/san rail is by "
+         << "abutment, but ysel[4..] distribution and cross-ymux sa/san routing "
+         << "are NOT yet drawn -> requires LVS validation before use.";
+    return cell;
+}
+
 bool LayoutGenerator::create_colgrp() {
+    // Deeper column mux (num_rows_per_mux != 4): swap in a procedurally built
+    // io_colgrp before laying out the colgrp. Falls back to the extracted 4:1.
+    if (cli_options_.num_rows_per_mux != 4) {
+        gdstk::Cell* muxed = create_muxed_iocolgrp(cli_options_.num_rows_per_mux);
+        if (muxed != nullptr) sram_cells_.io_colgrp = muxed;
+    }
     if (sram_cells_.array_cell == nullptr || sram_cells_.cgedge == nullptr || sram_cells_.io_colgrp == nullptr) {
         LOGE << "Invalid parameters for create_colgrp";
         return false;
@@ -1813,6 +1902,36 @@ bool LayoutGenerator::add_ctrl_decode_gate_fin_wrappers() {
 
             LOGI << "  Created 3 top fin rows";
             LOGI << "Top and bottom fin rows created successfully";
+        }
+
+        // Full-layer dummy-bitcell fill at the array-facing boundary (well /
+        // implant / active / fin continuity that bare fin rows can't provide).
+        // Mirrors the academic ctrl_decode_32's dummy_vertical rows. Tiled at
+        // the array column pitch (2 * bitcell_width); alignment to the array
+        // column grid should be spot-checked in KLayout (offset via the row y).
+        if (sram_cells_.dummy_vertical != nullptr) {
+            add_cell_with_deps(ctrl_decode_gds, sram_cells_.dummy_vertical);
+            gdstk::Vec2 dmin, dmax;
+            sram_cells_.dummy_vertical->bounding_box(dmin, dmax);
+            const double dummy_h = dmax.y - dmin.y;   // ~0.350 um (bitcell pitch)
+            const double col_pitch = 2.0 * cli_options_.bitcell_width;  // ~0.216 um
+            const double x0 = cell_size.min.x;
+            const double x1 = cell_size.max.x;
+            const double bottom_y = cell_size.min.y - dummy_h;  // abut below
+            const double top_y = cell_size.max.y;               // abut above
+            int n_dummy = 0;
+            for (double y : {bottom_y, top_y}) {
+                for (double x = x0; x < x1 - 1e-6; x += col_pitch) {
+                    gdstk::Reference* r = (gdstk::Reference*)gdstk::allocate_clear(sizeof(gdstk::Reference));
+                    r->init(sram_cells_.dummy_vertical);
+                    r->origin = {x - dmin.x, y - dmin.y};
+                    r->magnification = 1.0;
+                    gate_wrapper_cell->reference_array.append(r);
+                    ++n_dummy;
+                }
+            }
+            LOGI << "  Added " << n_dummy << " dummy_vertical_6t122 boundary fill cells"
+                 << " (2 rows @ " << col_pitch << " um pitch)";
         }
 
         ctrl_decode_gds.cell_array.append(gate_wrapper_cell);

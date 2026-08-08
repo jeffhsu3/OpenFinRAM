@@ -43,6 +43,7 @@ std::string YosysTclGenerator::generate_script(
     int addr_width,
     unsigned num_wls,
     unsigned num_banks,
+    unsigned column_mux,
     unsigned num_wl_buf,
     unsigned num_sae_buf,
     double abc_load_ff,
@@ -79,6 +80,7 @@ std::string YosysTclGenerator::generate_script(
     oss << "chparam -set ADDR_WIDTH " << addr_width
         << " -set NUM_WL " << num_wls
         << " -set NUM_BANK " << num_banks
+        << " -set COLUMN_MUX " << column_mux
         << " ctrl_decode\n";
     oss << "hierarchy -check -top ctrl_decode\n";
 

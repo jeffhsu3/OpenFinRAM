@@ -88,6 +88,7 @@ std::string YosysManager::generate_yosys_script() const {
         rtl_path_, syn_path_, generate_parameter_string(),
         get_addr_width(cli_options_),
         cli_options_.num_wls, cli_options_.num_banks,
+        cli_options_.num_rows_per_mux,
         cli_options_.num_wl_buf, cli_options_.num_sae_buf,
         abc_output_load_ff(), kAbcDelayTargetPs,
         platform, tech_lib);

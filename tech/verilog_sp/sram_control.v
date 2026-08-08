@@ -32,6 +32,9 @@ module ctrl_decode #(
     parameter integer ADDR_WIDTH = 8,
     parameter integer NUM_WL     = 32,
     parameter integer NUM_BANK   = 1,
+    // Column (Y) mux ratio: bitlines sharing one sense amp / write driver.
+    // Deeper mux -> fewer physical wordlines at equal capacity.
+    parameter integer COLUMN_MUX = 4,
     // 0 = wordline BUFx4 drivers synthesized inside this block (default).
     // 1 = expose the raw decode on wlt/wlb; the layout integrator tiles a
     //     per-row BUFx4 driver column at the array edge (keeps 1024 large
@@ -48,10 +51,10 @@ module ctrl_decode #(
     output wire  [NUM_BANK-1:0][NUM_WL-1:0] wlb,
     output logic [NUM_BANK-1:0]             blprechtn,
     output logic [NUM_BANK-1:0]             blprechbn,
-    output logic [NUM_BANK-1:0][3:0]        yselt,
-    output logic [NUM_BANK-1:0][3:0]        yseltn,
-    output logic [NUM_BANK-1:0][3:0]        yselb,
-    output logic [NUM_BANK-1:0][3:0]        yselbn,
+    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselt,
+    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseltn,
+    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselb,
+    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselbn,
     output logic [NUM_BANK-1:0]             sae,
     output logic [NUM_BANK-1:0]             saprechn,
     output logic [NUM_BANK-1:0]             wrena,
@@ -60,7 +63,7 @@ module ctrl_decode #(
     output logic [NUM_BANK-1:0]             oe_out
 );
 
-    localparam integer COL_SEL_BITS  = 2;
+    localparam integer COL_SEL_BITS  = (COLUMN_MUX > 1) ? $clog2(COLUMN_MUX) : 1;
     localparam integer ROW_ADDR_WIDTH = $clog2(NUM_WL);
 
     localparam integer ROW_ADDR_LSB = 0;
@@ -86,7 +89,7 @@ module ctrl_decode #(
     wire phase_sae;
     wire phase_saprech;
 
-    reg [3:0] ysel_onehot;
+    reg [COLUMN_MUX-1:0] ysel_onehot;
     wire [ROW_ADDR_WIDTH-1:0] row_addr_q;
     wire [NUM_BANK-1:0][NUM_WL-1:0] wlt_decode;
     wire [NUM_BANK-1:0][NUM_WL-1:0] wlb_decode;
@@ -154,7 +157,7 @@ module ctrl_decode #(
     endgenerate
 
     always @(*) begin
-        ysel_onehot = 4'b0000;
+        ysel_onehot = {COLUMN_MUX{1'b0}};
         ysel_onehot[A_q[COL_ADDR_MSB:COL_ADDR_LSB]] = 1'b1;
     end
 
@@ -169,8 +172,14 @@ module ctrl_decode #(
             wire wlenat_int = access_q & phase_wl & bank_active &  top_selected;
             wire wlenab_int = access_q & phase_wl & bank_active & bottom_selected;
 
-            assign wlt_decode[i] = wlenat_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
-            assign wlb_decode[i] = wlenab_int ? ({{(NUM_WL-1){1'b0}}, 1'b1} << row_addr_q) : {NUM_WL{1'b0}};
+            // Structured one-hot row decode: a per-wordline address compare
+            // synthesizes to an AND/NAND decode tree (ABC shares the predecode
+            // terms across lines), rather than the NUM_WL-wide barrel shifter
+            // that `1'b1 << row_addr_q` produces.
+            for (genvar w = 0; w < NUM_WL; w = w + 1) begin : g_row_decode
+                assign wlt_decode[i][w] = wlenat_int & (row_addr_q == ROW_ADDR_WIDTH'(w));
+                assign wlb_decode[i][w] = wlenab_int & (row_addr_q == ROW_ADDR_WIDTH'(w));
+            end
 
             // Wordlines drive an entire physical bitcell row.  A dedicated
             // characterized output stage keeps decoder minimization separate
@@ -209,10 +218,10 @@ module ctrl_decode #(
             assign saprechn[i]  = read_q & phase_saprech & bank_active;
 
             always @(*) begin
-                yselt[i]  = 4'b0000;
-                yseltn[i] = 4'b1111;
-                yselb[i]  = 4'b0000;
-                yselbn[i] = 4'b1111;
+                yselt[i]  = {COLUMN_MUX{1'b0}};
+                yseltn[i] = {COLUMN_MUX{1'b1}};
+                yselb[i]  = {COLUMN_MUX{1'b0}};
+                yselbn[i] = {COLUMN_MUX{1'b1}};
 
                 if (access_q & bank_active) begin
                     if (A_q[BANK_ADDR_BIT]) begin

@@ -71,9 +71,11 @@ bool file_exists(const std::string& path) {
 }
 
 int get_addr_width(const MainCliOptions& cli_options) {
-    return std::ceil(std::log2(cli_options.num_wls)) 
+    // +1 for top/bottom fold, +log2(column mux ratio) for the Y (column) select.
+    // num_rows_per_mux is the single column-mux-ratio knob (bitlines per SA).
+    return std::ceil(std::log2(cli_options.num_wls))
          + std::ceil(std::log2(cli_options.num_banks))
-         + 1 + 2; // +1 for top/bottom, +2 for ysel
+         + 1 + std::ceil(std::log2(cli_options.num_rows_per_mux));
 }
 
 bool copy_file(const std::string& src, const std::string& dst) {

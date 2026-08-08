@@ -45,7 +45,7 @@ bool OpenRoadManager::run_openroad_flow() {
 
     std::string output_tcl = join_path(work_dir, "run.tcl");
     int addr_width = get_addr_width(cli_options_);
-    int num_ysel = 4;
+    int num_ysel = cli_options_.num_rows_per_mux;  // column-mux ratio (was 4)
     double sram_width = 10.0;
     if (cli_options_.single_port) {
         sram_width = (cli_options_.bitcell_width * 2 + 2.376 + cli_options_.bitcell_width * ((cli_options_.num_wls + 3) * 2)) * cli_options_.num_banks - cli_options_.bitcell_width;
