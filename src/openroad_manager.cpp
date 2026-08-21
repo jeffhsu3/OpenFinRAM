@@ -1,7 +1,9 @@
 #include "openroad_manager.hpp"
 
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
+#include <sys/stat.h>
 #include "plog/Log.h"
 #include "openroad_tcl_generator.hpp"
 #include "utils.hpp"
@@ -78,6 +80,26 @@ bool OpenRoadManager::run_openroad_flow() {
     std::string log_file = join_path(work_dir, "openroad.log");
     std::string openroad_bin = cli_options_.openroad_path;
     if (openroad_bin.empty()) openroad_bin = "openroad";
+    // Clear early failure when the binary cannot be resolved. A bare name is
+    // looked up in $PATH; a filesystem path must exist (directories are
+    // searched for build/src/openroad by run_openroad).
+    {
+        bool looks_like_path = openroad_bin.find('/') != std::string::npos;
+        bool found = false;
+        if (looks_like_path) {
+            struct stat st;
+            found = stat(openroad_bin.c_str(), &st) == 0;
+        } else {
+            std::string which = "which \"" + openroad_bin + "\" >/dev/null 2>&1";
+            found = std::system(which.c_str()) == 0;
+        }
+        if (!found) {
+            LOGE << "OpenROAD binary '" << openroad_bin
+                 << "' not found. Install OpenROAD or point --openroad-path at "
+                 << "the binary (or a checkout directory).";
+            return false;
+        }
+    }
     bool or_ok = gen.run_openroad(output_tcl, work_dir, log_file, openroad_bin);
     std::string def_path = join_path(work_dir, "ctrl_decode.def");
     std::string v_path = join_path(work_dir, "netlist_for_lvs.v");

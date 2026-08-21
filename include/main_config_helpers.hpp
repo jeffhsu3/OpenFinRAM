@@ -19,7 +19,7 @@ struct MainCliOptions {
     bool use_yosys = false;       // use Yosys instead of Design Compiler
     bool use_openroad = false;    // use OpenROAD instead of Innovus
     bool openroad_only = false;   // alias: enable both use_yosys + use_openroad for single-port ASAP7
-    std::string openroad_path = ""; // path to OpenROAD binary/checkout (default: ~/iv3/repos/OpenROAD)
+    std::string openroad_path = ""; // OpenROAD binary; default resolves 'openroad' from $PATH
     std::string platform_path = ""; // path to ASAP7 platform (default: <openroad>/platform/asap7)
     
     // Custom Push-Rule Bitcell configuration

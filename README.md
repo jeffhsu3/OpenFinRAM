@@ -18,7 +18,9 @@ make
 
 ## Open-Source Flow (Yosys + OpenROAD + OpenSTA, single-port ASAP7)
 
-Pinned to local OpenROAD checkout at `~/iv3/repos/OpenROAD` and ASAP7 platform `~/iv3/repos/OpenROAD/platform/asap7`.
+Requires `yosys` and `openroad` on `$PATH`, plus KLayout's Python bindings
+(see External Dependencies below). The ASAP7 platform files fall back to the
+bundled `tech/` directory when an OpenROAD platform checkout is not available.
 
 ```
 # single-port open-source flow (Yosys synthesis + OpenROAD P&R + OpenSTA)
@@ -26,8 +28,8 @@ Pinned to local OpenROAD checkout at `~/iv3/repos/OpenROAD` and ASAP7 platform `
 # or explicitly:
 ./OpenFinRAM --num-wls 2 --num-data-bits 4 --num-banks 1 --single-port --use-yosys --use-openroad
 
-# custom pinned paths (default to ~/iv3/repos/OpenROAD):
-./OpenFinRAM --openroad --openroad-path ~/iv3/repos/OpenROAD --platform-path ~/iv3/repos/OpenROAD/platform/asap7
+# custom binary or checkout directory:
+./OpenFinRAM --openroad --openroad-path /path/to/openroad
 ```
 
 Notes:
@@ -51,6 +53,21 @@ Notes:
 - `--skip-characterization` still writes `<cell>.lib`: it is an explicitly marked FakeRAM-style early-PPA estimate (actual LEF area, compact timing tables, no power model). If SiliconSmart is requested but fails, the same estimate is used as a fallback; a successful characterized model is never overwritten.
 - Only single-port is validated for the open-source path; dual-port falls back to commercial flow.
 
+## Tests
+
+Run via CTest (requires `iverilog` and `yosys` in `PATH`):
+
+```
+cmake -S . -B build && ctest --test-dir build --output-on-failure
+```
+
+- `tests/run_decode_check.sh`: exhaustive RTL decode-correctness sweep of
+  `ctrl_decode` (Icarus Verilog) over read/write, deselect and no-op cases.
+- `tests/run_equiv_check.sh`: post-synthesis formal equivalence (Yosys
+  `equiv_*`) between the `ctrl_decode` RTL and the mapped ASAP7 netlist,
+  including the production structural signoff assertions. This catches
+  synthesis-introduced decode bugs that RTL simulation cannot see.
+
 ## Commercial Flow (Cadence / Synopsys, default)
 
 ```
@@ -58,6 +75,41 @@ Notes:
 # uses dc_shell + innovus and optional calibre/siliconsmart as before;
 # LEF export itself is native and no longer needs Cadence Abstract
 ```
+
+## External Dependencies
+
+**Build (all flows):** CMake >= 3.22, C++17 compiler, Python 3 (for the
+helper scripts in `scripts/`).
+
+**Commercial flow (default):** Synopsys `dc_shell`, Cadence `Innovus`;
+optional Calibre (LVS/DRC) and SiliconSmart (.lib characterization).
+LEF export is native GDSTK and no longer needs Cadence Abstract or `tcsh`.
+
+**Open-source flow (`--openroad`):**
+| Tool | Tested with | Purpose |
+|---|---|---|
+| [Yosys](https://github.com/YosysHQ/yosys) | 0.55+ | RTL synthesis of `ctrl_decode` |
+| [OpenROAD](https://github.com/The-OpenROAD-Project/OpenROAD) | v2.0-15391+ (git master) | P&R, CTS, STA; pin `--openroad-path` |
+| ASAP7 platform | OpenROAD `platform/asap7` | LEF/lib/GDS/RC; pin `--platform-path` |
+| KLayout Python bindings (`pip install klayout`) | 0.29+ | DEF -> merged GDS streaming (`scripts/def_to_gds.py`) |
+
+**Tests (`ctest`):**
+| Tool | Tested with | Used by |
+|---|---|---|
+| Icarus Verilog (`iverilog`/`vvp`) | 13.x | `decode_check` (RTL decode sweep) |
+| Yosys | 0.55+ | `equiv_check` (post-synthesis equivalence) |
+| googletest | submodule | `unit_tests` (TCL generator goldens) |
+
+## TODO / Future Work
+
+- **Array decoupling capacitors**: industrial SRAM macros embed MOSCAP or MOM
+  decap in dummy rows/columns and periphery strips to suppress di/dt droop.
+  ASAP7 provides no cap device (no MIM layer exists at 7nm; the GF180/Sky130
+  style metal-insulator-metal option disappeared after 28nm), so this requires
+  characterizing a gate-only NMOS MOSCAP dummy cell or an interdigitated
+  M3/M4/M5 MOM cell (DRC + LVS + extraction) before it can be tiled by the
+  compiler. The current dummy-fill cells provide the structure but no
+  intentional capacitance.
 
 ## References
 

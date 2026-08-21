@@ -70,7 +70,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .implicit_value(true);
 
     program.add_argument("--openroad-path")
-        .help("Path to OpenROAD checkout/binary (default: ~/iv3/repos/OpenROAD)")
+        .help("OpenROAD binary name or path (default: 'openroad' resolved from $PATH)")
         .default_value(std::string(""))
         ;
 
@@ -125,11 +125,11 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         options.use_yosys = true;
         options.use_openroad = true;
     }
-    // defaults for pinned OpenROAD checkout
+    // Default: resolve 'openroad' from $PATH at run time. A directory path
+    // pointing at an OpenROAD checkout is still accepted and searched for
+    // build/src/openroad by OpenRoadTclGenerator::run_openroad.
     if (options.openroad_path.empty()) {
-        const char* home = std::getenv("HOME");
-        std::string home_str = home ? home : "";
-        options.openroad_path = home_str + "/iv3/repos/OpenROAD";
+        options.openroad_path = "openroad";
     }
     if (options.platform_path.empty()) {
         options.platform_path = options.openroad_path + "/platform/asap7";

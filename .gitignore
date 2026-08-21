@@ -4,3 +4,17 @@
 back
 build
 sis*/
+
+# build/run artifacts
+tmp/
+results/
+cds.lib
+v2lvs.log
+run_drc.tcl
+asap7_drc.drc
+
+# generated macros and scratch files at repo root
+/*.gds
+/*.lef
+/extract_cell.py
+/generate_6t_cell.py
