@@ -6,6 +6,7 @@ This is an SRAM compiler designed for the ASAP7 PDK, leveraging the GDSII Tool K
 
 ```
 git clone --recursive https://github.com/shao-chien-lu/OpenFinRAM.git
+cd OpenFinRAM
 mkdir build
 cd build
 cp -r ../tech .
