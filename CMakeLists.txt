@@ -66,3 +66,35 @@ install(
     PROGRAMS "${CMAKE_SOURCE_DIR}/scripts/def_to_gds.py"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/OpenFinRAM/scripts"
 )
+
+# ---------------------------------------------------------------------------
+# Tests (ctest). The harness scripts cd to the repo root themselves, so they
+# work from any build directory. External tools are checked inside the
+# scripts; missing tools surface as a clear test failure message.
+#   tests/run_decode_check.sh : exhaustive RTL decode-correctness (Icarus)
+#   tests/run_equiv_check.sh  : post-synthesis RTL<->netlist equivalence (Yosys)
+# ---------------------------------------------------------------------------
+include(CTest)
+if(BUILD_TESTING)
+    add_subdirectory(third_party/googletest EXCLUDE_FROM_ALL)
+    add_subdirectory(tests)
+
+    add_test(
+        NAME decode_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_decode_check.sh
+    )
+    set_tests_properties(decode_check PROPERTIES TIMEOUT 600)
+
+    add_test(
+        NAME equiv_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_equiv_check.sh
+    )
+    set_tests_properties(equiv_check PROPERTIES TIMEOUT 600)
+
+    # Skips (exit 77) when the KLayout Python bindings are unavailable.
+    add_test(
+        NAME def2gds_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_def2gds_check.sh
+    )
+    set_tests_properties(def2gds_check PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+endif()
