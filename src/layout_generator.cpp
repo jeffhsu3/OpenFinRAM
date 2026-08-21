@@ -2275,12 +2275,10 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                 // 取得 M4 pin layer 用於添加 pins
                 const OpenFinRAM::LayerDef* sram_m3_pin_layer = layer_map_.get_layer("M3", OpenFinRAM::LayerPurpose::Pin);
                 const OpenFinRAM::LayerDef* sram_m4_pin_layer = layer_map_.get_layer("M4", OpenFinRAM::LayerPurpose::Pin);
-                const OpenFinRAM::LayerDef* sram_m5_pin_layer = layer_map_.get_layer("M5", OpenFinRAM::LayerPurpose::Pin);
                 
                 if (sram_m4_pin_layer != nullptr) {
                     gdstk::Tag pin_tag_m3 = gdstk::make_tag(sram_m3_pin_layer->layer_number, sram_m3_pin_layer->datatype);
                     gdstk::Tag pin_tag_m4 = gdstk::make_tag(sram_m4_pin_layer->layer_number, sram_m4_pin_layer->datatype);
-                    gdstk::Tag pin_tag_m5 = gdstk::make_tag(sram_m5_pin_layer->layer_number, sram_m4_pin_layer->datatype);
                     
                     // 首先，使用 flatten 將 sram_cell 展平以獲取所有 labels 的絕對位置
                     // 創建一個臨時的 sram_cell 副本用於 flatten
@@ -2420,7 +2418,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                             LOGW << "  " << ctrl_pins[j].search_name << " not found, using default position";
                         }
                         
-                        ctrl_pin->tag = pin_tag_m5;
+                        ctrl_pin->tag = pin_tag_m3;
                         ctrl_pin->magnification = 0.02;
                         sram_cell->label_array.append(ctrl_pin);
                         LOGI << "  Added " << ctrl_pins[j].pin_name << " pin at (" 
@@ -2457,7 +2455,10 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* addr_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         addr_pin->init(addr_name);
                         addr_pin->origin = {ax, ay};
-                        addr_pin->tag = pin_tag_m5;
+                        // M3 pin layer matches the Innovus-era pin map of the
+                        // golden srambank_32b reference (all top-level
+                        // signal pins on M3, datatype 251).
+                        addr_pin->tag = pin_tag_m3;
                         addr_pin->magnification = 0.02;
                         sram_cell->label_array.append(addr_pin);
                         
