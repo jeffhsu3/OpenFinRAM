@@ -43,6 +43,28 @@ uv run python scripts/characterize_read.py --mode clkq --simulator xyce \
   --real-device --models tech/models/hspice/7nm_TT.pm
 ```
 
+## `lvs_instance_check.py` — GDS instance-level LVS audit
+
+Stage-1 layout verification for the routed controller (`ctrl_decode.gds`):
+confirms the placed-cell multiset exactly matches the reference gate netlist
+(`netlist_for_lvs.v`) and that every distinct placed cell's geometry is
+bit-faithful to its ASAP7 library master. Physical-only cells inserted after
+synthesis (fillers, tapcells, routing vias) are allowlisted.
+
+This catches dropped/extra/swapped instances and corrupted cell layouts.
+It does not trace routing connectivity between instances — that remains
+open (full extraction needs Calibre or a complete Magic ASAP7 extraction
+tech; neither is available). Combined with `tests/run_equiv_check.sh`
+(netlist ≡ RTL) and OpenROAD emitting DEF and GDS from one database, the
+residual exposure is limited to routing defects.
+
+```
+python3 scripts/lvs_instance_check.py \
+    --macro-gds tmp/openroad_<ts>/ctrl_decode.gds --top ctrl_decode \
+    --netlist tmp/openroad_<ts>/netlist_for_lvs.v \
+    --library-gds tech/gds/asap7sc7p5t_28_R_220121a.gds
+```
+
 ## Periphery status and remaining signoff
 
 The open-source `ctrl_decode` flow now preserves and checks its 108 physical
