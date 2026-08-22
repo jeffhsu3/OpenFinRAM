@@ -10,19 +10,20 @@ LefManager::LefManager(const MainCliOptions& cli_options)
 
 bool LefManager::export_lef() {
     std::string sram_cell_name = "sram_x" + std::to_string(cli_options_.num_wls * 2) + "x" + std::to_string(cli_options_.num_data_bits) + "x" + std::to_string(cli_options_.num_banks);
-    std::string lef_log_path;
+    std::string generated_lef_path;
     std::string lef_error;
 
     LOGI << "Exporting LEF for cell: " << sram_cell_name;
-    bool lef_ok = OpenFinRAM::export_lef(".", sram_cell_name, "./results/" + sram_cell_name + "_" + get_run_timestamp() + "/" + sram_cell_name + ".gds", &lef_log_path, &lef_error);
+    bool lef_ok = OpenFinRAM::export_lef(".", sram_cell_name, "./results/" + sram_cell_name + "_" + get_run_timestamp() + "/" + sram_cell_name + ".gds", &generated_lef_path, &lef_error);
 
     if (lef_ok) {
-        LOGI << "LEF export completed. Log: " << lef_log_path;
+        LOGI << "LEF export completed: " << generated_lef_path;
     } else {
-        LOGW << "LEF export failed. Log: " << lef_log_path;
+        LOGW << "LEF export failed";
         if (!lef_error.empty()) {
             LOGW << "LEF export error: " << lef_error;
         }
+        return false;
     }
 
     // mv ./{sram_cell_name}.lef ./results/{sram_cell_name}_{timestamp}/

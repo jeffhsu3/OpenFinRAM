@@ -109,6 +109,10 @@ void InnovusTclGenerator::set_site_height(double height) {
     site_height_ = height;
 }
 
+void InnovusTclGenerator::set_bitcell_width(double width) {
+    bitcell_width_ = width;
+}
+
 void InnovusTclGenerator::set_cpu_count(int local_cpu, int remote_cpu) {
     local_cpu_ = local_cpu;
     remote_cpu_ = remote_cpu;
@@ -378,12 +382,12 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
 
                 file << "createPhysicalPin wlt[" << current_idx << "] -allowOutsideBoundary -layer 3"
                     << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
-                x_pos += 0.108;  // spacing to next WLT
+                x_pos += bitcell_width_;  // spacing to next WLT
             }
             file << "\n";
 
             // blprechtn (跟 WLT 最右邊 spacing 0.303)
-            x_pos += 0.321 - 0.108;  // 減去上面多加的 spacing
+            x_pos += 0.321 - bitcell_width_;  // 減去上面多加的 spacing
             file << "# blprechtn pin\n";
             double x_left = x_pos;
             double x_right = x_pos + pin_width;
@@ -526,7 +530,7 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
 
                 file << "createPhysicalPin wlb[" << i + (mux * num_wlt) << "] -allowOutsideBoundary -layer 3"
                     << " -rect " << x_left << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "\n";
-                x_pos += 0.108;
+                x_pos += bitcell_width_;
             }
             file << "\n";
             
@@ -555,7 +559,7 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
             
             
-            x_pos += 0.099 * 2 + num_wlt * 0.108;
+            x_pos += 0.099 * 2 + num_wlt * bitcell_width_;
             x_right = x_pos + pin_width;
             file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
@@ -570,7 +574,7 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
 
-            x_pos += 0.099 * 2 + num_wlb * 0.108;
+            x_pos += 0.099 * 2 + num_wlb * bitcell_width_;
             x_right = x_pos + pin_width;
             file << "add_shape -net VDD -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n\n";
             power_stripes.push_back({"VDD", x_pos, x_right, pin_width});
@@ -584,7 +588,7 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
 
-            x_pos += 0.063 + 0.045 + num_wlt * 0.108;
+            x_pos += 0.063 + 0.045 + num_wlt * bitcell_width_;
             x_right = x_pos + pin_width;
             file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
@@ -609,7 +613,7 @@ bool InnovusTclGenerator::generate_run_tcl(double width, double height,
             file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n";
             power_stripes.push_back({"VSS", x_pos, x_right, pin_width});
 
-            x_pos += 0.063 + 0.045 + num_wlb * 0.108;
+            x_pos += 0.063 + 0.045 + num_wlb * bitcell_width_;
             x_right = x_pos + pin_width;
             file << "add_shape -net VSS -layer M3 -rect {" << x_pos << " " << bot_pin_start_y << " " << x_right << " " << top_pin_end_y << "} -shape STRIPE\n\n";
             power_stripes.push_back({"VSS", x_pos, x_right, pin_width});

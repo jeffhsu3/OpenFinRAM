@@ -5,25 +5,23 @@
 namespace OpenFinRAM {
 
 /**
- * @brief Export LEF using Cadence abstract flow.
+ * @brief Export a hard-macro LEF directly from the final GDS using gdstk.
  *
- * Steps:
- * 1) Create cds.lib in project_root.
- * 2) Run strmin to import GDS into the specified library.
- * 3) Create export_lef.il in the library folder with cell-specific settings.
- * 4) Run abstract to export LEF.
+ * The exporter uses the top-level BOUNDARY polygon for SIZE, direct
+ * pin-purpose labels for the macro interface, and containing pin/drawing
+ * geometry for each PORT.  It does not require Cadence strmin or Abstract.
  *
- * @param project_root Working directory where cds.lib/log are created.
+ * @param project_root Directory where <cell_name>.lef is written.
  * @param cell_name SRAM top cell name (library name).
  * @param gds_path Path to GDS file (relative or absolute).
- * @param log_path Output log path for abstract (optional).
+ * @param output_path Generated LEF path (optional).
  * @param error Error message if any (optional).
- * @return true if all steps completed successfully.
+ * @return true if the LEF was generated successfully.
  */
 bool export_lef(const std::string& project_root,
                 const std::string& cell_name,
                 const std::string& gds_path,
-                std::string* log_path,
+                std::string* output_path,
                 std::string* error);
 
 } // namespace OpenFinRAM

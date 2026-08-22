@@ -79,12 +79,15 @@ struct FillerConfig {
     double ctrl_decode_width;   // Width of ctrl_decode (for center filler)
     double ctrl_decode_height;  // Height of ctrl_decode 
     bool is_top;                // true = top filler, false = bottom filler
+    double bitcell_width;       // Width of bitcell
+
     
     FillerConfig()
         : test_num_bits(2)
         , ctrl_decode_width(1.782)  // Default from reference
         , ctrl_decode_height(0.297)
         , is_top(true)
+        , bitcell_width(0.108)
     {}
     
     FillerConfig(uint64_t bits, double width, double height, bool top)
@@ -92,6 +95,7 @@ struct FillerConfig {
         , ctrl_decode_width(width)
         , ctrl_decode_height(height)
         , is_top(top)
+        , bitcell_width(0.108)
     {}
 };
 

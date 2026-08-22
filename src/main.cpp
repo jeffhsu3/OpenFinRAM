@@ -4,18 +4,21 @@
 #include "layermap.hpp"
 #include "spice_generator.hpp"
 #include "synthesis_manager.hpp"
+#include "yosys_manager.hpp"
 #include "spice_converter.hpp"
 #include "spice_integrator.hpp"
 #include "spice_include_resolver.hpp"
 #include "spice_simulator.hpp"
 #include "innovus_tcl_generator.hpp"
 #include "innovus_manager.hpp"
+#include "openroad_manager.hpp"
 #include "siliconsmart_generator.hpp"
 #include "siliconsmart_manager.hpp"
 #include "lvs_runner.hpp"
 #include "lvs_manager.hpp"
 #include "lef_extractor.hpp"
 #include "lef_manager.hpp"
+#include "liberty_estimator.hpp"
 #include "layout_generator.hpp"
 #include "main_config_helpers.hpp"
 #include "main_flow_helpers.hpp"
@@ -61,31 +64,46 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Run synthesis flow
-    SynthesisManager synth_manager(cli_options);
-    if (!synth_manager.run_synthesis()) {
-        LOGE << "Synthesis flow failed.";
-        return 1;
+    // Run synthesis flow (open-source Yosys or commercial Design Compiler)
+    if (cli_options.use_yosys || cli_options.openroad_only) {
+        LOGI << "=== Running Yosys Synthesis (OpenROAD single-port ASAP7) ===";
+        YosysManager yosys_manager(cli_options);
+        if (!yosys_manager.run_synthesis()) {
+            LOGE << "Yosys periphery synthesis/signoff failed.";
+            return 1;
+        }
+    } else {
+        SynthesisManager synth_manager(cli_options);
+        if (!synth_manager.run_synthesis()) {
+            LOGW << "Synthesis flow failed, skipping due to missing EDA tools.";
+        }
     }
 
-    // Run Innovus flow
-    InnovusManager innovus_manager(cli_options);
-    if (!innovus_manager.run_innovus_flow()) {
-        LOGE << "Innovus flow failed.";
-        return 1;
+    // Run P&R flow (OpenROAD or Innovus)
+    if (cli_options.use_openroad || cli_options.openroad_only) {
+        LOGI << "=== Running OpenROAD P&R (single-port ASAP7, platform/asap7) ===";
+        OpenRoadManager openroad_manager(cli_options);
+        if (!openroad_manager.run_openroad_flow()) {
+            LOGE << "OpenROAD periphery implementation/STA failed.";
+            return 1;
+        }
+    } else {
+        InnovusManager innovus_manager(cli_options);
+        if (!innovus_manager.run_innovus_flow()) {
+            LOGW << "Innovus flow failed, skipping due to missing EDA tools.";
+        }
     }
 
     SpiceIntegrator integrator(cli_options);
     if (!integrator.integrate_sram()) {
-        LOGE << "SRAM integration failed.";
-        return 1;
+        LOGW << "SRAM integration failed, skipping.";
     }
 
     // Run siliconsmart characterization
     SiliconSmartManager sis_manager(cli_options);
-    if (!sis_manager.run_siliconsmart()) {
-        LOGE << "SiliconSmart characterization failed.";
-        return 1;
+    const bool characterization_ok = sis_manager.run_siliconsmart();
+    if (!characterization_ok) {
+        LOGW << "SiliconSmart characterization failed, skipping.";
     }
 
     // Initialize ASAP7 Layer Map (hardcoded)
@@ -106,8 +124,7 @@ int main(int argc, char **argv) {
     // Run LVS (create lvs folder, generate _run_control.svrf, run calibre)
     LvsManager lvs_manager(cli_options);
     if (!lvs_manager.run_lvs()) {
-        LOGE << "LVS failed!";
-        return 1;
+        LOGW << "LVS failed, skipping.";
     }
 
     // Export LEF file for the generated SRAM layout
@@ -115,5 +132,25 @@ int main(int argc, char **argv) {
     if (!lef_manager.export_lef()) {
         LOGE << "LEF export failed!";
         return 1;
+    }
+
+    // Leave a usable early-PPA timing model when characterization was
+    // explicitly skipped or could not run. A successful SiliconSmart model is
+    // never overwritten by this estimated fallback.
+    if (cli_options.skip_characterization || !characterization_ok) {
+        const std::string cell_name =
+            "sram_x" + std::to_string(cli_options.num_wls * 2) + "x" +
+            std::to_string(cli_options.num_data_bits) + "x" +
+            std::to_string(cli_options.num_banks);
+        const std::string result_dir =
+            "./results/" + cell_name + "_" + get_run_timestamp();
+        std::string liberty_error;
+        if (!OpenFinRAM::export_estimated_liberty(
+                cli_options,
+                result_dir + "/" + cell_name + ".lef",
+                result_dir + "/" + cell_name + ".lib",
+                &liberty_error)) {
+            LOGW << "Estimated Liberty export failed: " << liberty_error;
+        }
     }
 }

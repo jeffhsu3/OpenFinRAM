@@ -39,14 +39,15 @@ SynthesisManager::SynthesisManager(const MainCliOptions& cli_options)
 }
 
 std::string SynthesisManager::generate_parameter_string() const {
-    int addr_width = std::ceil(std::log2(cli_options_.num_wls)) 
+    int addr_width = std::ceil(std::log2(cli_options_.num_wls))
                    + std::ceil(std::log2(cli_options_.num_banks))
-                   + 1 + 2; // +1 for top/bottom, +2 for ysel
+                   + 1 + std::ceil(std::log2(cli_options_.num_rows_per_mux));
 
     std::ostringstream oss;
     oss << "ADDR_WIDTH=" << addr_width
         << ",NUM_WL=" << cli_options_.num_wls
-        << ",NUM_BANK=" << cli_options_.num_banks;
+        << ",NUM_BANK=" << cli_options_.num_banks
+        << ",COLUMN_MUX=" << cli_options_.num_rows_per_mux;
     return oss.str();
 }
 

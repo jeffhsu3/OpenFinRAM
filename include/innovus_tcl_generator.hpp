@@ -46,6 +46,7 @@ public:
     void set_design_name(const std::string& name);
     void set_site_name(const std::string& name);  // 預設: asap7sc7p5t
     void set_site_height(double height);  // 預設: 0.27 (um)
+    void set_bitcell_width(double width);
     void set_cpu_count(int local_cpu, int remote_cpu = 0);
     
     // 設定技術檔案路徑
@@ -137,6 +138,7 @@ private:
     std::string design_name_;
     std::string site_name_;
     double site_height_;
+    double bitcell_width_ = 0.108;
     int local_cpu_;
     int remote_cpu_;
     std::string layer_map_file_;
