@@ -46,7 +46,7 @@ from pathlib import Path
 
 VDD = 0.7
 SENSE_MARGIN = 0.1  # V of BL develop that trips the sense amp
-CBL_PER_CELL_F = 0.15e-15  # per-cell bitline capacitance (wire + junction), F
+CBL_PER_CELL_F = 0.06e-15  # per-cell bitline capacitance (wire + junction), F
 
 # Planar stand-in devices so the harness runs in a BSIM-CMG-less ngspice.
 # Tuned for ~0.7 V bistability + a readable bitline discharge, NOT ASAP7-accurate.
@@ -254,16 +254,44 @@ def _cell(prefix: str, stored: int, wl: str) -> tuple[str, str]:
     return "\n".join(lines), f".ic v({q})={ic_q} v({qb})={ic_qb}"
 
 
-def gen_clkq_deck(depth: int, tsae_ps: float, models_inc: str) -> str:
+def gen_clkq_deck(
+    depth: int,
+    tsae_ps: float,
+    models_inc: str,
+    slew_s: float = 10e-12,
+    cq_f: float = 1e-15,
+    table3: bool = False,
+) -> str:
     """True clk->Q via the real sense amp + output stage (Xyce/BSIM-CMG only).
 
     Two 4 ns cycles: read a stored-1 (Q settles high), then the stored-0 under
     test (Q falls) -> a clean clk->Q edge. SAE is replica-timed at clk+tsae.
+
+    table3=True applies the MOST-report stimulus conditions (input slew
+    0.04 ns, output load 0.04608 pF) and adds cell rise/fall access plus
+    output rise/fall transition measurements.
     """
     cbl = depth * CBL_PER_CELL_F
     sae1 = 1.0 + tsae_ps / 1000.0
+    sl = slew_s * 1e9  # s -> ns for the PULSE cards
     cell_lo, ic_lo = _cell("ML", 0, "WLlo")  # value under test (cycle 2)
     cell_hi, ic_hi = _cell("MH", 1, "WLhi")  # pre-sets Q high (cycle 1)
+    vth = VDD / 2
+    # 10%/90% points for the output transition measurements.
+    v10, v90 = 0.1 * VDD, 0.9 * VDD
+    extra_measures = ""
+    if table3:
+        extra_measures = f"""\
+* cell rise/fall access (clk 50% -> Q 50%)
+.measure tran t_cell_rise TRIG v(clk) VAL={vth} RISE=1 TARG v(Q) VAL={vth} RISE=1
+.measure tran t_cell_fall TRIG v(clk) VAL={vth} RISE=2 TARG v(Q) VAL={vth} FALL=1
+* output transitions (10%->90% rise, 90%->10% fall)
+.measure tran t_qr_hi WHEN v(Q)={v90:.3f} RISE=1
+.measure tran t_qr_lo WHEN v(Q)={v10:.3f} RISE=1
+.measure tran t_qf_hi WHEN v(Q)={v90:.3f} FALL=1
+.measure tran t_qf_lo WHEN v(Q)={v10:.3f} FALL=1
+.measure tran q_hi FIND v(Q) AT=4.5n
+"""
     return f"""* true clk->Q read (2-cycle), depth={depth}, SAE +{tsae_ps:.0f}ps
 {models_inc}
 {strip_w(SUBCKTS)}
@@ -277,26 +305,26 @@ Xn1   n54 qan n49 VDD 0 io_nand_3f_6f
 Mi_n n48 n49 0   0   nmos_rvt L=2e-08 nfin=3
 Mi_p n48 n49 VDD VDD pmos_rvt L=2e-08 nfin=3
 Xtbuf n48 oeb_out oe_out VDD 0 Q TBUF_INV
-Cq Q 0 1e-15
+Cq Q 0 {cq_f:.5e}
 Cbl  BL  0 {cbl:.4e}
 Cbln BLN 0 {cbl:.4e}
 {ic_lo}
 {ic_hi}
 .ic v(BL)={VDD} v(BLN)={VDD} v(sa)={VDD} v(san)={VDD} v(qa)={VDD} v(qan)={VDD} v(Q)=0
-Vclk  clk 0 PULSE(0 {VDD} 1n 10p 10p 2n 4n)
-Vbpn  blprechn 0 PULSE(0 {VDD} 1n 10p 10p 2n 4n)
-Vysel ysel 0 PULSE(0 {VDD} 1n 10p 10p 2n 4n)
-Vyseln yseln 0 PULSE({VDD} 0 1n 10p 10p 2n 4n)
-Voe   oe_out  0 PULSE(0 {VDD} 1n 10p 10p 2n 4n)
-Voeb  oeb_out 0 PULSE({VDD} 0 1n 10p 10p 2n 4n)
-Vwlh  WLhi 0 PULSE(0 {VDD} 1n 10p 10p 1.8n 100n)
-Vwll  WLlo 0 PULSE(0 {VDD} 5n 10p 10p 1.8n 100n)
-Vsapn SAPRECHN 0 PULSE(0 {VDD} {sae1 - 0.02:.4f}n 10p 10p 1.85n 4n)
-Vsae  SAE 0 PULSE(0 {VDD} {sae1:.4f}n 10p 10p 1.8n 4n)
+Vclk  clk 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
+Vbpn  blprechn 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
+Vysel ysel 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
+Vyseln yseln 0 PULSE({VDD} 0 1n {sl:g}n {sl:g}n 2n 4n)
+Voe   oe_out  0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
+Voeb  oeb_out 0 PULSE({VDD} 0 1n {sl:g}n {sl:g}n 2n 4n)
+Vwlh  WLhi 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 1.8n 100n)
+Vwll  WLlo 0 PULSE(0 {VDD} 5n {sl:g}n {sl:g}n 1.8n 100n)
+Vsapn SAPRECHN 0 PULSE(0 {VDD} {sae1 - 0.02:.4f}n {sl:g}n {sl:g}n 1.85n 4n)
+Vsae  SAE 0 PULSE(0 {VDD} {sae1:.4f}n {sl:g}n {sl:g}n 1.8n 4n)
 .tran 1p 8n
-.measure tran t_clkq TRIG v(clk) VAL={VDD / 2} RISE=2 TARG v(Q) VAL={VDD / 2} FALL=1 TD=4n
+.measure tran t_clkq TRIG v(clk) VAL={vth} RISE=2 TARG v(Q) VAL={vth} FALL=1 TD=4n
 .measure tran q_lo FIND v(Q) AT=7.5n
-.end
+{extra_measures}.end
 """
 
 
@@ -314,6 +342,19 @@ def run_sim(deck: Path, sim: str, exe: str) -> str:
 
 
 XYCE_DEFAULT = "/home/jeff/iv4/local/xyce-14.4/bin/Xyce"
+
+# Table III stimulus conditions (MOST report): input slew 0.04 ns,
+# output load 0.04608 pF.
+TABLE3_SLEW_S = 0.04e-9
+TABLE3_CQ_F = 0.04608e-12
+
+# PDK reference column of MOST-report Table III (ns):
+# instance -> (cell rise, rise transition, cell fall, fall transition)
+TABLE3_PDK = {
+    256: (0.250, 0.072, 0.252, 0.057),
+    512: (0.270, 0.070, 0.264, 0.053),
+    1024: (0.297, 0.068, 0.287, 0.058),
+}
 
 
 def prep_models(models: Path | None, simulator: str, workdir: Path) -> tuple[str, str]:
@@ -342,16 +383,130 @@ def parse_measure(log: str, name: str) -> float | None:
         return None
 
 
+def run_table3(
+    args, depths_arg: str, models_inc: str, model_desc: str, exe: str
+) -> int:
+    """Reproduce MOST-report Table III: cell rise/fall access and output
+    rise/fall transitions for 256/512/1024-word x64-bit configurations,
+    measured on the real read path (cell -> bitline -> sense amp -> latch ->
+    tristate -> Q) with replica-timed SAE, at the report's stimulus point
+    (input slew 0.04 ns, output load 0.04608 pF, TT corner).
+
+    Depth = words per bitline (the bitline spans every row of the column).
+    """
+    if args.simulator != "xyce" or not args.real_device:
+        print(
+            "table3 requires --simulator xyce --real-device (real ASAP7 "
+            "BSIM-CMG models); stand-in devices would produce meaningless ns."
+        )
+        return 1
+
+    words = [int(x) for x in depths_arg.split(",")]
+    print(
+        f"Table III reproduction | sim=xyce | model={model_desc} | "
+        f"input slew {TABLE3_SLEW_S * 1e9:.2f} ns, load {TABLE3_CQ_F * 1e12:.5f} pF"
+    )
+    print(
+        "  methodology: transient clk->Q through the real periphery with "
+        "replica-timed SAE (not an interpolated .lib); TT corner only."
+    )
+
+    def diff(ours_s: float | None, pdk_ns: float) -> str:
+        if ours_s is None:
+            return "FAIL"
+        pct = (ours_s * 1e9 - pdk_ns) / pdk_ns * 100.0
+        return f"{pct:+.1f}"
+
+    header = (
+        f"{'instance':>18} | {'metric':>16} | {'PDK (ns)':>8} | "
+        f"{'ours (ns)':>9} | {'diff (%)':>8}"
+    )
+    print(header)
+    print("-" * len(header))
+
+    had_fail = False
+    for w in words:
+        # Replica timing: measure BL-develop access first, then fire SAE with
+        # the same guard used by clkq mode.
+        adeck = args.workdir / f"read_d{w}.sp"
+        adeck.write_text(gen_deck(w, models_inc, True, "xyce"))
+        alog = run_sim(adeck, "xyce", exe)
+        t_acc = parse_measure(alog, "t_access")
+        sae_ps = (t_acc * 1e12) + 85 if t_acc else 150.0
+
+        deck = args.workdir / f"table3_d{w}.sp"
+        deck.write_text(
+            gen_clkq_deck(
+                w,
+                sae_ps,
+                models_inc,
+                slew_s=TABLE3_SLEW_S,
+                cq_f=TABLE3_CQ_F,
+                table3=True,
+            )
+        )
+        log = run_sim(deck, "xyce", exe)
+        (args.workdir / f"table3_d{w}.log").write_text(log)
+
+        g = lambda n: parse_measure(log, n)  # noqa: E731
+        rise = g("t_cell_rise")
+        fall = g("t_cell_fall")
+        qr10, qr90 = g("t_qr_lo"), g("t_qr_hi")
+        qf90, qf10 = g("t_qf_hi"), g("t_qf_lo")
+        rise_tr = (qr90 - qr10) if (qr90 is not None and qr10 is not None) else None
+        fall_tr = (qf10 - qf90) if (qf10 is not None and qf90 is not None) else None
+        q_hi, q_lo = g("q_hi"), g("q_lo")
+        sane = (
+            q_hi is not None
+            and q_hi > 0.6
+            and q_lo is not None
+            and q_lo < 0.1
+        )
+        if not sane:
+            had_fail = True
+            print(f"{w}-word x 64-bit | OUTPUT SANITY FAIL (q_hi/q_lo) — see log")
+            continue
+
+        pdk = TABLE3_PDK.get(w, (None,) * 4)
+        rows = [
+            ("Cell rise", rise, pdk[0]),
+            ("Rise transition", rise_tr, pdk[1]),
+            ("Cell fall", fall, pdk[2]),
+            ("Fall transition", fall_tr, pdk[3]),
+        ]
+        inst = f"{w}-word x 64-bit"
+        for metric, ours, ref in rows:
+            ours_v = f"{ours * 1e9:.3f}" if ours is not None else "FAIL"
+            if ours is None:
+                had_fail = True
+            if ref is not None:
+                print(f"{inst:>18} | {metric:>16} | {ref:.3f} | {ours_v:>9} | "
+                      f"{diff(ours, ref):>8}")
+            else:
+                print(f"{inst:>18} | {metric:>16} |       - | {ours_v:>9} | "
+                      f"{'-':>8}")
+        print()
+
+    print(
+        "* Note: input slew = 0.04 ns, output load cap. = 0.04608 pF, TT "
+        "corner (tech/models/hspice/7nm_TT.pm). PDK column from MOST-report "
+        "Table III (SiliconSmart-characterized .lib)."
+    )
+    return 1 if had_fail else 0
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--depths", default="16,32,64,128,256")
     ap.add_argument(
         "--mode",
         default="access",
-        choices=["access", "clkq", "setuphold"],
+        choices=["access", "clkq", "setuphold", "table3"],
         help="access = WL->BL sense-margin; clkq = full read through the real "
-        "sense amp; setuphold = A/D/WE input-register setup/hold via bisection "
-        "(clkq/setuphold need --simulator xyce --real-device)",
+        "sense amp; setuphold = A/D/WE input-register setup/hold via bisection; "
+        "table3 = MOST-report Table III reproduction (cell rise/fall access + "
+        "output transitions vs the report's PDK column; needs --simulator xyce "
+        "--real-device)",
     )
     ap.add_argument("--simulator", default="ngspice", choices=["ngspice", "xyce"])
     ap.add_argument(
@@ -376,6 +531,10 @@ def main(argv: list[str]) -> int:
 
     exe = args.sim_exe or (XYCE_DEFAULT if args.simulator == "xyce" else "ngspice")
     models_inc, model_desc = prep_models(args.models, args.simulator, args.workdir)
+
+    if args.mode == "table3":
+        return run_table3(args, depths_arg=args.depths, models_inc=models_inc,
+                          model_desc=model_desc, exe=exe)
 
     if args.mode == "setuphold":
         print(
@@ -423,7 +582,7 @@ def main(argv: list[str]) -> int:
             )
         else:
             # replica timing: fire SAE after BL develops the sense margin + guard
-            sae_ps = 2.0 * (t_acc * 1e12) + 55 if t_acc else 150.0
+            sae_ps = (t_acc * 1e12) + 85 if t_acc else 150.0
             qdeck = args.workdir / f"clkq_d{d}.sp"
             qdeck.write_text(gen_clkq_deck(d, sae_ps, models_inc))
             qlog = run_sim(qdeck, args.simulator, exe)

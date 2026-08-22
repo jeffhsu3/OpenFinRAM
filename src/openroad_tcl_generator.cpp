@@ -242,9 +242,9 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
 
     // Placement and electrical repair use the per-output array loads from the
     // generated SDC.  Dedicated BUFx4 stages already isolate every WL output.
-    file << "global_placement -density 0.60\n";
+    file << "global_placement -density 0.70\n";
     file << "estimate_parasitics -placement\n";
-    file << "repair_design -max_utilization 80 -slew_margin 10 -cap_margin 10 -verbose\n";
+    file << "repair_design -max_utilization 90 -slew_margin 10 -cap_margin 10 -verbose\n";
     file << "detailed_placement\n";
     file << "optimize_mirroring\n";
     file << "check_placement -verbose -report_file_name placement_check.rpt\n\n";
@@ -259,8 +259,8 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     file << "repair_clock_nets -max_wire_length 20\n";
     file << "set_dont_touch $physical_delay_inputs\n";
     file << "estimate_parasitics -placement\n";
-    file << "repair_timing -setup -max_utilization 80 -max_buffer_percent 30\n";
-    file << "repair_timing -hold -max_utilization 80 -max_buffer_percent 30\n";
+    file << "repair_timing -setup -max_utilization 90 -max_buffer_percent 20\n";
+    file << "repair_timing -hold -max_utilization 90 -max_buffer_percent 20\n";
     file << "detailed_placement -incremental\n";
     file << "check_placement -verbose -report_file_name placement_post_cts.rpt\n\n";
 
