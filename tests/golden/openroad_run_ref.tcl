@@ -48,9 +48,9 @@ set wordline_driver_cells [get_cells -hierarchical -quiet {g_bank_logic*.u_wl*_d
 if {[llength $wordline_driver_cells] != 64} { error "PERIPHERY_STRUCTURE: expected 64 dedicated wordline drivers, found [llength $wordline_driver_cells]" }
 set_dont_touch $physical_delay_cells
 
-global_placement -density 0.60
+global_placement -density 0.70
 estimate_parasitics -placement
-repair_design -max_utilization 80 -slew_margin 10 -cap_margin 10 -verbose
+repair_design -max_utilization 90 -slew_margin 10 -cap_margin 10 -verbose
 detailed_placement
 optimize_mirroring
 check_placement -verbose -report_file_name placement_check.rpt
@@ -61,8 +61,8 @@ set_propagated_clock [get_clocks {clk}]
 repair_clock_nets -max_wire_length 20
 set_dont_touch $physical_delay_inputs
 estimate_parasitics -placement
-repair_timing -setup -max_utilization 80 -max_buffer_percent 30
-repair_timing -hold -max_utilization 80 -max_buffer_percent 30
+repair_timing -setup -max_utilization 90 -max_buffer_percent 20
+repair_timing -hold -max_utilization 90 -max_buffer_percent 20
 detailed_placement -incremental
 check_placement -verbose -report_file_name placement_post_cts.rpt
 
