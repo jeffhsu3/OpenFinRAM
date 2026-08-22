@@ -65,6 +65,22 @@ python3 scripts/lvs_instance_check.py \
     --library-gds tech/gds/asap7sc7p5t_28_R_220121a.gds
 ```
 
+## `gen_table3_report.py` — Table III timing-comparison report
+
+Assembles `reports/table3_timing_comparison.md` from every characterization
+source available without commercial tools: the Cadence-characterized
+`srambank_*x4x64` Liberty files shipped in the ASAP7 PDK add-on, the MOST
+report's transcribed columns, OpenFinRAM's estimated `.lib`, and Xyce
+transient measurements (`characterize_read.py --mode table3`). See the
+generated report for methodology notes and known caveats.
+
+```
+python3 scripts/gen_table3_report.py \
+    --estimate-lib results/<run>/sram_x256x64x1.lib \
+    --xyce-mt0 /tmp/ofr_t3/table3_d{256,512,1024}.sp.mt0 \
+    -o reports/table3_timing_comparison.md
+```
+
 ## Periphery status and remaining signoff
 
 The open-source `ctrl_decode` flow now preserves and checks its 108 physical
