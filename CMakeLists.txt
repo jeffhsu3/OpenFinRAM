@@ -37,6 +37,7 @@ set(SOURCES
     src/lvs_runner.cpp
     src/lef_extractor.cpp
     src/liberty_estimator.cpp
+    src/characterization_data.cpp
     src/main_config_helpers.cpp
     src/main_flow_helpers.cpp
     src/main_layout_helpers.cpp
@@ -97,4 +98,15 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_def2gds_check.sh
     )
     set_tests_properties(def2gds_check PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+
+    # P0 characterization-JSON gate: a JSON carrying the estimated constants
+    # regenerates the estimated .lib byte-for-byte; measured values and
+    # per-sdel variants override as documented.
+    add_test(
+        NAME char_json_equiv_check
+        COMMAND ${CMAKE_COMMAND} -E env
+            OPENFINRAM_BIN=${CMAKE_BINARY_DIR}/OpenFinRAM
+            bash ${CMAKE_SOURCE_DIR}/tests/run_char_json_check.sh
+    )
+    set_tests_properties(char_json_equiv_check PROPERTIES TIMEOUT 600)
 endif()
