@@ -263,6 +263,186 @@ def bisect_timing(
     return hi
 
 
+
+def gen_dff_pushout_deck(t_off_ps: float, kind: str, models_inc: str,
+                         period_ns: float = 2.0) -> str:
+    """DFF deck measuring clk->QN under a data-to-clock offset `t_off_ps`.
+
+    kind=setup: D rises at clk - t_off (positive offset = safe).
+    kind=hold : D falls at clk + t_off.
+    The Liberty constraint is the offset at which clk->Q degrades by 10%
+    relative to the unconstrained clk->Q, NOT the capture-failure boundary.
+    """
+    tclk = period_ns
+    if kind == "setup":
+        td = tclk - t_off_ps / 1000.0
+        dsrc = f"VD D 0 PWL(0 0 {td - 0.005:.4f}n 0 {td:.4f}n {VDD} 8n {VDD})"
+    else:
+        th = tclk + t_off_ps / 1000.0
+        dsrc = f"VD D 0 PWL(0 {VDD} {th - 0.005:.4f}n {VDD} {th:.4f}n 0 8n 0)"
+    return f"""* DFF {kind} pushout point, offset={t_off_ps:.2f}ps
+{models_inc}
+{strip_w(DFF_SUBCKT)}
+VVDD VDD 0 {VDD}
+Xdff CLK D QN VDD 0 DFFHQNx1_ASAP7_75t_R
+Cqn QN 0 0.4e-15
+Vclk CLK 0 PULSE(0 {VDD} {tclk}n 5p 5p 2n 16n)
+{dsrc}
+.ic v(QN)={VDD}
+.tran 1p {tclk + 1.6:.3f}n
+.measure tran t_cq TRIG v(clk) VAL={VDD / 2} RISE=1 TARG v(QN) VAL={VDD / 2} FALL=1
+.measure tran qn_final FIND v(QN) AT={tclk + 1.4:.3f}n
+.end
+"""
+
+
+def cq_at_offset(t_off_ps: float, kind: str, models_inc: str, sim: str,
+                 exe: str, workdir: Path, tag: str = "po") -> float | None:
+    d = workdir / f"dff_{kind}_{tag}_{abs(hash((t_off_ps, kind))) % 10000}.sp"
+    d.write_text(gen_dff_pushout_deck(t_off_ps, kind, models_inc))
+    log = run_sim(d, sim, exe)
+    return parse_measure(log, "t_cq")
+
+
+def bisect_timing_pushout(
+    kind: str, models_inc: str, sim: str, exe: str, workdir: Path,
+    degradation: float = 0.10,
+) -> tuple[float, float]:
+    """Liberty-style constraint: the data-clock offset at which clk->Q
+    degrades by `degradation` (default 10%) versus the unconstrained value.
+
+    Returns (constraint_ps, reference_clkq_ns)."""
+    # Reference: generous offset, flop fully settled -> nominal clk->Q.
+    ref_off = 250.0
+    t_ref = cq_at_offset(ref_off, kind, models_inc, sim, exe, workdir, tag="ref")
+    if t_ref is None or t_ref <= 0:
+        raise RuntimeError("no reference clk->Q measured")
+    target = t_ref * (1.0 + degradation)
+
+    if kind == "setup":
+        lo, hi = 0.5, ref_off      # lo = violated (big pushout), hi = met
+    else:
+        lo, hi = -20.0, 400.0      # hold: negative = D falls before clk edge
+
+    def met(off):
+        t = cq_at_offset(off, kind, models_inc, sim, exe, workdir)
+        return t is not None and t <= target
+
+    for _ in range(13):
+        mid = (lo + hi) / 2
+        if met(mid):
+            hi = mid
+        else:
+            lo = mid
+    return hi, t_ref * 1e9
+
+
+def run_minperiod(args, models_inc: str, model_desc: str, exe: str) -> int:
+    """Free-running divide-by-2 flop; bisect the clock period until QN stops
+    toggling every cycle."""
+    import json
+
+    def gen(period_ns: float) -> str:
+        # Single flop with QN fed back to D divides by two: six QN falling
+        # edges must land inside the window for the period to pass.
+        return f"""* DFF min-period probe, T={period_ns:.4f}ns
+{models_inc}
+{strip_w(DFF_SUBCKT)}
+VVDD VDD 0 {VDD}
+Xdff CLK QN QN VDD 0 DFFHQNx1_ASAP7_75t_R
+Cqn QN 0 0.4e-15
+Vclk CLK 0 PULSE(0 {VDD} 1n 5p 5p {period_ns / 2:.5f}n {period_ns:.5f}n)
+.ic v(QN)={VDD}
+.tran 1p {1 + period_ns * 13:.4f}n
+.measure tran n_fall WHEN v(QN)={VDD / 2:.3f} FALL=6
+.end
+"""
+
+    def ok(period_ns):
+        d = args.workdir / f"minp_{int(period_ns * 1000)}.sp"
+        d.write_text(gen(period_ns))
+        log = run_sim(d, "xyce", exe)
+        n = parse_measure(log, "n_fall")
+        return n is not None  # 6th falling edge exists => still dividing
+
+    lo, hi = 5.0, 2000.0    # ps
+    for _ in range(12):
+        mid = (lo + hi) / 2
+        if ok(mid / 1000.0):
+            hi = mid
+        else:
+            lo = mid
+    min_ps = hi
+    print(f"DFFHQNx1 min_period = {min_ps:.1f} ps ({model_desc})")
+    doc = {
+        "schema": "openfinram-characterization-1",
+        "source": f"xyce divide-by-2 toggle bisection; {model_desc}",
+        "comment": "MEASURED MINIMUM CLOCK PERIOD (DFFHQNx1)",
+        "clock_min_period": round(min_ps / 1000.0, 5),
+    }
+    out = args.workdir / "minperiod.json"
+    out.write_text(json.dumps(doc, indent=2) + "\n")
+    print(f"wrote {out}")
+    return 0
+
+
+PINCAP_DECK = """* pin-capacitance probe: C = integral(I)/dV on {pin}
+{models_inc}
+{subckt}
+VVDD VDD 0 {vdd}
+Xprobe {conn}
+Vsig {pin}_pad 0 PWL(0 0 0.5n 0 1.5n {vdd})
+Vi {pin}_pad {pin}_in 0
+.tran 1p 2n
+.measure tran charge INTEG i(Vi) FROM=0.5n TO=1.5n
+.end
+"""
+
+
+def run_pincap(args, models_inc: str, model_desc: str, exe: str) -> int:
+    """Charge-based input-capacitance of the constrained register pins:
+    ramp the pin 0->VDD with the flop static, integrate the driver current.
+    C = Q / dV; reported in fF."""
+    import json
+
+    results = {}
+    # Ammeter Vi sits between the driven pad node and the cell input so all
+    # pin current passes through it: Vsig -> pad -> Vi -> <pin>_in.
+    for pin, conn in (
+            ("D",   "CLK {inp} QN VDD 0 DFFHQNx1_ASAP7_75t_R"),
+            ("CLK", "{inp} D QN VDD 0 DFFHQNx1_ASAP7_75t_R")):
+        deck = PINCAP_DECK.format(pin=pin, inp=pin + "_in",
+                                  models_inc=models_inc,
+                                  subckt=strip_w(DFF_SUBCKT), vdd=VDD,
+                                  conn=conn.format(inp=pin + "_in"))
+        d = args.workdir / f"pincap_{pin}.sp"
+        d.write_text(deck)
+        log = run_sim(d, "xyce", exe)
+        q = parse_measure(log, "charge")  # Xyce INTEG units: A*s
+        if q is None:
+            print(f"  {pin}: no charge measured")
+            continue
+        ff = abs(q) / VDD * 1e15
+        results[pin] = round(ff, 4)
+        print(f"  {pin:>4}: {ff:.3f} fF")
+
+    doc = {
+        "schema": "openfinram-characterization-1",
+        "source": f"xyce charge-integration ramp probe; {model_desc}",
+        "comment": "MEASURED INPUT PIN CAPACITANCE (constrained register)",
+        "pin_capacitance": {
+            # A/D/WE/CE/OE land on the same register family; clk drives its
+            # clock pin. Per-pin mapping into the macro netlist is P2 follow-up.
+            "default_input": results.get("D"),
+            "clk": results.get("CLK"),
+        },
+    }
+    out = args.workdir / "pincaps.json"
+    out.write_text(json.dumps(doc, indent=2) + "\n")
+    print(f"wrote {out}")
+    return 0
+
+
 def _cell(prefix: str, stored: int, wl: str) -> tuple[str, str]:
     """A top-level 6T cell storing `stored`, accessed by wordline `wl`."""
     q, qb = (f"{prefix}Q", f"{prefix}QB")
@@ -619,12 +799,14 @@ def main(argv: list[str]) -> int:
     ap.add_argument(
         "--mode",
         default="access",
-        choices=["access", "clkq", "setuphold", "table3", "sweep"],
+        choices=["access", "clkq", "setuphold", "table3", "sweep",
+                 "minperiod", "pincap"],
         help="access = WL->BL sense-margin; clkq = full read through the real "
         "sense amp; setuphold = A/D/WE input-register setup/hold via bisection; "
         "table3 = MOST-report Table III reproduction (needs --simulator xyce "
         "--real-device); sweep = clk->Q + transitions over a slew x load grid "
-        "-> characterization JSON per depth (same tool requirements)",
+        "-> characterization JSON per depth (same tool requirements); "
+        "minperiod/pincap = DFF constraint measurements",
     )
     ap.add_argument("--simulator", default="ngspice", choices=["ngspice", "xyce"])
     ap.add_argument(
@@ -644,6 +826,13 @@ def main(argv: list[str]) -> int:
         help=f"simulator executable (default: ngspice, or {XYCE_DEFAULT} for xyce)",
     )
     ap.add_argument("--workdir", type=Path, default=Path("/tmp/ofr_charread"))
+    ap.add_argument(
+        "--setuphold-criterion",
+        default="pushout",
+        choices=["pushout", "capture"],
+        help="pushout = Liberty 10%% clk->Q degradation (default); "
+             "capture = legacy capture-failure bisection",
+    )
     ap.add_argument(
         "--parasitics-json",
         type=Path,
@@ -668,19 +857,35 @@ def main(argv: list[str]) -> int:
         return run_sweep(args, depths_arg=args.depths, models_inc=models_inc,
                          model_desc=model_desc, exe=exe)
 
+    if args.mode == "minperiod":
+        return run_minperiod(args, models_inc, model_desc, exe)
+
+    if args.mode == "pincap":
+        return run_pincap(args, models_inc, model_desc, exe)
+
     if args.mode == "setuphold":
         print(
             f"setup/hold (A/D/WE input register) | sim={args.simulator} | "
             f"model={model_desc}"
         )
-        t_su = bisect_timing("setup", models_inc, args.simulator, exe, args.workdir)
-        t_hold = bisect_timing("hold", models_inc, args.simulator, exe, args.workdir)
-        print("  DFFHQNx1 (real ASAP7 flop), rising edge, D 0->1 capture:")
-        print(f"    setup = {t_su:.1f} ps   hold = {t_hold:.1f} ps")
-        print(
-            "  (capture-failure boundary via bisection; real Liberty adds a "
-            "clk->Q pushout criterion. This is the constraint on A/D/WE vs CLK.)"
-        )
+        if args.setuphold_criterion == "pushout":
+            t_su, ref_su = bisect_timing_pushout(
+                "setup", models_inc, args.simulator, exe, args.workdir)
+            t_ho, ref_ho = bisect_timing_pushout(
+                "hold", models_inc, args.simulator, exe, args.workdir)
+            print("  DFFHQNx1 (real ASAP7 flop), rising edge; Liberty "
+                  "10%-clk->Q-pushout criterion:")
+            print(f"    unconstrained clk->Q = {ref_su:.3f} ns")
+            print(f"    setup = {t_su:.1f} ps   hold = {t_ho:.1f} ps")
+            print(
+                "  (offset where clk->Q degrades 10% vs nominal - the Liberty "
+                "definition; --setuphold-criterion capture gives the legacy "
+                "capture-failure numbers)"
+            )
+        else:
+            t_su = bisect_timing("setup", models_inc, args.simulator, exe, args.workdir)
+            t_hold = bisect_timing("hold", models_inc, args.simulator, exe, args.workdir)
+            print(f"    setup = {t_su:.1f} ps   hold = {t_hold:.1f} ps (capture-failure)")
         return 0
 
     depths = [int(x) for x in args.depths.split(",")]
