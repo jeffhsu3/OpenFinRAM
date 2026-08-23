@@ -519,18 +519,112 @@ def run_table3(
     return 1 if had_fail else 0
 
 
+
+SWEEP_SLEWS_NS = [0.01, 0.05, 0.227]
+SWEEP_LOADS_PF = [0.005, 0.04608, 0.5]
+
+
+def run_sweep(
+    args, depths_arg: str, models_inc: str, model_desc: str, exe: str
+) -> int:
+    """P2: clk->Q rise/fall and Q output transitions as true 2-D tables over
+    an input-slew x output-load grid (Liberty index_1 x index_2 convention),
+    through the same real read path as table3/clkq. Emits one
+    characterization-JSON-compatible file per depth."""
+    if args.simulator != "xyce" or not args.real_device:
+        print("sweep requires --simulator xyce --real-device")
+        return 1
+
+    import json
+
+    depths = [int(x) for x in depths_arg.split(",")]
+    print(f"clk->Q sweep | sim=xyce | model={model_desc} | "
+          f"slews {SWEEP_SLEWS_NS} ns x loads {SWEEP_LOADS_PF} pF")
+
+    had_fail = False
+    for w in depths:
+        adeck = args.workdir / f"read_d{w}.sp"
+        adeck.write_text(gen_deck(w, models_inc, True, "xyce"))
+        alog = run_sim(adeck, "xyce", exe)
+        t_acc = parse_measure(alog, "t_access")
+        sae_ps = (t_acc * 1e12) + 85 if t_acc else 150.0
+
+        cell_rise = [[None] * len(SWEEP_LOADS_PF) for _ in SWEEP_SLEWS_NS]
+        cell_fall = [[None] * len(SWEEP_LOADS_PF) for _ in SWEEP_SLEWS_NS]
+        rise_tr = [None] * len(SWEEP_LOADS_PF)
+        fall_tr = [None] * len(SWEEP_LOADS_PF)
+
+        for i, sl_ns in enumerate(SWEEP_SLEWS_NS):
+            for j, cq_pf in enumerate(SWEEP_LOADS_PF):
+                deck = args.workdir / f"sweep_d{w}_s{i}_l{j}.sp"
+                deck.write_text(gen_clkq_deck(
+                    w, sae_ps, models_inc,
+                    slew_s=sl_ns * 1e-9, cq_f=cq_pf * 1e-12, table3=True))
+                log = run_sim(deck, "xyce", exe)
+                g = lambda n: parse_measure(log, n)  # noqa: E731
+                q_hi = g("q_hi")
+                if q_hi is None or q_hi <= 0.6:
+                    had_fail = True
+                    print(f"  d{w} slew={sl_ns} load={cq_pf}: SANITY FAIL")
+                    continue
+                # .measure values are seconds; the schema carries ns.
+                cell_rise[i][j] = g("t_cell_rise") * 1e9
+                cell_fall[i][j] = g("t_cell_fall") * 1e9
+                if i == len(SWEEP_SLEWS_NS) // 2:  # transitions vs load at mid slew
+                    qr10, qr90 = g("t_qr_lo"), g("t_qr_hi")
+                    qf90, qf10 = g("t_qf_hi"), g("t_qf_lo")
+                    if None not in (qr10, qr90):
+                        rise_tr[j] = abs(qr90 - qr10) * 1e9
+                    if None not in (qf90, qf10):
+                        fall_tr[j] = abs(qf10 - qf90) * 1e9
+
+        doc = {
+            "schema": "openfinram-characterization-1",
+            "source": (
+                f"xyce transient sweep, real ASAP7 BSIM-CMG, TT 0.70V 25C; "
+                f"{w}-word bitline depth; replica-timed SAE; "
+                "transitions measured at mid-slew vs load"
+            ),
+            "comment": (
+                f"MEASURED XYCE SWEEP (TT, {len(SWEEP_SLEWS_NS)}x"
+                f"{len(SWEEP_LOADS_PF)} grid, depth={w})"
+            ),
+            "timing": {
+                "delay": {
+                    "index_1": SWEEP_SLEWS_NS,
+                    "index_2": SWEEP_LOADS_PF,
+                    "cell_rise": cell_rise,
+                    "cell_fall": cell_fall,
+                    "rise_transition": rise_tr,
+                    "fall_transition": fall_tr,
+                }
+            },
+        }
+        out = args.workdir / f"sweep_d{w}.json"
+        out.write_text(json.dumps(doc, indent=2) + "\n")
+        print(f"  d{w}: wrote {out}")
+        for i, sl in enumerate(SWEEP_SLEWS_NS):
+            row = " ".join(
+                f"{cell_rise[i][j]*1e3:6.1f}" if cell_rise[i][j] is not None else "  fail"
+                for j in range(len(SWEEP_LOADS_PF)))
+            print(f"    slew {sl:5.3f} ns -> cell_rise [ps]: {row}")
+
+    return 1 if had_fail else 0
+
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--depths", default="16,32,64,128,256")
     ap.add_argument(
         "--mode",
         default="access",
-        choices=["access", "clkq", "setuphold", "table3"],
+        choices=["access", "clkq", "setuphold", "table3", "sweep"],
         help="access = WL->BL sense-margin; clkq = full read through the real "
         "sense amp; setuphold = A/D/WE input-register setup/hold via bisection; "
-        "table3 = MOST-report Table III reproduction (cell rise/fall access + "
-        "output transitions vs the report's PDK column; needs --simulator xyce "
-        "--real-device)",
+        "table3 = MOST-report Table III reproduction (needs --simulator xyce "
+        "--real-device); sweep = clk->Q + transitions over a slew x load grid "
+        "-> characterization JSON per depth (same tool requirements)",
     )
     ap.add_argument("--simulator", default="ngspice", choices=["ngspice", "xyce"])
     ap.add_argument(
@@ -569,6 +663,10 @@ def main(argv: list[str]) -> int:
     if args.mode == "table3":
         return run_table3(args, depths_arg=args.depths, models_inc=models_inc,
                           model_desc=model_desc, exe=exe)
+
+    if args.mode == "sweep":
+        return run_sweep(args, depths_arg=args.depths, models_inc=models_inc,
+                         model_desc=model_desc, exe=exe)
 
     if args.mode == "setuphold":
         print(
