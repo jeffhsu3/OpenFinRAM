@@ -109,4 +109,14 @@ if(BUILD_TESTING)
             bash ${CMAKE_SOURCE_DIR}/tests/run_char_json_check.sh
     )
     set_tests_properties(char_json_equiv_check PROPERTIES TIMEOUT 600)
+
+    # P6 Table III gate (Xyce transient -> JSON -> .lib -> validator).
+    # Skips (exit 77) when Xyce is unavailable.
+    add_test(
+        NAME table3_gate
+        COMMAND ${CMAKE_COMMAND} -E env
+            OPENFINRAM_BIN=${CMAKE_BINARY_DIR}/OpenFinRAM
+            bash ${CMAKE_SOURCE_DIR}/tests/run_table3_gate.sh
+    )
+    set_tests_properties(table3_gate PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77)
 endif()
