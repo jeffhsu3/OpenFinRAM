@@ -39,6 +39,7 @@ per depth from the access measurement (replica timing) -- the true clk->Q arc.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -47,6 +48,29 @@ from pathlib import Path
 VDD = 0.7
 SENSE_MARGIN = 0.1  # V of BL develop that trips the sense amp
 CBL_PER_CELL_F = 0.06e-15  # per-cell bitline capacitance (wire + junction), F
+# Overridden by --parasitics-json (P1): geometry-derived wire cap from
+# scripts/extract_parasitics.py replaces this guess.
+
+
+def load_parasitics_json(path: str) -> float:
+    """Per-cell bitline capacitance [F] from extract_parasitics.py output.
+
+    Accepts an explicit 'bl_wire_ff_per_cell' point or takes the midpoint of
+    the low/high bracket. The extractor's junction/via remainder means the
+    true per-cell cap is the wire number plus a guard band - documented, not
+    silently folded in.
+    """
+    doc = json.loads(Path(path).read_text())
+    if "bl_wire_ff_per_cell" in doc:
+        ff = float(doc["bl_wire_ff_per_cell"])
+        src = "point"
+    else:
+        lo = float(doc["bl_wire_ff_per_cell_low"])
+        hi = float(doc["bl_wire_ff_per_cell_high"])
+        ff = 0.5 * (lo + hi)
+        src = f"midpoint of {lo:.5f}..{hi:.5f} fF bracket"
+    print(f"parasitics JSON {path}: CBL per cell = {ff:.5f} fF ({src})")
+    return ff * 1e-15
 
 # Planar stand-in devices so the harness runs in a BSIM-CMG-less ngspice.
 # Tuned for ~0.7 V bistability + a readable bitline discharge, NOT ASAP7-accurate.
@@ -526,8 +550,18 @@ def main(argv: list[str]) -> int:
         help=f"simulator executable (default: ngspice, or {XYCE_DEFAULT} for xyce)",
     )
     ap.add_argument("--workdir", type=Path, default=Path("/tmp/ofr_charread"))
+    ap.add_argument(
+        "--parasitics-json",
+        type=Path,
+        default=None,
+        help="extract_parasitics.py output; replaces the guessed "
+             "0.06 fF/cell bitline capacitance with geometry-derived wire cap",
+    )
     args = ap.parse_args(argv)
     args.workdir.mkdir(parents=True, exist_ok=True)
+    global CBL_PER_CELL_F
+    if args.parasitics_json:
+        CBL_PER_CELL_F = load_parasitics_json(str(args.parasitics_json))
 
     exe = args.sim_exe or (XYCE_DEFAULT if args.simulator == "xyce" else "ngspice")
     models_inc, model_desc = prep_models(args.models, args.simulator, args.workdir)

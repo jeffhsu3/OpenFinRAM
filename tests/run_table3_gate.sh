@@ -7,6 +7,11 @@
 #     -> OpenFinRAM --liberty-from             (JSON -> .lib)
 #     -> validator                             (.lib values vs report)
 #
+# Bitline cap comes from scripts/extract_parasitics.py (geometry-derived
+# wire cap, midpoint of its bracket); the un-extracted junction/via remainder
+# is why measured clk->Q may sit slightly below the characterized reference -
+# still gated at 15%.
+
 # Gate: measured clk->Q and output transitions must land within 15% of the
 # SiliconSmart-characterized "ours" column of the report's Table III
 # (256-word x 64-bit class, stimulus slew 0.04 ns / load 0.04608 pF).
@@ -41,8 +46,11 @@ OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
 echo "[1/4] Xyce table3 measurement (256-word depth, TT)..."
+python3 scripts/extract_parasitics.py --output "$OUT/parasitics.json" \
+    || { echo "FAIL: parasitic extraction failed"; exit 1; }
 python3 scripts/characterize_read.py --mode table3 --depths 256 \
     --simulator xyce --sim-exe "$XYCE" --real-device --models "$MODELS" \
+    --parasitics-json "$OUT/parasitics.json" \
     --workdir "$OUT/char" >"$OUT/table3.log" 2>&1 \
     || { echo "FAIL: table3 measurement failed"; tail -20 "$OUT/table3.log"; exit 1; }
 grep -A5 "^ *256-word" "$OUT/table3.log" | head -6
