@@ -258,7 +258,7 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  }\n";
     const std::string power_template = cell_name + "_power_1pt";
     if (measured_power) {
-        out << "  lu_table_template (" << power_template << ") {\n";
+        out << "  power_lut_template (" << power_template << ") {\n";
         out << "    variable_1 : input_transition_time;\n";
         out << "    index_1 (\"1.0\");\n";
         out << "  }\n";
@@ -312,8 +312,9 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "      clock : true;\n";
     out << "      min_period : " << num(min_period) << ";\n";
     if (measured_power) {
-        // Vendor-srambank convention: internal_power groups on clk under
-        // when:"write" / "!write", values in library power units (uW here),
+        // Vendor-srambank convention: internal_power groups on clk gated by
+        // the write-enable pin (we_n is active-low: "we_n" = read access,
+        // "!we_n" = write access), values in library power units (uW here),
         // derived from per-access energy at the documented reference cycle.
         constexpr double kDefaultCycleNs = 4.0;
         const double cyc = CharacterizationData::provided(data->power.reference_cycle_ns)
@@ -325,12 +326,12 @@ std::string build_estimated_liberty(const MainCliOptions& options,
                        : std::string("0");
         };
         const std::pair<const char*, double> ops[2] = {
-            {"!\"write\"", data->power.read_access_pj},
-            {"\"write\"", data->power.write_access_pj}};
+            {"\"we_n\"", data->power.read_access_pj},
+            {"\"!we_n\"", data->power.write_access_pj}};
         for (const auto& op : ops) {
             out << "      internal_power () {\n";
             out << "        when : " << op.first << ";\n";
-            out << "        related_pg_pin : VDD;\n";
+            out << "        related_pg_pin : vdd;\n";
             for (const char* t : {"rise_power", "fall_power"}) {
                 out << "        " << t << " (" << power_template << ") {\n";
                 out << "          index_1 (\"1.0\");\n";
