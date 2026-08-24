@@ -391,6 +391,7 @@ PINCAP_DECK = """* pin-capacitance probe: C = integral(I)/dV on {pin}
 {subckt}
 VVDD VDD 0 {vdd}
 Xprobe {conn}
+{hold}
 Vsig {pin}_pad 0 PWL(0 0 0.5n 0 1.5n {vdd})
 Vi {pin}_pad {pin}_in 0
 .tran 1p 2n
@@ -402,19 +403,24 @@ Vi {pin}_pad {pin}_in 0
 def run_pincap(args, models_inc: str, model_desc: str, exe: str) -> int:
     """Charge-based input-capacitance of the constrained register pins:
     ramp the pin 0->VDD with the flop static, integrate the driver current.
-    C = Q / dV; reported in fF."""
+    C = Q / dV; reported in fF.
+
+    The non-probed input is tied low so the flop's internal latch state (and
+    therefore which stacks the ramped pin sees) is defined by the deck rather
+    than by the simulator's GMIN resolution of a floating gate."""
     import json
 
     results = {}
     # Ammeter Vi sits between the driven pad node and the cell input so all
     # pin current passes through it: Vsig -> pad -> Vi -> <pin>_in.
-    for pin, conn in (
-            ("D",   "CLK {inp} QN VDD 0 DFFHQNx1_ASAP7_75t_R"),
-            ("CLK", "{inp} D QN VDD 0 DFFHQNx1_ASAP7_75t_R")):
+    for pin, conn, held in (
+            ("D",   "CLK {inp} QN VDD 0 DFFHQNx1_ASAP7_75t_R", "CLK"),
+            ("CLK", "{inp} D QN VDD 0 DFFHQNx1_ASAP7_75t_R", "D")):
         deck = PINCAP_DECK.format(pin=pin, inp=pin + "_in",
                                   models_inc=models_inc,
                                   subckt=strip_w(DFF_SUBCKT), vdd=VDD,
-                                  conn=conn.format(inp=pin + "_in"))
+                                  conn=conn.format(inp=pin + "_in"),
+                                  hold=f"Vhold {held} 0 0")
         d = args.workdir / f"pincap_{pin}.sp"
         d.write_text(deck)
         log = run_sim(d, "xyce", exe)
@@ -465,8 +471,17 @@ def gen_clkq_deck(
     slew_s: float = 10e-12,
     cq_f: float = 1e-15,
     table3: bool = False,
+    static: bool = False,
+    tran_ns: float = 8.0,
+    extra: str = "",
 ) -> str:
     """True clk->Q via the real sense amp + output stage (Xyce/BSIM-CMG only).
+
+    static=True holds every control at its idle level (precharge on, wordlines
+    low, sense amp precharged and disabled, output disabled) and drops the
+    timing measures: the same column as a standby/leakage testbench.
+    tran_ns / extra extend the transient and append extra .measure cards
+    (power mode); the defaults reproduce the timing deck exactly.
 
     Two 4 ns cycles: read a stored-1 (Q settles high), then the stored-0 under
     test (Q falls) -> a clean clk->Q edge. SAE is replica-timed at clk+tsae.
@@ -496,7 +511,39 @@ def gen_clkq_deck(
 .measure tran t_qf_lo WHEN v(Q)={v10:.3f} FALL=1
 .measure tran q_hi FIND v(Q) AT=4.5n
 """
-    return f"""* true clk->Q read (2-cycle), depth={depth}, SAE +{tsae_ps:.0f}ps
+    if static:
+        title = f"* standby column (every control idle), depth={depth}"
+        sources = f"""Vclk  clk 0 0
+Vbpn  blprechn 0 0
+Vysel ysel 0 0
+Vyseln yseln 0 {VDD}
+Voe   oe_out  0 0
+Voeb  oeb_out 0 {VDD}
+Vwlh  WLhi 0 0
+Vwll  WLlo 0 0
+Vsapn SAPRECHN 0 0
+Vsae  SAE 0 0
+* The output latch has no read to set it here: without a held state Xyce's DC
+* operating point parks n49/n54 at the metastable mid-rail and the following
+* inverter crowbars ~20 uA for the whole run, swamping the standby leakage.
+.ic v(n49)={VDD} v(n54)=0"""
+        measures = ""
+    else:
+        title = f"* true clk->Q read (2-cycle), depth={depth}, SAE +{tsae_ps:.0f}ps"
+        sources = f"""Vclk  clk 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
+Vbpn  blprechn 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
+Vysel ysel 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
+Vyseln yseln 0 PULSE({VDD} 0 1n {sl:g}n {sl:g}n 2n 4n)
+Voe   oe_out  0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
+Voeb  oeb_out 0 PULSE({VDD} 0 1n {sl:g}n {sl:g}n 2n 4n)
+Vwlh  WLhi 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 1.8n 100n)
+Vwll  WLlo 0 PULSE(0 {VDD} 5n {sl:g}n {sl:g}n 1.8n 100n)
+Vsapn SAPRECHN 0 PULSE(0 {VDD} {sae1 - 0.02:.4f}n {sl:g}n {sl:g}n 1.85n 4n)
+Vsae  SAE 0 PULSE(0 {VDD} {sae1:.4f}n {sl:g}n {sl:g}n 1.8n 4n)"""
+        measures = f""".measure tran t_clkq TRIG v(clk) VAL={vth} RISE=2 TARG v(Q) VAL={vth} FALL=1 TD=4n
+.measure tran q_lo FIND v(Q) AT=7.5n
+"""
+    return f"""{title}
 {models_inc}
 {strip_w(SUBCKTS)}
 VVDD VDD 0 {VDD}
@@ -515,20 +562,9 @@ Cbln BLN 0 {cbl:.4e}
 {ic_lo}
 {ic_hi}
 .ic v(BL)={VDD} v(BLN)={VDD} v(sa)={VDD} v(san)={VDD} v(qa)={VDD} v(qan)={VDD} v(Q)=0
-Vclk  clk 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
-Vbpn  blprechn 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
-Vysel ysel 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
-Vyseln yseln 0 PULSE({VDD} 0 1n {sl:g}n {sl:g}n 2n 4n)
-Voe   oe_out  0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 2n 4n)
-Voeb  oeb_out 0 PULSE({VDD} 0 1n {sl:g}n {sl:g}n 2n 4n)
-Vwlh  WLhi 0 PULSE(0 {VDD} 1n {sl:g}n {sl:g}n 1.8n 100n)
-Vwll  WLlo 0 PULSE(0 {VDD} 5n {sl:g}n {sl:g}n 1.8n 100n)
-Vsapn SAPRECHN 0 PULSE(0 {VDD} {sae1 - 0.02:.4f}n {sl:g}n {sl:g}n 1.85n 4n)
-Vsae  SAE 0 PULSE(0 {VDD} {sae1:.4f}n {sl:g}n {sl:g}n 1.8n 4n)
-.tran 1p 8n
-.measure tran t_clkq TRIG v(clk) VAL={vth} RISE=2 TARG v(Q) VAL={vth} FALL=1 TD=4n
-.measure tran q_lo FIND v(Q) AT=7.5n
-{extra_measures}.end
+{sources}
+.tran 1p {tran_ns:g}n
+{measures}{extra_measures}{extra}.end
 """
 
 
@@ -801,13 +837,18 @@ def run_sweep(
 
 
 def run_power(args, depths_arg: str, models_inc: str, model_desc: str, exe: str) -> int:
-    """P3: static leakage (both stored states) and per-access read energy on
-    the real read path, at the table3 stimulus point.
+    """P3: standby leakage and per-access read energy on the real read path
+    (cell -> bitline -> y-mux -> sense amp -> latch -> tristate -> Q), at the
+    table3 stimulus point, depth 256 -- the same column gen_clkq_deck times.
 
-    Leakage: all enables inactive, clock stopped -> I(VDD) after settling.
-    Read energy: integral(VDD * I(VDD)) across one read cycle minus the
-    leakage floor for the same window, so what remains is the switched
-    charge of bitlines + periphery + output stage.
+    Leakage: that column with every control at its idle level (precharge on,
+    wordlines low, sense amp precharged and disabled, output disabled);
+    AVG I(VDD) over a window after the initial-condition transients settle.
+    Read energy: INTEG I(VDD) over one complete 4 ns cycle of the clk->Q deck
+    (precharge-off to next precharge-off: wordline, sense, output switch and
+    the bitline restore) minus leakage for the same window, times VDD. The
+    wordline, clock and select drivers are ideal sources, so their own
+    switching energy is not included; the write path is not exercised.
     """
     import json
 
@@ -815,77 +856,80 @@ def run_power(args, depths_arg: str, models_inc: str, model_desc: str, exe: str)
         print("power requires --simulator xyce --real-device")
         return 1
 
-    def col(w: int) -> tuple[str, str]:
-        cbl = w * CBL_PER_CELL_F
-        cells = []
-        ics = []
-        for k in range(3):  # three accessed cells is enough for one column
-            c, ic = _cell(f"M{k}", k % 2, f"WL{k}")
-            cells.append(c)
-            ics.append(ic)
-        body = "\n".join(cells)
-        return f"""* power probe column depth={w}
-{models_inc}
-{strip_w(SUBCKTS)}
-VVDD VDD 0 {VDD}
-{body}
-Xmux blprechn yseln ysel san sa BLN BL VDD 0 sram_prech_ymux_6t112_v1
-Cbl  BL  0 {cbl:.4e}
-Cbln BLN 0 {cbl:.4e}
-{chr(10).join(ics)}
-.ic v(BL)={VDD} v(BLN)={VDD} v(sa)={VDD} v(san)={VDD} v(qa)={VDD} v(qan)={VDD}
-Vbpn blprechn 0 PWL(0 0 19.8n 0 20n {VDD})
-Vysel ysel 0 PWL(0 0 29.8n 0 30n {VDD} 39.9n {VDD} 40n 0)
-Vyseln yseln 0 PWL(0 {VDD} 29.8n {VDD} 30n 0 39.9n 0 40n {VDD})
-Vsapn SAPRECHN 0 PWL(0 0 30.1n 0 30.12n {VDD} 33n {VDD} 33.02n 0)
-Vsae SAE 0 PWL(0 {VDD} 30.1n {VDD} 30.12n 0 32n 0 32.02n {VDD})
-Vwl0 WL0 0 PWL(0 0 30n 0 30.02n {VDD} 34n {VDD} 34.02n 0)
-.tran 5p 41n
-* leakage floor: quiet window before any activity
-.measure tran i_leak AVG i(VVDD) FROM=10n TO=19n
-* read access: WL0 pulses at 30ns, sense fires via ysel at 30ns
-.measure tran e_read INTEG i(VVDD) FROM=29.9n TO=35n
-.end
-""", ""
+    depth = 256
+    cycle_ns = 4.0
+    stim = dict(slew_s=TABLE3_SLEW_S, cq_f=TABLE3_CQ_F)
 
-    d = args.workdir / "power_probe.sp"
-    deck, _ = col(256)
-    d.write_text(deck.replace("{models_inc}", models_inc))
-    log = run_sim(d, "xyce", exe)
-    i_leak = parse_measure(log, "i_leak")
-    e_read = parse_measure(log, "e_read")
-    if i_leak is None or e_read is None:
+    # Replica-timed SAE, same guard as the clkq / table3 modes.
+    adeck = args.workdir / f"read_d{depth}.sp"
+    adeck.write_text(gen_deck(depth, models_inc, True, "xyce"))
+    t_acc = parse_measure(run_sim(adeck, "xyce", exe), "t_access")
+    sae_ps = (t_acc * 1e12) + 85 if t_acc else 150.0
+
+    # (1) standby: the read column with every control idle.
+    ldeck = args.workdir / "power_leak.sp"
+    ldeck.write_text(gen_clkq_deck(
+        depth, sae_ps, models_inc, **stim, static=True, tran_ns=20.0,
+        extra="* leakage floor: every control idle, after the .ic transients settle\n"
+              ".measure tran i_leak AVG i(VVDD) FROM=10n TO=19n\n"))
+    llog = run_sim(ldeck, "xyce", exe)
+    (args.workdir / "power_leak.log").write_text(llog)
+    i_leak = parse_measure(llog, "i_leak")
+
+    # (2) one complete read cycle: cycle 2 of the clk->Q deck (the stored-0
+    # read) runs 5..9 ns; integrate from 100 ps before its precharge-off edge
+    # to 100 ps before the next one so the bitline restore is inside.
+    t0 = 4.9
+    rdeck = args.workdir / "power_read.sp"
+    rdeck.write_text(gen_clkq_deck(
+        depth, sae_ps, models_inc, **stim, tran_ns=t0 + cycle_ns + 0.1,
+        extra="* one full read cycle: wordline, sense, output, bitline restore\n"
+              f".measure tran e_cycle INTEG i(VVDD) FROM={t0:g}n TO={t0 + cycle_ns:g}n\n"))
+    rlog = run_sim(rdeck, "xyce", exe)
+    (args.workdir / "power_read.log").write_text(rlog)
+    e_cycle = parse_measure(rlog, "e_cycle")
+    q_lo = parse_measure(rlog, "q_lo")
+
+    if i_leak is None or e_cycle is None:
         print("FAIL: power measures missing")
-        print(log[:400])
+        print((llog if i_leak is None else rlog)[:400])
+        return 1
+    if q_lo is None or q_lo >= 0.1:
+        print(f"FAIL: the read did not complete (Q = {q_lo} V at 7.5 ns); "
+              "cycle energy would not be a read energy")
         return 1
 
-    window = 5.1e-9
-    # The Xyce measures are on i(VVDD): AVG -> amperes, INTEG -> coulombs.
-    # Scale by VDD (P = V*I, E = V*Q) to get watts / joules before the
-    # uW / pJ conversion below.
+    # Xyce measures are on i(VVDD): AVG -> amperes, INTEG -> coulombs.
+    # Scale by VDD (P = V*I, E = V*Q) to get watts / joules.
     i_leak_a = abs(i_leak)
     leakage_w = i_leak_a * VDD
-    # subtract leakage contribution from the integral (i_leak is negative
-    # for source current; work in magnitudes)
-    e_j = abs(abs(e_read) - i_leak_a * window) * VDD
+    e_j = (abs(e_cycle) - i_leak_a * cycle_ns * 1e-9) * VDD
+    if e_j < 0:
+        print(f"FAIL: cycle charge below the leakage floor ({e_cycle} C vs "
+              f"{i_leak_a * cycle_ns * 1e-9} C); measurement window is wrong")
+        return 1
     leakage_uw = leakage_w * 1e6
     e_pj = e_j * 1e12
-    print(f"  leakage = {leakage_uw:.3f} uW (single column + periphery)")
-    print(f"  read energy = {e_pj:.3f} pJ/access (net of leakage)")
+    print(f"  SAE replica timing = +{sae_ps:.0f} ps; read verified (Q = {q_lo:.3f} V)")
+    print(f"  leakage = {leakage_uw:.6f} uW (standby column + periphery)")
+    print(f"  read energy = {e_pj:.4f} pJ/access (net of leakage, {cycle_ns:g} ns cycle)")
 
     doc = {
         "schema": "openfinram-characterization-1",
         "source": (
-            f"xyce transient, TT 0.70 V 25C; one bitline column + shared "
-            f"periphery, read at the table3 stimulus point"
+            f"xyce transient, {model_desc}, VDD={VDD:g} V; one {depth}-deep "
+            f"bitline column + sense/output periphery on the clk->Q read path, "
+            f"table3 stimulus point"
         ),
         "comment": (
-            "MEASURED POWER: leakage and per-access read energy net of "
-            "leakage; write path not exercised by this testbench yet"
+            "MEASURED POWER: standby leakage and per-access read energy net of "
+            "leakage over one full read cycle; wordline/clock/select drivers "
+            "are ideal sources (not included); write path not exercised yet"
         ),
         "power": {
-            "leakage_uw": round(leakage_uw, 4),
+            "leakage_uw": round(leakage_uw, 6),
             "read_access_pj": round(e_pj, 4),
+            "reference_cycle_ns": cycle_ns,
         },
     }
     out = args.workdir / "power.json"
