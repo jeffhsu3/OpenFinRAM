@@ -189,6 +189,10 @@ std::string build_estimated_liberty(const MainCliOptions& options,
         out << "  comment : \"ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. "
                "Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled.\";\n";
     }
+    const bool measured_power = data && data->power.present;
+    if (measured_power) {
+        out << "  power_unit : \"1uW\";\n";
+    }
     out << "  time_unit : \"1ns\";\n";
     out << "  voltage_unit : \"1V\";\n";
     out << "  current_unit : \"1uA\";\n";
@@ -252,6 +256,13 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "    variable_1 : total_output_net_capacitance;\n";
     out << "    index_1 (\"0.005, 0.500\");\n";
     out << "  }\n";
+    const std::string power_template = cell_name + "_power_1pt";
+    if (measured_power) {
+        out << "  lu_table_template (" << power_template << ") {\n";
+        out << "    variable_1 : input_transition_time;\n";
+        out << "    index_1 (\"1.0\");\n";
+        out << "  }\n";
+    }
     out << "  lu_table_template (" << constraint_template << ") {\n";
     out << "    variable_1 : related_pin_transition;\n";
     out << "    variable_2 : constrained_pin_transition;\n";
@@ -300,6 +311,35 @@ std::string build_estimated_liberty(const MainCliOptions& options,
         << num(scalar_or(data, data ? data->clk_capacitance : 0.025, 0.025)) << ";\n";
     out << "      clock : true;\n";
     out << "      min_period : " << num(min_period) << ";\n";
+    if (measured_power) {
+        // Vendor-srambank convention: internal_power groups on clk under
+        // when:"write" / "!write", values in library power units (uW here),
+        // derived from per-access energy at the documented reference cycle.
+        constexpr double kDefaultCycleNs = 4.0;
+        const double cyc = CharacterizationData::provided(data->power.reference_cycle_ns)
+                               ? data->power.reference_cycle_ns
+                               : kDefaultCycleNs;
+        auto uw = [cyc](double pj) {
+            return CharacterizationData::provided(pj)
+                       ? num(pj * 1000.0 / cyc)   // pJ/ns = mW -> uW
+                       : std::string("0");
+        };
+        const std::pair<const char*, double> ops[2] = {
+            {"!\"write\"", data->power.read_access_pj},
+            {"\"write\"", data->power.write_access_pj}};
+        for (const auto& op : ops) {
+            out << "      internal_power () {\n";
+            out << "        when : " << op.first << ";\n";
+            out << "        related_pg_pin : VDD;\n";
+            for (const char* t : {"rise_power", "fall_power"}) {
+                out << "        " << t << " (" << power_template << ") {\n";
+                out << "          index_1 (\"1.0\");\n";
+                out << "          values (\"" << uw(op.second) << "\");\n";
+                out << "        }\n";
+            }
+            out << "      }\n";
+        }
+    }
     out << "    }\n";
 
     emit_input_pin(out, "ce_n", constraint_template, data);

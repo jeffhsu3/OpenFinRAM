@@ -66,6 +66,18 @@ struct CharacterizationData {
     };
     OperatingConditions operating_conditions;
 
+    // Measured power. Leakage feeds cell_leakage_power; the per-access
+    // energies become internal_power() tables on clk under when:"write" /
+    // when:"!write", expressed at a documented reference cycle.
+    struct PowerData {
+        bool present = false;
+        double leakage_uw = std::numeric_limits<double>::quiet_NaN();
+        double read_access_pj = std::numeric_limits<double>::quiet_NaN();
+        double write_access_pj = std::numeric_limits<double>::quiet_NaN();
+        double reference_cycle_ns = std::numeric_limits<double>::quiet_NaN();
+    };
+    PowerData power;
+
     // Per-sdel-tie-off variants: each entry produces an additional complete
     // .lib named <stem>_<name>.lib whose timing tables come from the variant
     // instead of the top-level timing. sdel is programmable in the netlist,

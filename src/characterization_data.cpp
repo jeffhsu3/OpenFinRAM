@@ -314,6 +314,26 @@ bool load_characterization_json(const std::string& path,
         if (get_number(*caps, "default_input", num)) out.default_input_pin_capacitance = num;
     }
     if (get_number(root, "output_max_capacitance", num)) out.output_max_capacitance = num;
+    if (const JValue* pw = root.find("power")) {
+        double num2 = 0;
+        if (get_number(*pw, "leakage_uw", num2)) {
+            out.power.leakage_uw = num2;
+            out.power.present = true;
+            // Leakage is the authoritative cell_leakage_power when present.
+            out.cell_leakage_power = num2;
+        }
+        if (get_number(*pw, "read_access_pj", num2)) {
+            out.power.read_access_pj = num2;
+            out.power.present = true;
+        }
+        if (get_number(*pw, "write_access_pj", num2)) {
+            out.power.write_access_pj = num2;
+            out.power.present = true;
+        }
+        if (get_number(*pw, "reference_cycle_ns", num2)) {
+            out.power.reference_cycle_ns = num2;
+        }
+    }
     if (const JValue* c = root.find("comment")) {
         if (c->type == JValue::STR) out.comment = c->string;
     }

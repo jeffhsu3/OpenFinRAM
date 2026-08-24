@@ -799,6 +799,97 @@ def run_sweep(
 
 
 
+
+def run_power(args, depths_arg: str, models_inc: str, model_desc: str, exe: str) -> int:
+    """P3: static leakage (both stored states) and per-access read energy on
+    the real read path, at the table3 stimulus point.
+
+    Leakage: all enables inactive, clock stopped -> I(VDD) after settling.
+    Read energy: integral(VDD * I(VDD)) across one read cycle minus the
+    leakage floor for the same window, so what remains is the switched
+    charge of bitlines + periphery + output stage.
+    """
+    import json
+
+    if args.simulator != "xyce" or not args.real_device:
+        print("power requires --simulator xyce --real-device")
+        return 1
+
+    def col(w: int) -> tuple[str, str]:
+        cbl = w * CBL_PER_CELL_F
+        cells = []
+        ics = []
+        for k in range(3):  # three accessed cells is enough for one column
+            c, ic = _cell(f"M{k}", k % 2, f"WL{k}")
+            cells.append(c)
+            ics.append(ic)
+        body = "\n".join(cells)
+        return f"""* power probe column depth={w}
+{models_inc}
+{strip_w(SUBCKTS)}
+VVDD VDD 0 {VDD}
+{body}
+Xmux blprechn yseln ysel san sa BLN BL VDD 0 sram_prech_ymux_6t112_v1
+Cbl  BL  0 {cbl:.4e}
+Cbln BLN 0 {cbl:.4e}
+{chr(10).join(ics)}
+.ic v(BL)={VDD} v(BLN)={VDD} v(sa)={VDD} v(san)={VDD} v(qa)={VDD} v(qan)={VDD}
+Vbpn blprechn 0 PWL(0 0 19.8n 0 20n {VDD})
+Vysel ysel 0 PWL(0 0 29.8n 0 30n {VDD} 39.9n {VDD} 40n 0)
+Vyseln yseln 0 PWL(0 {VDD} 29.8n {VDD} 30n 0 39.9n 0 40n {VDD})
+Vsapn SAPRECHN 0 PWL(0 0 30.1n 0 30.12n {VDD} 33n {VDD} 33.02n 0)
+Vsae SAE 0 PWL(0 {VDD} 30.1n {VDD} 30.12n 0 32n 0 32.02n {VDD})
+Vwl0 WL0 0 PWL(0 0 30n 0 30.02n {VDD} 34n {VDD} 34.02n 0)
+.tran 5p 41n
+* leakage floor: quiet window before any activity
+.measure tran i_leak AVG i(VVDD) FROM=10n TO=19n
+* read access: WL0 pulses at 30ns, sense fires via ysel at 30ns
+.measure tran e_read INTEG i(VVDD) FROM=29.9n TO=35n
+.end
+""", ""
+
+    d = args.workdir / "power_probe.sp"
+    deck, _ = col(256)
+    d.write_text(deck.replace("{models_inc}", models_inc))
+    log = run_sim(d, "xyce", exe)
+    i_leak = parse_measure(log, "i_leak")
+    e_read = parse_measure(log, "e_read")
+    if i_leak is None or e_read is None:
+        print("FAIL: power measures missing")
+        print(log[:400])
+        return 1
+
+    window = 5.1e-9
+    leakage_w = abs(i_leak)
+    # subtract leakage contribution from the integral (i_leak is negative
+    # for source current; work in magnitudes)
+    e_j = abs(abs(e_read) - leakage_w * window)
+    leakage_uw = leakage_w * 1e6
+    e_pj = e_j * 1e12
+    print(f"  leakage = {leakage_uw:.3f} uW (single column + periphery)")
+    print(f"  read energy = {e_pj:.3f} pJ/access (net of leakage)")
+
+    doc = {
+        "schema": "openfinram-characterization-1",
+        "source": (
+            f"xyce transient, TT 0.70 V 25C; one bitline column + shared "
+            f"periphery, read at the table3 stimulus point"
+        ),
+        "comment": (
+            "MEASURED POWER: leakage and per-access read energy net of "
+            "leakage; write path not exercised by this testbench yet"
+        ),
+        "power": {
+            "leakage_uw": round(leakage_uw, 4),
+            "read_access_pj": round(e_pj, 4),
+        },
+    }
+    out = args.workdir / "power.json"
+    out.write_text(json.dumps(doc, indent=2) + "\n")
+    print(f"wrote {out}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--depths", default="16,32,64,128,256")
@@ -806,7 +897,7 @@ def main(argv: list[str]) -> int:
         "--mode",
         default="access",
         choices=["access", "clkq", "setuphold", "table3", "sweep",
-                 "minperiod", "pincap"],
+                 "minperiod", "pincap", "power"],
         help="access = WL->BL sense-margin; clkq = full read through the real "
         "sense amp; setuphold = A/D/WE input-register setup/hold via bisection; "
         "table3 = MOST-report Table III reproduction (needs --simulator xyce "
@@ -881,6 +972,10 @@ def main(argv: list[str]) -> int:
 
     if args.mode == "pincap":
         return run_pincap(args, models_inc, model_desc, exe)
+
+    if args.mode == "power":
+        return run_power(args, depths_arg=args.depths, models_inc=models_inc,
+                         model_desc=model_desc, exe=exe)
 
     if args.mode == "setuphold":
         print(

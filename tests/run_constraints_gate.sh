@@ -76,4 +76,16 @@ for k, v in caps.items():
     assert v is not None and 0.02 <= v <= 3.0, f'{k}: {v} fF out of range'
 print(f'  PASS: caps {caps} fF within sane ranges')"
 
+echo "[5/5] power (leakage + read energy)..."
+python3 scripts/extract_parasitics.py --output "$OUT/parasitics.json" >/dev/null \
+    || { echo "FAIL: parasitic extraction failed"; exit 1; }
+run_mode power --parasitics-json "$OUT/parasitics.json" >"$OUT/pw.log" 2>&1 \
+    || { echo "FAIL: power mode failed"; tail -10 "$OUT/pw.log"; exit 1; }
+python3 -c "
+import json
+p = json.load(open('$OUT/power/power.json'))['power']
+assert 0.01 <= p['leakage_uw'] <= 5000, f'leakage {p[\"leakage_uw\"]} uW out of range'
+assert 0.001 <= p['read_access_pj'] <= 50, f'read energy {p[\"read_access_pj\"]} pJ out of range'
+print(f\"  PASS: leakage={p['leakage_uw']} uW, read={p['read_access_pj']} pJ/access\")"
+
 echo "constraints_gate: PASS"
