@@ -119,4 +119,13 @@ if(BUILD_TESTING)
             bash ${CMAKE_SOURCE_DIR}/tests/run_table3_gate.sh
     )
     set_tests_properties(table3_gate PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77)
+
+    # P2 constraints gate: sweep load-monotonicity, Liberty-pushout
+    # setup/hold, min_period and pin caps. Skips (exit 77) without Xyce.
+    add_test(
+        NAME constraints_gate
+        COMMAND ${CMAKE_COMMAND} -E env
+            bash ${CMAKE_SOURCE_DIR}/tests/run_constraints_gate.sh
+    )
+    set_tests_properties(constraints_gate PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77)
 endif()
