@@ -144,8 +144,19 @@ private:
                 case 'u': {
                     // Encode as UTF-8; only BMP handling, no surrogate pairs.
                     if (pos_ + 4 > text_.size()) return false;
-                    const unsigned cp =
-                        static_cast<unsigned>(std::stoul(text_.substr(pos_, 4), nullptr, 16));
+                    // Hand-decode the four hex digits: std::stoul would throw
+                    // on "\uZZZZ" (and accept "0x1", sign, whitespace), and
+                    // the loader's contract is bool + error, never an exception.
+                    unsigned cp = 0;
+                    for (int k = 0; k < 4; ++k) {
+                        const char h = text_[pos_ + k];
+                        unsigned v = 0;
+                        if (h >= '0' && h <= '9') v = static_cast<unsigned>(h - '0');
+                        else if (h >= 'a' && h <= 'f') v = 10u + static_cast<unsigned>(h - 'a');
+                        else if (h >= 'A' && h <= 'F') v = 10u + static_cast<unsigned>(h - 'A');
+                        else return false;
+                        cp = (cp << 4) | v;
+                    }
                     pos_ += 4;
                     if (cp < 0x80) {
                         out.push_back(static_cast<char>(cp));
@@ -176,8 +187,13 @@ private:
         }
         if (pos_ == start) return false;
         try {
+            const std::string literal = text_.substr(start, pos_ - start);
+            size_t consumed = 0;
             out.type = JValue::NUM;
-            out.number = std::stod(text_.substr(start, pos_ - start));
+            out.number = std::stod(literal, &consumed);
+            // stod stops at the first char it cannot use; "1.2.3" or "1e+e-2"
+            // would otherwise silently parse as a prefix.
+            if (consumed != literal.size()) return false;
         } catch (const std::exception&) {
             return false;
         }
@@ -186,6 +202,18 @@ private:
 };
 
 // --- schema helpers ---------------------------------------------------------
+
+bool is_liberty_identifier(const std::string& s) {
+    if (s.empty()) return false;
+    auto alpha_ = [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+    };
+    if (!alpha_(s[0])) return false;
+    for (const char c : s) {
+        if (!alpha_(c) && !(c >= '0' && c <= '9')) return false;
+    }
+    return true;
+}
 
 bool get_number(const JValue& obj, const char* key, double& out) {
     const JValue* v = obj.find(key);
@@ -349,6 +377,16 @@ bool load_characterization_json(const std::string& path,
         }
         if (const JValue* n = oc->find("name")) {
             if (n->type == JValue::STR && !n->string.empty()) {
+                // Emitted unquoted as the operating_conditions group name and
+                // default_operating_conditions value, so it must lex as an
+                // identifier; "SS (0.63V)" would break the .lib.
+                if (!is_liberty_identifier(n->string)) {
+                    if (error) {
+                        *error = "operating_conditions.name '" + n->string +
+                                 "' is not a Liberty identifier ([A-Za-z_][A-Za-z0-9_]*)";
+                    }
+                    return false;
+                }
                 out.operating_conditions.name = n->string;
                 out.operating_conditions.present = true;
             }
