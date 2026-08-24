@@ -6,8 +6,15 @@
 #   [2] setup/hold via the Liberty 10%-pushout criterion: |values| < 50 ps,
 #       consistent with the vendor SEQ lib's D-pin grid (8..11 / -3..+10 ps)
 #   [3] min_period: 10..500 ps (measured 27.4 ps ~= t_cq + setup)
-#   [4] pin caps: 0.02..3 fF per pin (measured ~0.25 fF; vendor 0.47..0.56)
+#   [4] pin caps: 0.02..3 fF per pin (measured ~0.31 fF D / ~0.22 fF clk with
+#       the non-probed input held low; vendor 0.47..0.56)
+#   [5] power, measured on the clk->Q read column (sense amp + latch + output
+#       stage, 256 deep): leakage 1 pW..100 uW (measured ~1.5 nW standby; the
+#       earlier deck read tens of uW from floating wordlines / a metastable
+#       output latch), read energy 0.001..50 pJ (measured ~8.5 fJ per access
+#       over one full 4 ns cycle including the bitline restore)
 #
+# Every python check must fail the gate: the blocks below all carry '|| exit 1'.
 # Skips (exit 77) when Xyce is unavailable.
 set -u
 cd "$(dirname "$0")/.."
@@ -55,7 +62,7 @@ python3 -c "
 su, ho = float('$SU'), float('$HO')
 assert 0 <= su <= 50, f'setup {su} ps out of range'
 assert -30 <= ho <= 50, f'hold {ho} ps out of range'
-print(f'  PASS: setup={su} ps hold={ho} ps within sane ranges')"
+print(f'  PASS: setup={su} ps hold={ho} ps within sane ranges')" || exit 1
 
 echo "[3/4] min_period..."
 run_mode minperiod >"$OUT/mp.log" 2>&1 \
@@ -64,7 +71,7 @@ MP=$(python3 -c "import json;print(json.load(open('$OUT/minperiod/minperiod.json
 python3 -c "
 mp = float('$MP') * 1000
 assert 10 <= mp <= 500, f'min_period {mp} ps out of range'
-print(f'  PASS: min_period = {mp:.1f} ps')"
+print(f'  PASS: min_period = {mp:.1f} ps')" || exit 1
 
 echo "[4/4] pin caps..."
 run_mode pincap >"$OUT/pc.log" 2>&1 \
@@ -74,7 +81,7 @@ import json
 caps = json.load(open('$OUT/pincap/pincaps.json'))['pin_capacitance']
 for k, v in caps.items():
     assert v is not None and 0.02 <= v <= 3.0, f'{k}: {v} fF out of range'
-print(f'  PASS: caps {caps} fF within sane ranges')"
+print(f'  PASS: caps {caps} fF within sane ranges')" || exit 1
 
 echo "[5/5] power (leakage + read energy)..."
 python3 scripts/extract_parasitics.py --output "$OUT/parasitics.json" >/dev/null \
@@ -84,8 +91,8 @@ run_mode power --parasitics-json "$OUT/parasitics.json" >"$OUT/pw.log" 2>&1 \
 python3 -c "
 import json
 p = json.load(open('$OUT/power/power.json'))['power']
-assert 0.01 <= p['leakage_uw'] <= 5000, f'leakage {p[\"leakage_uw\"]} uW out of range'
+assert 1e-6 <= p['leakage_uw'] <= 100, f'leakage {p[\"leakage_uw\"]} uW out of range'
 assert 0.001 <= p['read_access_pj'] <= 50, f'read energy {p[\"read_access_pj\"]} pJ out of range'
-print(f\"  PASS: leakage={p['leakage_uw']} uW, read={p['read_access_pj']} pJ/access\")"
+print(f\"  PASS: leakage={p['leakage_uw']} uW, read={p['read_access_pj']} pJ/access\")" || exit 1
 
 echo "constraints_gate: PASS"
