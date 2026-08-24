@@ -56,6 +56,16 @@ struct CharacterizationData {
     std::string comment;
     CharacterizationTiming timing;
 
+    // Corner identity for the emitted library. Absent fields keep the
+    // estimated model's literals (0.7 V / 25 C, PVT_0P7V_25C).
+    struct OperatingConditions {
+        bool present = false;
+        double voltage = std::numeric_limits<double>::quiet_NaN();
+        double temperature = std::numeric_limits<double>::quiet_NaN();
+        std::string name;  // e.g. "PVT_0P63V_25C_SS"; empty -> derived
+    };
+    OperatingConditions operating_conditions;
+
     // Per-sdel-tie-off variants: each entry produces an additional complete
     // .lib named <stem>_<name>.lib whose timing tables come from the variant
     // instead of the top-level timing. sdel is programmable in the netlist,

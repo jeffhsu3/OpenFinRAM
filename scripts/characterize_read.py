@@ -766,9 +766,13 @@ def run_sweep(
                 "transitions measured at mid-slew vs load"
             ),
             "comment": (
-                f"MEASURED XYCE SWEEP (TT, {len(SWEEP_SLEWS_NS)}x"
+                f"MEASURED XYCE SWEEP ({len(SWEEP_SLEWS_NS)}x"
                 f"{len(SWEEP_LOADS_PF)} grid, depth={w})"
             ),
+            "operating_conditions": {
+                "voltage": round(VDD, 3),
+                "temperature": 25,
+            },
             "timing": {
                 "delay": {
                     "index_1": SWEEP_SLEWS_NS,
@@ -780,7 +784,9 @@ def run_sweep(
                 }
             },
         }
-        out = args.workdir / f"sweep_d{w}.json"
+        vdd_tag = f"_{int(round(VDD * 100)):03d}" if abs(VDD - 0.7) > 1e-6 else ""
+        out = args.workdir / f"sweep_d{w}{vdd_tag}.json"
+        doc["source"] += f"; VDD {VDD:.2f} V"
         out.write_text(json.dumps(doc, indent=2) + "\n")
         print(f"  d{w}: wrote {out}")
         for i, sl in enumerate(SWEEP_SLEWS_NS):
@@ -827,6 +833,13 @@ def main(argv: list[str]) -> int:
     )
     ap.add_argument("--workdir", type=Path, default=Path("/tmp/ofr_charread"))
     ap.add_argument(
+        "--vdd",
+        type=float,
+        default=None,
+        help="supply voltage in V (default 0.7). Corner sweeps pair this "
+             "with the matching model card: SS 0.63 / TT 0.70 / FF 0.77.",
+    )
+    ap.add_argument(
         "--setuphold-criterion",
         default="pushout",
         choices=["pushout", "capture"],
@@ -845,6 +858,12 @@ def main(argv: list[str]) -> int:
     global CBL_PER_CELL_F
     if args.parasitics_json:
         CBL_PER_CELL_F = load_parasitics_json(str(args.parasitics_json))
+    if args.vdd is not None:
+        global VDD
+        if not 0.1 < args.vdd < 1.0:
+            print(f"ERROR: --vdd {args.vdd} outside the 0.1..1.0 V ASAP7 range")
+            return 1
+        VDD = args.vdd
 
     exe = args.sim_exe or (XYCE_DEFAULT if args.simulator == "xyce" else "ngspice")
     models_inc, model_desc = prep_models(args.models, args.simulator, args.workdir)

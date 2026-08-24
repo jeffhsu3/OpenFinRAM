@@ -128,4 +128,14 @@ if(BUILD_TESTING)
             bash ${CMAKE_SOURCE_DIR}/tests/run_constraints_gate.sh
     )
     set_tests_properties(constraints_gate PROPERTIES TIMEOUT 1200 SKIP_RETURN_CODE 77)
+
+    # P4 corner gate: SS/TT/FF sweeps -> three libs, ordered and
+    # corner-tagged. Skips (exit 77) without Xyce.
+    add_test(
+        NAME corner_gate
+        COMMAND ${CMAKE_COMMAND} -E env
+            OPENFINRAM_BIN=${CMAKE_BINARY_DIR}/OpenFinRAM
+            bash ${CMAKE_SOURCE_DIR}/tests/run_corner_gate.sh
+    )
+    set_tests_properties(corner_gate PROPERTIES TIMEOUT 1800 SKIP_RETURN_CODE 77)
 endif()

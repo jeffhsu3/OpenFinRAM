@@ -317,6 +317,23 @@ bool load_characterization_json(const std::string& path,
     if (const JValue* c = root.find("comment")) {
         if (c->type == JValue::STR) out.comment = c->string;
     }
+    if (const JValue* oc = root.find("operating_conditions")) {
+        double num2 = 0;
+        if (get_number(*oc, "voltage", num2)) {
+            out.operating_conditions.voltage = num2;
+            out.operating_conditions.present = true;
+        }
+        if (get_number(*oc, "temperature", num2)) {
+            out.operating_conditions.temperature = num2;
+            out.operating_conditions.present = true;
+        }
+        if (const JValue* n = oc->find("name")) {
+            if (n->type == JValue::STR && !n->string.empty()) {
+                out.operating_conditions.name = n->string;
+                out.operating_conditions.present = true;
+            }
+        }
+    }
 
     if (const JValue* t = root.find("timing")) {
         if (!parse_timing(*t, out.timing, error)) return false;

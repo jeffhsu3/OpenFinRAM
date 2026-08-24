@@ -2,6 +2,7 @@
 
 #include <exception>
 #include <fstream>
+#include <iomanip>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -195,7 +196,11 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  capacitive_load_unit (1, pf);\n";
     out << "  nom_process : 1;\n";
     out << "  nom_temperature : 25;\n";
-    out << "  nom_voltage : 0.7;\n";
+    const double oc_volt = scalar_or(data, data ? data->operating_conditions.voltage
+                                                : 0.7, 0.7);
+    const double oc_temp = scalar_or(data, data ? data->operating_conditions.temperature
+                                                : 25.0, 25.0);
+    out << "  nom_voltage : " << num(oc_volt) << ";\n";
     out << "  default_cell_leakage_power : "
         << num(scalar_or(data, data ? data->cell_leakage_power : 0.0, 0.0)) << ";\n";
     out << "  default_input_pin_cap : "
@@ -212,13 +217,30 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  slew_upper_threshold_pct_fall : 80;\n";
     out << "  slew_lower_threshold_pct_rise : 20;\n";
     out << "  slew_upper_threshold_pct_rise : 80;\n";
-    out << "  operating_conditions (PVT_0P7V_25C) {\n";
+    std::string oc_name =
+        data && !data->operating_conditions.name.empty()
+            ? data->operating_conditions.name
+            : "";
+    if (oc_name.empty()) {
+        // Derive PVT_<V><temp>C with the estimated model's naming style.
+        std::ostringstream vn;
+        vn << std::fixed << std::setprecision(2) << oc_volt;
+        std::string vs = vn.str();
+        // 0.70 -> 0P7V ; keep the historical literal for the default corner
+        if (vs == "0.70") {
+            oc_name = "PVT_0P7V_25C";
+        } else {
+            for (auto& ch : vs) if (ch == '.') ch = 'P';
+            oc_name = "PVT_" + vs + "V_" + num(oc_temp) + "C";
+        }
+    }
+    out << "  operating_conditions (" << oc_name << ") {\n";
     out << "    process : 1;\n";
-    out << "    temperature : 25;\n";
-    out << "    voltage : 0.7;\n";
+    out << "    temperature : " << num(oc_temp) << ";\n";
+    out << "    voltage : " << num(oc_volt) << ";\n";
     out << "    tree_type : balanced_tree;\n";
     out << "  }\n";
-    out << "  default_operating_conditions : PVT_0P7V_25C;\n\n";
+    out << "  default_operating_conditions : " << oc_name << ";\n\n";
 
     out << "  lu_table_template (" << delay_template << ") {\n";
     out << "    variable_1 : input_net_transition;\n";
