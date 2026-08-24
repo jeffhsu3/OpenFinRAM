@@ -860,10 +860,14 @@ Vwl0 WL0 0 PWL(0 0 30n 0 30.02n {VDD} 34n {VDD} 34.02n 0)
         return 1
 
     window = 5.1e-9
-    leakage_w = abs(i_leak)
+    # The Xyce measures are on i(VVDD): AVG -> amperes, INTEG -> coulombs.
+    # Scale by VDD (P = V*I, E = V*Q) to get watts / joules before the
+    # uW / pJ conversion below.
+    i_leak_a = abs(i_leak)
+    leakage_w = i_leak_a * VDD
     # subtract leakage contribution from the integral (i_leak is negative
     # for source current; work in magnitudes)
-    e_j = abs(abs(e_read) - leakage_w * window)
+    e_j = abs(abs(e_read) - i_leak_a * window) * VDD
     leakage_uw = leakage_w * 1e6
     e_pj = e_j * 1e12
     print(f"  leakage = {leakage_uw:.3f} uW (single column + periphery)")
