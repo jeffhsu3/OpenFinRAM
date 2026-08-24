@@ -152,6 +152,34 @@ void emit_input_bus(std::ostringstream& out,
     out << "    }\n";
 }
 
+// Body of a Liberty string literal: escape the delimiters and flatten control
+// characters so a JSON-supplied comment cannot unbalance the .lib grammar.
+std::string liberty_quote(const std::string& s) {
+    std::string r;
+    r.reserve(s.size() + 8);
+    for (const char ch : s) {
+        if (ch == '"' || ch == '\\') {
+            r.push_back('\\');
+            r.push_back(ch);
+        } else if (ch == '\n' || ch == '\r' || ch == '\t') {
+            r.push_back(' ');
+        } else {
+            r.push_back(ch);
+        }
+    }
+    return r;
+}
+
+// Numeric text as a Liberty identifier fragment: '.' -> 'P', '-' -> 'M'.
+// '-' is not an identifier character, so a -40 C corner must read M40C.
+std::string liberty_identifier_token(std::string s) {
+    for (auto& ch : s) {
+        if (ch == '.') ch = 'P';
+        else if (ch == '-') ch = 'M';
+    }
+    return s;
+}
+
 std::string build_estimated_liberty(const MainCliOptions& options,
                                     const MacroSize& size,
                                     const CharacterizationData* data,
@@ -184,7 +212,7 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  delay_model : table_lookup;\n";
     out << "  revision : \"OpenFinRAM estimated-1\";\n";
     if (data && !data->comment.empty()) {
-        out << "  comment : \"" << data->comment << "\";\n";
+        out << "  comment : \"" << liberty_quote(data->comment) << "\";\n";
     } else {
         out << "  comment : \"ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. "
                "Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled.\";\n";
@@ -198,12 +226,12 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  current_unit : \"1uA\";\n";
     out << "  leakage_power_unit : \"1uW\";\n";
     out << "  capacitive_load_unit (1, pf);\n";
-    out << "  nom_process : 1;\n";
-    out << "  nom_temperature : 25;\n";
     const double oc_volt = scalar_or(data, data ? data->operating_conditions.voltage
                                                 : 0.7, 0.7);
     const double oc_temp = scalar_or(data, data ? data->operating_conditions.temperature
                                                 : 25.0, 25.0);
+    out << "  nom_process : 1;\n";
+    out << "  nom_temperature : " << num(oc_temp) << ";\n";
     out << "  nom_voltage : " << num(oc_volt) << ";\n";
     out << "  default_cell_leakage_power : "
         << num(scalar_or(data, data ? data->cell_leakage_power : 0.0, 0.0)) << ";\n";
@@ -226,17 +254,18 @@ std::string build_estimated_liberty(const MainCliOptions& options,
             ? data->operating_conditions.name
             : "";
     if (oc_name.empty()) {
-        // Derive PVT_<V><temp>C with the estimated model's naming style.
+        // Derive PVT_<V>V_<T>C from the actual (voltage, temperature) pair --
+        // never from a hardcoded default, so 0.70 V @ 125 C is not mislabelled
+        // as the 25 C corner. Two decimals with trailing zeros trimmed keeps
+        // the historical default literal (0.70 -> 0P7V; 0.63 -> 0P63V).
         std::ostringstream vn;
         vn << std::fixed << std::setprecision(2) << oc_volt;
         std::string vs = vn.str();
-        // 0.70 -> 0P7V ; keep the historical literal for the default corner
-        if (vs == "0.70") {
-            oc_name = "PVT_0P7V_25C";
-        } else {
-            for (auto& ch : vs) if (ch == '.') ch = 'P';
-            oc_name = "PVT_" + vs + "V_" + num(oc_temp) + "C";
+        while (vs.size() > 2 && vs.back() == '0' && vs[vs.size() - 2] != '.') {
+            vs.pop_back();
         }
+        oc_name = "PVT_" + liberty_identifier_token(vs) + "V_" +
+                  liberty_identifier_token(num(oc_temp)) + "C";
     }
     out << "  operating_conditions (" << oc_name << ") {\n";
     out << "    process : 1;\n";
