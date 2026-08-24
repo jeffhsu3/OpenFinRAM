@@ -138,4 +138,13 @@ if(BUILD_TESTING)
             bash ${CMAKE_SOURCE_DIR}/tests/run_corner_gate.sh
     )
     set_tests_properties(corner_gate PROPERTIES TIMEOUT 1800 SKIP_RETURN_CODE 77)
+
+    # P5 interpolation gate: ladder {64,256} -> interpolated 128 validated
+    # against a held-out measured d128 sweep. Skips (exit 77) without Xyce.
+    add_test(
+        NAME interp_gate
+        COMMAND ${CMAKE_COMMAND} -E env
+            bash ${CMAKE_SOURCE_DIR}/tests/run_interp_gate.sh
+    )
+    set_tests_properties(interp_gate PROPERTIES TIMEOUT 1800 SKIP_RETURN_CODE 77)
 endif()
