@@ -16,6 +16,12 @@ academic library's `sramcol_xN` -> `array_xNx4` composition, but accepts any
 positive wordline count and independently parameterizes the mux-row height.
 The same implementation emits 6T variants for non-standard sizes.
 
+The routed dual-port IO-column hierarchy is generated in
+`tech/gds/sram_8t_iocolumn.gds` by
+`scripts/generate_asap7_8t_iocolumn.py`. It contains
+`iocolgrp_sram_8t`, capped left/right arrays, and parameterized
+`colgrp_x{2N}x4_sram_8t` cells.
+
 ## Reference and topology
 
 The logical topology and port convention follow the public OpenRAM
@@ -86,6 +92,15 @@ and leaves a path to a future 2RW interface. The wrapper contracts also keep
 per-port `sae_A`/`sae_B` phase signal until the controller exposes a separate
 sense-precharge phase.
 
+The physical `iocolgrp_sram_8t` implements that composite contract. It places
+the A and B wrappers side by side with one bitcell-width routing gap at each
+outside edge and between the cores. Port B passes across the A wrapper on M4;
+the A wrapper contains no M4 geometry. Port A rises from M2 to M5 in the
+central gap, crosses the B wrapper on its otherwise-unused M5 plane, and drops
+to M2 in the right gap. The B-port `WRENA` and write-data pins are tied to VSS,
+`WRENAN` is tied to VDD, and each wrapper's `SAE`/`SAPRECHN` pair is shorted as
+required by the 1RW+1R composite.
+
 ## Physical interface
 
 - Cell name: `sram_cell_8t`
@@ -116,9 +131,13 @@ From the repository root:
 .venv/bin/python scripts/generate_asap7_wordline_arrays.py
 .venv/bin/python scripts/generate_asap7_wordline_arrays.py \
   --verify tech/gds/sram_wordline_arrays.gds
+.venv/bin/python scripts/generate_asap7_8t_iocolumn.py
+.venv/bin/python scripts/generate_asap7_8t_iocolumn.py \
+  --verify tech/gds/sram_8t_iocolumn.gds
 ctest --test-dir build -R asap7_8t_bitcell_check --output-on-failure
 ctest --test-dir build -R asap7_8t_ioprech_check --output-on-failure
 ctest --test-dir build -R asap7_wordline_array_check --output-on-failure
+ctest --test-dir build -R asap7_8t_iocolumn_check --output-on-failure
 ```
 
 The verifier reconstructs the effective gates after GCUT, extracts the eight
@@ -140,8 +159,10 @@ deck before treating this cell as tapeout-qualified.
 ## Current scope
 
 The physical foundation now includes the bitcell, array boundaries,
-parameterized active wordline arrays, and both port-specific IO/precharge
-wrappers. It does not yet provide the dual-port replica/tap cells or the final
-IO-column placement and routing that joins both port wrappers to one array.
-The macro layout flow therefore continues to reject dual-port layout
-generation rather than silently substituting the 6T array.
+parameterized active wordline arrays, both port-specific IO/precharge wrappers,
+and routed IO columns that join both ports to the same capped arrays. It does
+not yet provide the dual-port replica/tap cells or final macro-level placement
+and power integration. The macro layout flow therefore continues to reject
+dual-port layout generation rather than silently substituting the 6T array.
+Before rejecting that final stage, it loads `sram_8t_iocolumn.gds` and checks
+that the requested half-array wordline count and four-row mux cell are present.

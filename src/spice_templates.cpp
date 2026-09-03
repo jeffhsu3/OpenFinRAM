@@ -276,6 +276,60 @@ X46 48 oeb_out oe_out vdd vss Q TBUF_INV
 .ENDS)";
 }
 
+std::string SpiceTemplates::get_ioprech_8t_a() {
+    return R"(.SUBCKT ioprech_sram_8t_a
++ WRENAN_A WRENA_A SAE_A SAPRECHN_A OEB_OUT_A OE_OUT_A D_A Q_A
++ BLTN_A[0] BLTN_A[1] BLTN_A[2] BLTN_A[3]
++ BLT_A[0] BLT_A[1] BLT_A[2] BLT_A[3]
++ BLBN_A[0] BLBN_A[1] BLBN_A[2] BLBN_A[3]
++ BLB_A[0] BLB_A[1] BLB_A[2] BLB_A[3]
++ BLPRECHTN_A BLPRECHBN_A
++ YSELTN_A[0] YSELTN_A[1] YSELTN_A[2] YSELTN_A[3]
++ YSELT_A[0] YSELT_A[1] YSELT_A[2] YSELT_A[3]
++ YSELBN_A[0] YSELBN_A[1] YSELBN_A[2] YSELBN_A[3]
++ YSELB_A[0] YSELB_A[1] YSELB_A[2] YSELB_A[3]
++ VDD VSS
+XIO_A WRENAN_A WRENA_A SAE_A SAPRECHN_A OEB_OUT_A OE_OUT_A D_A Q_A
++ BLTN_A[0] BLTN_A[1] BLTN_A[2] BLTN_A[3]
++ BLT_A[0] BLT_A[1] BLT_A[2] BLT_A[3]
++ BLBN_A[0] BLBN_A[1] BLBN_A[2] BLBN_A[3]
++ BLB_A[0] BLB_A[1] BLB_A[2] BLB_A[3]
++ BLPRECHTN_A BLPRECHBN_A
++ YSELTN_A[0] YSELTN_A[1] YSELTN_A[2] YSELTN_A[3]
++ YSELT_A[0] YSELT_A[1] YSELT_A[2] YSELT_A[3]
++ YSELBN_A[0] YSELBN_A[1] YSELBN_A[2] YSELBN_A[3]
++ YSELB_A[0] YSELB_A[1] YSELB_A[2] YSELB_A[3]
++ VDD VSS iocolgrp_sram_6t122_v2
+.ENDS)";
+}
+
+std::string SpiceTemplates::get_ioprech_8t_b() {
+    return R"(.SUBCKT ioprech_sram_8t_b
++ WRENAN_B WRENA_B SAE_B SAPRECHN_B OEB_OUT_B OE_OUT_B D_B Q_B
++ BLTN_B[0] BLTN_B[1] BLTN_B[2] BLTN_B[3]
++ BLT_B[0] BLT_B[1] BLT_B[2] BLT_B[3]
++ BLBN_B[0] BLBN_B[1] BLBN_B[2] BLBN_B[3]
++ BLB_B[0] BLB_B[1] BLB_B[2] BLB_B[3]
++ BLPRECHTN_B BLPRECHBN_B
++ YSELTN_B[0] YSELTN_B[1] YSELTN_B[2] YSELTN_B[3]
++ YSELT_B[0] YSELT_B[1] YSELT_B[2] YSELT_B[3]
++ YSELBN_B[0] YSELBN_B[1] YSELBN_B[2] YSELBN_B[3]
++ YSELB_B[0] YSELB_B[1] YSELB_B[2] YSELB_B[3]
++ VDD VSS
+XIO_B WRENAN_B WRENA_B SAE_B SAPRECHN_B OEB_OUT_B OE_OUT_B D_B Q_B
++ BLTN_B[0] BLTN_B[1] BLTN_B[2] BLTN_B[3]
++ BLT_B[0] BLT_B[1] BLT_B[2] BLT_B[3]
++ BLBN_B[0] BLBN_B[1] BLBN_B[2] BLBN_B[3]
++ BLB_B[0] BLB_B[1] BLB_B[2] BLB_B[3]
++ BLPRECHTN_B BLPRECHBN_B
++ YSELTN_B[0] YSELTN_B[1] YSELTN_B[2] YSELTN_B[3]
++ YSELT_B[0] YSELT_B[1] YSELT_B[2] YSELT_B[3]
++ YSELBN_B[0] YSELBN_B[1] YSELBN_B[2] YSELBN_B[3]
++ YSELB_B[0] YSELB_B[1] YSELB_B[2] YSELB_B[3]
++ VDD VSS iocolgrp_sram_6t122_v2
+.ENDS)";
+}
+
 std::string SpiceTemplates::get_buf_sram(const std::string& port, const int& num_buf) {
     std::string buf_str;
     for (int i = 0; i < num_buf - 1; ++i) {
@@ -288,7 +342,13 @@ std::string SpiceTemplates::get_buf_sram(const std::string& port, const int& num
 }
 
 std::string SpiceTemplates::get_iocolgrp_8t(const int& num_buf) {
-    std::string result = R"(.SUBCKT iocolgrp_sram_8t
+    (void)num_buf;
+    // The wrappers expose SAE and SAPRECHN separately.  The existing dual-port
+    // controller has one sense phase per port, whose low/high levels already
+    // implement precharge/evaluate, so the composite intentionally maps that
+    // phase to both pins.  Keep the split wrapper contract for a future
+    // independently timed sense-precharge signal.
+    return R"(.SUBCKT iocolgrp_sram_8t
 + wrena_A wrenan_A
 + oeb_out_A oe_out_A DA QA
 + oeb_out_B oe_out_B QB
@@ -311,46 +371,29 @@ std::string SpiceTemplates::get_iocolgrp_8t(const int& num_buf) {
 + yselb_B[0]  yselb_B[1]  yselb_B[2]  yselb_B[3]
 + sae_A sae_B
 + vdd vss
-XWD_A DA wrena_A wrenan_A sa_A san_A vdd vss write_driver_sram
-XSA_A sa_A san_A sae_A sae_A qa_A qan_A vdd vss sense_amp_sram
-XSA_B sa_B san_B sae_B sae_B qa_B qan_B vdd vss sense_amp_sram
-XWRMUX_T
+XIO_A wrenan_A wrena_A sae_A sae_A oeb_out_A oe_out_A DA QA
 + bltn_A[0] bltn_A[1] bltn_A[2] bltn_A[3]
 + blt_A[0]  blt_A[1]  blt_A[2]  blt_A[3]
-+ bltn_B[0] bltn_B[1] bltn_B[2] bltn_B[3]
-+ blt_B[0]  blt_B[1]  blt_B[2]  blt_B[3]
-+ yseltn_A[0] yseltn_A[1] yseltn_A[2] yseltn_A[3]
-+ yselt_A[0]  yselt_A[1]  yselt_A[2]  yselt_A[3]
-+ yseltn_B[0] yseltn_B[1] yseltn_B[2] yseltn_B[3]
-+ yselt_B[0]  yselt_B[1]  yselt_B[2]  yselt_B[3]
-+ san_A sa_A san_B sa_B
-+ blprechtn_A blprechtn_B
-+ vdd vss wrasst_prech_ymux_x8_sram_8t
-XWRMUX_B
 + blbn_A[0] blbn_A[1] blbn_A[2] blbn_A[3]
 + blb_A[0]  blb_A[1]  blb_A[2]  blb_A[3]
-+ blbn_B[0] blbn_B[1] blbn_B[2] blbn_B[3]
-+ blb_B[0]  blb_B[1]  blb_B[2]  blb_B[3]
++ blprechtn_A blprechbn_A
++ yseltn_A[0] yseltn_A[1] yseltn_A[2] yseltn_A[3]
++ yselt_A[0]  yselt_A[1]  yselt_A[2]  yselt_A[3]
 + yselbn_A[0] yselbn_A[1] yselbn_A[2] yselbn_A[3]
 + yselb_A[0]  yselb_A[1]  yselb_A[2]  yselb_A[3]
++ vdd vss ioprech_sram_8t_a
+XIO_B vdd vss sae_B sae_B oeb_out_B oe_out_B vss QB
++ bltn_B[0] bltn_B[1] bltn_B[2] bltn_B[3]
++ blt_B[0]  blt_B[1]  blt_B[2]  blt_B[3]
++ blbn_B[0] blbn_B[1] blbn_B[2] blbn_B[3]
++ blb_B[0]  blb_B[1]  blb_B[2]  blb_B[3]
++ blprechtn_B blprechbn_B
++ yseltn_B[0] yseltn_B[1] yseltn_B[2] yseltn_B[3]
++ yselt_B[0]  yselt_B[1]  yselt_B[2]  yselt_B[3]
 + yselbn_B[0] yselbn_B[1] yselbn_B[2] yselbn_B[3]
 + yselb_B[0]  yselb_B[1]  yselb_B[2]  yselb_B[3]
-+ san_A sa_A san_B sa_B
-+ blprechbn_A blprechbn_B
-+ vdd vss wrasst_prech_ymux_x8_sram_8t
-M19_A vss n49_A n48_A vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M39_A vdd n49_A n48_A vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M19_B vss n49_B n48_B vss nmos_rvt L=2e-08 W=8.1e-08 nfin=3
-M39_B vdd n49_B n48_B vdd pmos_rvt L=2e-08 W=8.1e-08 nfin=3
-X44_A n49_A qa_A  n54_A vdd vss io_nand_3f_6f
-X45_A n54_A qan_A n49_A vdd vss io_nand_3f_6f
-X44_B n49_B qa_B  n54_B vdd vss io_nand_3f_6f
-X45_B n54_B qan_B n49_B vdd vss io_nand_3f_6f
-X46_A n48_A oeb_out_A oe_out_A vdd vss QA TBUF_INV
-X46_B n48_B oeb_out_B oe_out_B vdd vss QB TBUF_INV
++ vdd vss ioprech_sram_8t_b
 .ENDS)";
-
-    return result;
 }
 
 } // namespace OpenFinRAM

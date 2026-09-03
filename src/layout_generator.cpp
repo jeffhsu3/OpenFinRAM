@@ -14,7 +14,10 @@
 LayoutGenerator::LayoutGenerator(const MainCliOptions& options, const OpenFinRAM::LayerMap& layer_map) : cli_options_(options), layer_map_(layer_map) {}
 
 bool LayoutGenerator::load_sram_gds() {
-    std::string path = join_path(get_current_dir_name(), "tech/gds/srambank_32b_boundary_2.gds");
+    const std::string filename = cli_options_.single_port
+        ? "tech/gds/srambank_32b_boundary_2.gds"
+        : "tech/gds/sram_8t_iocolumn.gds";
+    std::string path = join_path(get_current_dir_name(), filename);
 
     // gdstk only writes error_code on failure; it must start at NoError or a
     // successful read fails this check on uninitialized stack data.
@@ -34,6 +37,38 @@ bool LayoutGenerator::load_sram_gds() {
 }
 
 bool LayoutGenerator::extract_required_cells() {
+    if (!cli_options_.single_port) {
+        if (cli_options_.num_rows_per_mux != 4) {
+            LOGE << "The routed 8T IO wrappers currently require --num-rows-per-mux 4";
+            return false;
+        }
+
+        const std::string array_name =
+            "array_x" + std::to_string(cli_options_.num_wls) + "x4_sram_8t";
+        const std::string colgrp_name =
+            "colgrp_x" + std::to_string(cli_options_.num_wls * 2) + "x4_sram_8t";
+        sram_cells_.bitcell = sram_lib.get_cell("sram_cell_8t");
+        sram_cells_.array_cell = sram_lib.get_cell(array_name.c_str());
+        sram_cells_.io_colgrp = sram_lib.get_cell("iocolgrp_sram_8t");
+        sram_cells_.colgrp = sram_lib.get_cell(colgrp_name.c_str());
+
+        if (sram_cells_.bitcell == nullptr ||
+            sram_cells_.array_cell == nullptr ||
+            sram_cells_.io_colgrp == nullptr ||
+            sram_cells_.colgrp == nullptr) {
+            LOGE << "The routed 8T IO-column library does not contain the "
+                 << cli_options_.num_wls << "-wordline half-array contract";
+            LOGE << "Regenerate tech/gds/sram_8t_iocolumn.gds with "
+                 << "scripts/generate_asap7_8t_iocolumn.py --word-lines "
+                 << cli_options_.num_wls;
+            return false;
+        }
+
+        LOGI << "Found routed dual-port cells: " << array_name << ", "
+             << sram_cells_.io_colgrp->name << ", " << colgrp_name;
+        return true;
+    }
+
     const char* cell_names[] = {"FILLER_BLANK_6t122", "sram_cell_6t_122", "dummy_sram_6t122", "tapcell_sram_6t122",
                                 "dummy_topbot_v1", "dummy_topbot_v2", "FILLER_cgedge", "iocolgrp_sram_6t122_v2"};
     // Sub-cells only needed to build a deeper-mux io_colgrp (num_rows_per_mux != 4).
@@ -3486,6 +3521,14 @@ bool LayoutGenerator::gen_layout() {
     }
     if (!extract_required_cells()) {
         LOGE << "Failed to extract required cells!";
+        return false;
+    }
+    if (!cli_options_.single_port) {
+        // The configured 8T active array and routed IO column were loaded and
+        // validated above.  The top-level assembler still assumes academic
+        // 6T tap/replica and power geometry, so keep final macro generation
+        // fail-closed until those placement rules have 8T implementations.
+        LOGE << "Dual-port IO-column preflight passed, but final macro layout still requires 8T replica/tap cells and power integration";
         return false;
     }
     if (!create_sram_column()) {

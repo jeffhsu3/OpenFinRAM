@@ -49,9 +49,18 @@ accepts any positive wordline count for non-standard macro sizes. Wordline
 count and column-mux height are separate parameters, and the default four-row
 8T arrays are checked directly against both IO-wrapper pin pitches.
 
+`tech/gds/sram_8t_iocolumn.gds` joins both physical IO wrappers to the same
+pair of capped 8T half-arrays. The A and B cores are side by side rather than
+overlaid: port B crosses the A core on M4, while port A crosses the B core on
+M5 through dedicated via-stack gaps. The generated `colgrp_x{2N}x4_sram_8t`
+ladder follows the same 2/32/64/128 half-array sizes and accepts non-standard N
+when supplied a matching parameterized-array GDS.
+
 The layout compiler still fails closed in dual-port mode until the matching
-replica/tap cells and dual-port IO-column integration exist; the parameterized
-active-array hierarchy itself is now available.
+replica/tap cells and final macro-level placement/power integration exist; the
+active-array and routed dual-port IO-column hierarchy itself is now available.
+Dual-port preflight loads this library and validates the requested wordline
+variant and fixed four-row mux contract before reporting those later blockers.
 
 ## Tests
 
@@ -73,6 +82,8 @@ cmake -S . -B build && ctest --test-dir build --output-on-failure
   wrapper regeneration, pin/layer contracts, and pitch-adapter checks.
 - `tests/run_wordline_array_check.sh`: deterministic parameterized 8T/6T
   wordline-row and array hierarchy, including a non-standard x18/mux-2 case.
+- `tests/run_8t_iocolumn_check.sh`: deterministic dual-port IO-column routing,
+  capped array abutment, internal read-port ties, and a non-standard x18 case.
 
 ## Commercial Flow (Cadence / Synopsys, default)
 

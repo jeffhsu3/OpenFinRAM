@@ -132,6 +132,17 @@ if(BUILD_TESTING)
         SKIP_RETURN_CODE 77
     )
 
+    # Routed dual-port IO column: two independent IO cores connected to the
+    # same capped 8T half-arrays using layer-separated M2/M4/M5 paths.
+    add_test(
+        NAME asap7_8t_iocolumn_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_iocolumn_check.sh
+    )
+    set_tests_properties(asap7_8t_iocolumn_check PROPERTIES
+        TIMEOUT 300
+        SKIP_RETURN_CODE 77
+    )
+
     # P0 characterization-JSON gate: a JSON carrying the estimated constants
     # regenerates the estimated .lib byte-for-byte; measured values and
     # per-sdel variants override as documented.

@@ -466,9 +466,11 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
         content << sep << SpiceTemplates::get_dummy_cell_8t() << "\n\n";
         content << sep << SpiceTemplates::get_replica_cell_8t() << "\n\n";
 
-        content << sep << SpiceTemplates::get_prech_8t_v1() << "\n\n";
-        content << sep << SpiceTemplates::get_prech_8t_v2() << "\n\n";
-        content << sep << SpiceTemplates::get_wrasst_prech_ymux_x8_sram_8t() << "\n\n";
+        // The 8T port wrappers reuse the characterized 6T differential IO
+        // core, including its four-way precharge/mux front end.
+        content << sep << SpiceTemplates::get_prech_v1() << "\n\n";
+        content << sep << SpiceTemplates::get_prech_v2() << "\n\n";
+        content << sep << SpiceTemplates::get_prech_ymux() << "\n\n";
 
         content << sep << SpiceTemplates::get_write_driver() << "\n\n";
         content << sep << SpiceTemplates::get_sense_amp() << "\n\n";
@@ -477,6 +479,9 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
         content << sep << SpiceTemplates::get_buf() << "\n\n";
         content << sep << SpiceTemplates::get_io_nand() << "\n\n";
         content << sep << SpiceTemplates::get_tbuf() << "\n\n";
+        content << sep << SpiceTemplates::get_iocolgrp() << "\n\n";
+        content << sep << SpiceTemplates::get_ioprech_8t_a() << "\n\n";
+        content << sep << SpiceTemplates::get_ioprech_8t_b() << "\n\n";
         content << sep << SpiceTemplates::get_iocolgrp_8t(20) << "\n\n";
 
         content << sep << generate_cell_row_8t() << "\n";
