@@ -31,6 +31,28 @@ Notes:
 - The build hard-fails on missing timing paths, setup/hold, or slew/capacitance/fanout violations.
 - STA uses routed global parasitics at TT only — a conservative implementation target, not a characterized frequency claim. Use `scripts/characterize_read.py` for the array datapath.
 
+## Dual-port 8T bitcell (ASAP7)
+
+The dual-port physical foundation is available as the generated native ASAP7
+hard cell `tech/gds/sram_cell_8t.gds`, the matching dummy/row-cap/column-cap/
+corner family in `tech/gds/sram_cell_8t_edges.gds`, and independent port-A and
+port-B IO/precharge wrappers in `tech/gds/sram_8t_ioprech.gds`. Schematics live
+under `tech/spice/`. It uses the public OpenRAM dual-port topology; the layout
+itself is built from the published ASAP7 6T core and ASAP7-native geometry. See
+[docs/asap7_8t_bitcell.md](docs/asap7_8t_bitcell.md) for the pin map,
+provenance, rebuild command, and verification scope.
+
+`tech/gds/sram_wordline_arrays.gds` adds academic-style parameterized
+`sramcol_xN` and `array_xNxM` hierarchy for both 8T and 6T. The tracked ladder
+contains 2/32/64/128 wordlines; `scripts/generate_asap7_wordline_arrays.py`
+accepts any positive wordline count for non-standard macro sizes. Wordline
+count and column-mux height are separate parameters, and the default four-row
+8T arrays are checked directly against both IO-wrapper pin pitches.
+
+The layout compiler still fails closed in dual-port mode until the matching
+replica/tap cells and dual-port IO-column integration exist; the parameterized
+active-array hierarchy itself is now available.
+
 ## Tests
 
 Run via CTest (requires `iverilog` and `yosys` in `PATH`):
@@ -45,6 +67,12 @@ cmake -S . -B build && ctest --test-dir build --output-on-failure
   `equiv_*`) between the `ctrl_decode` RTL and the mapped ASAP7 netlist,
   including the production structural signoff assertions. This catches
   synthesis-introduced decode bugs that RTL simulation cannot see.
+- `tests/run_8t_bitcell_check.sh`: deterministic ASAP7 8T bitcell/edge GDS
+  regeneration, focused rules, extracted connectivity, and abutment checks.
+- `tests/run_8t_ioprech_check.sh`: deterministic port-A/port-B IO/precharge
+  wrapper regeneration, pin/layer contracts, and pitch-adapter checks.
+- `tests/run_wordline_array_check.sh`: deterministic parameterized 8T/6T
+  wordline-row and array hierarchy, including a non-standard x18/mux-2 case.
 
 ## Commercial Flow (Cadence / Synopsys, default)
 

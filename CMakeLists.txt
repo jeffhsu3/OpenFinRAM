@@ -99,6 +99,39 @@ if(BUILD_TESTING)
     )
     set_tests_properties(def2gds_check PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
 
+    # ASAP7 8T bitcell/edge family: regenerate deterministic GDS, extract
+    # devices/connectivity, check cap abutment, and compare committed artifacts.
+    add_test(
+        NAME asap7_8t_bitcell_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_bitcell_check.sh
+    )
+    set_tests_properties(asap7_8t_bitcell_check PROPERTIES
+        TIMEOUT 300
+        SKIP_RETURN_CODE 77
+    )
+
+    # Port-specific 8T IO/precharge hard wrappers: regenerate both flattened
+    # cells, validate the M2/M4 pitch adapters, and compare tracked artifacts.
+    add_test(
+        NAME asap7_8t_ioprech_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_ioprech_check.sh
+    )
+    set_tests_properties(asap7_8t_ioprech_check PROPERTIES
+        TIMEOUT 300
+        SKIP_RETURN_CODE 77
+    )
+
+    # Academic-style sramcol_xN / array_xNxM hierarchy for parameterized 8T
+    # wordlines, with the same builder covering non-standard 6T sizes.
+    add_test(
+        NAME asap7_wordline_array_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_wordline_array_check.sh
+    )
+    set_tests_properties(asap7_wordline_array_check PROPERTIES
+        TIMEOUT 300
+        SKIP_RETURN_CODE 77
+    )
+
     # P0 characterization-JSON gate: a JSON carrying the estimated constants
     # regenerates the estimated .lib byte-for-byte; measured values and
     # per-sdel variants override as documented.
