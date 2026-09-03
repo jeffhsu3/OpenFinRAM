@@ -574,9 +574,21 @@ def run_sim(deck: Path, sim: str, exe: str) -> str:
         proc = subprocess.run(
             [exe, "-b", str(deck)], capture_output=True, text=True, timeout=300
         )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout).strip()
+            raise RuntimeError(
+                f"ngspice failed for {deck} (exit {proc.returncode}):\n{detail}"
+            )
         return proc.stdout + "\n" + proc.stderr
     # Xyce writes measures to <deck>.mt0
-    subprocess.run([exe, str(deck)], capture_output=True, text=True, timeout=300)
+    proc = subprocess.run(
+        [exe, str(deck)], capture_output=True, text=True, timeout=300
+    )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        raise RuntimeError(
+            f"Xyce failed for {deck} (exit {proc.returncode}):\n{detail}"
+        )
     mt0 = Path(str(deck) + ".mt0")
     return mt0.read_text() if mt0.exists() else ""
 
