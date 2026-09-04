@@ -386,7 +386,7 @@ def build_library(source_gds: Path, bitcell_gds: Path) -> gdstk.Library:
         raise RuntimeError(f"{BITCELL_NAME!r} not found in {bitcell_gds}")
     if boundary_box(source) != (0.0, 0.0135, 2.376, 1.0935):
         raise RuntimeError(f"{SOURCE_CELL}: source IO boundary changed")
-    if boundary_box(bitcell) != (0.0, -0.162, 0.216, 0.432):
+    if boundary_box(bitcell) != (0.0, -0.162, 0.108, 0.432):
         raise RuntimeError(f"{BITCELL_NAME}: 8T bitcell boundary changed")
 
     lib = gdstk.Library(

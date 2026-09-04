@@ -4,6 +4,7 @@
 #include <fstream>
 #include <iomanip>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -63,17 +64,81 @@ bool read_lef_size(const std::string& lef_path, MacroSize& size, std::string* er
     return false;
 }
 
+bool validate_lef_interface(const MainCliOptions& options,
+                            const std::string& lef_path,
+                            std::string* error) {
+    std::ifstream lef(lef_path);
+    if (!lef) {
+        if (error) *error = "Failed to open LEF: " + lef_path;
+        return false;
+    }
+
+    const std::regex pin_pattern(R"(^\s*PIN\s+(\S+))", std::regex::icase);
+    std::set<std::string> pins;
+    std::string line;
+    std::smatch match;
+    while (std::getline(lef, line)) {
+        if (std::regex_search(line, match, pin_pattern)) {
+            pins.insert(match[1].str());
+        }
+    }
+
+    std::vector<std::string> required{"vdd", "vss", "clk"};
+    const int addr_width = get_addr_width(options);
+    if (options.single_port) {
+        required.insert(required.end(), {"ce_n", "oe_n", "we_n"});
+        for (int bit = 0; bit < 4; ++bit) {
+            required.push_back("sdel[" + std::to_string(bit) + "]");
+        }
+        for (int bit = 0; bit < addr_width; ++bit) {
+            required.push_back("A[" + std::to_string(bit) + "]");
+        }
+        for (unsigned bit = 0; bit < options.num_data_bits; ++bit) {
+            required.push_back("D[" + std::to_string(bit) + "]");
+            required.push_back("Q[" + std::to_string(bit) + "]");
+        }
+    } else {
+        required.insert(required.end(),
+                        {"rst_n", "ce_n_A", "ce_n_B", "we_n_A", "oe_n_A", "oe_n_B"});
+        for (int bit = 0; bit < addr_width; ++bit) {
+            required.push_back("A_A[" + std::to_string(bit) + "]");
+            required.push_back("A_B[" + std::to_string(bit) + "]");
+        }
+        for (unsigned bit = 0; bit < options.num_data_bits; ++bit) {
+            required.push_back("D_A[" + std::to_string(bit) + "]");
+            required.push_back("Q_A[" + std::to_string(bit) + "]");
+            required.push_back("Q_B[" + std::to_string(bit) + "]");
+        }
+    }
+
+    for (const auto& pin : required) {
+        if (pins.find(pin) == pins.end()) {
+            if (error) {
+                *error = "LEF interface does not match " +
+                         std::string(options.single_port ? "single-port" : "dual-port") +
+                         " macro; missing PIN " + pin + " in " + lef_path;
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
 void emit_constraint_arcs(std::ostringstream& out,
                           const std::string& template_name,
                           const std::string& indent,
-                          const CharacterizationConstraints* measured) {
+                          const CharacterizationConstraints* measured,
+                          const char* first_timing_type = "setup_rising",
+                          const char* second_timing_type = "hold_rising") {
     auto join = [&out](const std::vector<double>& v) {
         for (size_t i = 0; i < v.size(); ++i) {
             if (i) out << ", ";
             out << num(v[i]);
         }
     };
-    for (const char* timing_type : {"setup_rising", "hold_rising"}) {
+    const char* timing_types[2] = {first_timing_type, second_timing_type};
+    for (int arc = 0; arc < 2; ++arc) {
+        const char* timing_type = timing_types[arc];
         // Fallback constants double as the measured-path shape so identical
         // values emit identical bytes on either path.
         std::vector<double> index_1{0.009, 0.227};
@@ -82,7 +147,7 @@ void emit_constraint_arcs(std::ostringstream& out,
         const Table2D* rise = &kFlat;
         const Table2D* fall = &kFlat;
         if (measured && measured->present) {
-            const bool is_setup = std::string(timing_type) == "setup_rising";
+            const bool is_setup = arc == 0;
             rise = is_setup ? &measured->setup_rise : &measured->hold_rise;
             fall = is_setup ? &measured->setup_fall : &measured->hold_fall;
             index_1 = measured->index_1;
@@ -118,14 +183,24 @@ void emit_constraint_arcs(std::ostringstream& out,
 void emit_input_pin(std::ostringstream& out,
                     const std::string& name,
                     const std::string& constraint_template,
-                    const CharacterizationData* data) {
+                    const CharacterizationData* data,
+                    bool async_active_low = false) {
     out << "    pin (" << name << ") {\n";
     out << "      direction : input;\n";
     out << "      capacitance : "
         << num(scalar_or(data, data ? data->default_input_pin_capacitance : 0.005, 0.005))
         << ";\n";
-    emit_constraint_arcs(out, constraint_template, "      ",
-                         data ? &data->timing.constraints : nullptr);
+    if (async_active_low) {
+        // An active-low asynchronous control is checked when it is released
+        // (rising edge), using recovery/removal rather than synchronous
+        // setup/hold arcs.
+        emit_constraint_arcs(out, constraint_template, "      ",
+                             data ? &data->timing.constraints : nullptr,
+                             "recovery_rising", "removal_rising");
+    } else {
+        emit_constraint_arcs(out, constraint_template, "      ",
+                             data ? &data->timing.constraints : nullptr);
+    }
     out << "    }\n";
 }
 
@@ -133,7 +208,7 @@ void emit_input_bus(std::ostringstream& out,
                     const std::string& name,
                     const std::string& bus_type,
                     const std::string& constraint_template,
-                    bool memory_write,
+                    const std::string& write_address,
                     const CharacterizationData* data) {
     out << "    bus (" << name << ") {\n";
     out << "      bus_type : " << bus_type << ";\n";
@@ -141,9 +216,9 @@ void emit_input_bus(std::ostringstream& out,
     out << "      capacitance : "
         << num(scalar_or(data, data ? data->default_input_pin_capacitance : 0.005, 0.005))
         << ";\n";
-    if (memory_write) {
+    if (!write_address.empty()) {
         out << "      memory_write () {\n";
-        out << "        address : A;\n";
+        out << "        address : " << write_address << ";\n";
         out << "        clocked_on : \"clk\";\n";
         out << "      }\n";
     }
@@ -211,11 +286,14 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  technology (cmos);\n";
     out << "  delay_model : table_lookup;\n";
     out << "  revision : \"OpenFinRAM estimated-1\";\n";
+    const std::string port_comment =
+        options.single_port
+            ? "ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled."
+            : "ESTIMATED EARLY-PPA DUAL-PORT MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline per port; power is not modeled. 8T bitcell, port A read+write, port B read-only.";
     if (data && !data->comment.empty()) {
         out << "  comment : \"" << liberty_quote(data->comment) << "\";\n";
     } else {
-        out << "  comment : \"ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. "
-               "Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled.\";\n";
+        out << "  comment : \"" << port_comment << "\";\n";
     }
     const bool measured_power = data && data->power.present;
     if (measured_power) {
@@ -311,7 +389,9 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     };
     emit_bus_type(data_type, static_cast<int>(options.num_data_bits));
     emit_bus_type(address_type, addr_width);
-    emit_bus_type(sdel_type, 4);
+    if (options.single_port) {
+        emit_bus_type(sdel_type, 4);
+    }
     out << "\n";
 
     out << "  cell (" << cell_name << ") {\n";
@@ -372,83 +452,114 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     }
     out << "    }\n";
 
-    emit_input_pin(out, "ce_n", constraint_template, data);
-    emit_input_pin(out, "oe_n", constraint_template, data);
-    emit_input_pin(out, "we_n", constraint_template, data);
-    emit_input_bus(out, "sdel", sdel_type, constraint_template, false, data);
-    emit_input_bus(out, "A", address_type, constraint_template, false, data);
-    emit_input_bus(out, "D", data_type, constraint_template, true, data);
-
-    out << "    bus (Q) {\n";
-    out << "      bus_type : " << data_type << ";\n";
-    out << "      direction : output;\n";
-    out << "      max_capacitance : "
-        << num(scalar_or(data, data ? data->output_max_capacitance : 0.5, 0.5)) << ";\n";
-    out << "      memory_read () {\n";
-    out << "        address : A;\n";
-    out << "      }\n";
-    out << "      timing () {\n";
-    out << "        related_pin : \"clk\";\n";
-    out << "        timing_type : rising_edge;\n";
-    out << "        timing_sense : non_unate;\n";
-
-    // Fallback constants double as the measured-path shape so identical
-    // values emit identical bytes on either path.
-    std::vector<double> d_idx1{0.009, 0.227};
-    std::vector<double> d_idx2{0.005, 0.5};
-    Table2D cell_rise{{kClockToQ, kClockToQ}, {kClockToQ, kClockToQ}};
-    Table2D cell_fall = cell_rise;
-    std::vector<double> rise_tr{0.009, 0.227};
-    std::vector<double> fall_tr{0.009, 0.227};
-    if (measured_delay) {
-        const CharacterizationDelay& d = timing->delay;
-        d_idx1 = d.index_1;
-        d_idx2 = d.index_2;
-        cell_rise = d.cell_rise;
-        cell_fall = d.cell_fall;
-        rise_tr = d.rise_transition;
-        fall_tr = d.fall_transition;
+    if (options.single_port) {
+        emit_input_pin(out, "ce_n", constraint_template, data);
+        emit_input_pin(out, "oe_n", constraint_template, data);
+        emit_input_pin(out, "we_n", constraint_template, data);
+        emit_input_bus(out, "sdel", sdel_type, constraint_template, "", data);
+        emit_input_bus(out, "A", address_type, constraint_template, "", data);
+        emit_input_bus(out, "D", data_type, constraint_template, "A", data);
+    } else {
+        emit_input_pin(out, "rst_n", constraint_template, data, true);
+        emit_input_pin(out, "ce_n_A", constraint_template, data);
+        emit_input_pin(out, "ce_n_B", constraint_template, data);
+        emit_input_pin(out, "we_n_A", constraint_template, data);
+        emit_input_pin(out, "oe_n_A", constraint_template, data);
+        emit_input_pin(out, "oe_n_B", constraint_template, data);
+        // Dual-port addresses: A_A (read/write) and A_B (read-only)
+        emit_input_bus(out, "A_A", address_type, constraint_template, "", data);
+        emit_input_bus(out, "A_B", address_type, constraint_template, "", data);
+        emit_input_bus(out, "D_A", data_type, constraint_template, "A_A", data);
     }
-    auto join = [&out](const std::vector<double>& v) {
-        for (size_t i = 0; i < v.size(); ++i) {
-            if (i) out << ", ";
-            out << num(v[i]);
+
+    // Helper to emit Q-bus timing block (shared logic for SP Q and DP Q_A/Q_B)
+    auto emit_q_timing = [&](const std::string& address_pin) {
+        out << "      timing () {\n";
+        out << "        related_pin : \"clk\";\n";
+        out << "        timing_type : rising_edge;\n";
+        out << "        timing_sense : non_unate;\n";
+        std::vector<double> d_idx1{0.009, 0.227};
+        std::vector<double> d_idx2{0.005, 0.5};
+        Table2D cell_rise{{kClockToQ, kClockToQ}, {kClockToQ, kClockToQ}};
+        Table2D cell_fall = cell_rise;
+        std::vector<double> rise_tr{0.009, 0.227};
+        std::vector<double> fall_tr{0.009, 0.227};
+        if (measured_delay) {
+            const CharacterizationDelay& d = timing->delay;
+            d_idx1 = d.index_1;
+            d_idx2 = d.index_2;
+            cell_rise = d.cell_rise;
+            cell_fall = d.cell_fall;
+            rise_tr = d.rise_transition;
+            fall_tr = d.fall_transition;
         }
+        auto join = [&out](const std::vector<double>& v) {
+            for (size_t i = 0; i < v.size(); ++i) {
+                if (i) out << ", ";
+                out << num(v[i]);
+            }
+        };
+        const std::pair<const char*, const Table2D*> delay_tables[2] = {
+            {"cell_rise", &cell_rise}, {"cell_fall", &cell_fall}};
+        for (const auto& entry : delay_tables) {
+            out << "        " << entry.first << " (" << delay_template << ") {\n";
+            out << "          index_1 (\"";
+            join(d_idx1);
+            out << "\");\n";
+            out << "          index_2 (\"";
+            join(d_idx2);
+            out << "\");\n";
+            out << "          values (";
+            for (size_t i = 0; i < entry.second->size(); ++i) {
+                if (i) out << ", ";
+                out << '"';
+                join((*entry.second)[i]);
+                out << '"';
+            }
+            out << ");\n";
+            out << "        }\n";
+        }
+        const std::pair<const char*, const std::vector<double>*> slew_tables[2] = {
+            {"rise_transition", &rise_tr}, {"fall_transition", &fall_tr}};
+        for (const auto& entry : slew_tables) {
+            out << "        " << entry.first << " (" << slew_template << ") {\n";
+            out << "          index_1 (\"";
+            join(d_idx2);
+            out << "\");\n";
+            out << "          values (\"";
+            join(*entry.second);
+            out << "\");\n";
+            out << "        }\n";
+        }
+        out << "      }\n";
     };
-    const std::pair<const char*, const Table2D*> delay_tables[2] = {
-        {"cell_rise", &cell_rise}, {"cell_fall", &cell_fall}};
-    for (const auto& entry : delay_tables) {
-        out << "        " << entry.first << " (" << delay_template << ") {\n";
-        out << "          index_1 (\"";
-        join(d_idx1);
-        out << "\");\n";
-        out << "          index_2 (\"";
-        join(d_idx2);
-        out << "\");\n";
-        out << "          values (";
-        for (size_t i = 0; i < entry.second->size(); ++i) {
-            if (i) out << ", ";
-            out << '"';
-            join((*entry.second)[i]);
-            out << '"';
+
+    if (options.single_port) {
+        out << "    bus (Q) {\n";
+        out << "      bus_type : " << data_type << ";\n";
+        out << "      direction : output;\n";
+        out << "      max_capacitance : "
+            << num(scalar_or(data, data ? data->output_max_capacitance : 0.5, 0.5)) << ";\n";
+        out << "      memory_read () {\n";
+        out << "        address : A;\n";
+        out << "      }\n";
+        emit_q_timing("A");
+        out << "    }\n";
+    } else {
+        // Dual-port: Q_A driven by A_A, Q_B driven by A_B
+        for (const auto& qb : std::vector<std::pair<std::string,std::string>>{{"Q_A","A_A"},{"Q_B","A_B"}}) {
+            out << "    bus (" << qb.first << ") {\n";
+            out << "      bus_type : " << data_type << ";\n";
+            out << "      direction : output;\n";
+            out << "      max_capacitance : "
+                << num(scalar_or(data, data ? data->output_max_capacitance : 0.5, 0.5)) << ";\n";
+            out << "      memory_read () {\n";
+            out << "        address : " << qb.second << ";\n";
+            out << "      }\n";
+            emit_q_timing(qb.second);
+            out << "    }\n";
         }
-        out << ");\n";
-        out << "        }\n";
     }
-    const std::pair<const char*, const std::vector<double>*> slew_tables[2] = {
-        {"rise_transition", &rise_tr}, {"fall_transition", &fall_tr}};
-    for (const auto& entry : slew_tables) {
-        out << "        " << entry.first << " (" << slew_template << ") {\n";
-        out << "          index_1 (\"";
-        join(d_idx2);
-        out << "\");\n";
-        out << "          values (\"";
-        join(*entry.second);
-        out << "\");\n";
-        out << "        }\n";
-    }
-    out << "      }\n";
-    out << "    }\n";
     out << "  }\n";
     out << "}\n";
     return out.str();
@@ -461,15 +572,10 @@ bool export_estimated_liberty(const MainCliOptions& options,
                               const std::string& liberty_path,
                               std::string* error,
                               const CharacterizationData* char_data) {
-    if (!options.single_port) {
-        if (error) {
-            *error = "Estimated Liberty generation currently supports the single-port interface only";
-        }
-        return false;
-    }
 
     MacroSize size;
     if (!read_lef_size(lef_path, size, error)) return false;
+    if (!validate_lef_interface(options, lef_path, error)) return false;
 
     auto write_lib = [&](const std::string& path,
                          const CharacterizationTiming* timing,

@@ -34,6 +34,39 @@ std::string read_file(const fs::path& p) {
                        std::istreambuf_iterator<char>());
 }
 
+std::string mock_lef(bool single_port) {
+    std::string lef = "MACRO sram_x4x4x1\n  SIZE 10.0 BY 20.0 ;\n";
+    auto pin = [&lef](const std::string& name) {
+        lef += "  PIN " + name + "\n  END " + name + "\n";
+    };
+    pin("vdd");
+    pin("vss");
+    pin("clk");
+    if (single_port) {
+        for (const char* name : {"ce_n", "oe_n", "we_n"}) pin(name);
+        for (int bit = 0; bit < 4; ++bit) pin("sdel[" + std::to_string(bit) + "]");
+        for (int bit = 0; bit < 4; ++bit) pin("A[" + std::to_string(bit) + "]");
+        for (int bit = 0; bit < 4; ++bit) {
+            pin("D[" + std::to_string(bit) + "]");
+            pin("Q[" + std::to_string(bit) + "]");
+        }
+    } else {
+        for (const char* name : {"rst_n", "ce_n_A", "ce_n_B", "we_n_A", "oe_n_A", "oe_n_B"}) {
+            pin(name);
+        }
+        for (int bit = 0; bit < 4; ++bit) {
+            pin("A_A[" + std::to_string(bit) + "]");
+            pin("A_B[" + std::to_string(bit) + "]");
+        }
+        for (int bit = 0; bit < 4; ++bit) {
+            pin("D_A[" + std::to_string(bit) + "]");
+            pin("Q_A[" + std::to_string(bit) + "]");
+            pin("Q_B[" + std::to_string(bit) + "]");
+        }
+    }
+    return lef + "END sram_x4x4x1\n";
+}
+
 bool load(const std::string& name, const std::string& json,
           OpenFinRAM::CharacterizationData& data, std::string& err) {
     return OpenFinRAM::load_characterization_json(
@@ -50,8 +83,7 @@ std::string emit_lib(const std::string& tag, const std::string& json) {
     opts.num_wls = 2;
     opts.num_data_bits = 4;
     opts.num_banks = 1;
-    const fs::path lef = write_file(tag + ".lef",
-        "MACRO sram_x4x4x1\n  SIZE 10.0 BY 20.0 ;\nEND sram_x4x4x1\n");
+    const fs::path lef = write_file(tag + ".lef", mock_lef(true));
     const fs::path lib = scratch_dir() / (tag + ".lib");
     EXPECT_TRUE(OpenFinRAM::export_estimated_liberty(
         opts, lef.string(), lib.string(), &err, &data)) << err;
@@ -149,4 +181,50 @@ TEST(LibertyEstimator, CommentQuotesAndBackslashesAreEscaped) {
         R"j(, "comment": "path C:\\x \"snapshot\" line1\nline2"})j");
     EXPECT_NE(lib.find(R"j(comment : "path C:\\x \"snapshot\" line1 line2";)j"),
               std::string::npos) << lib.substr(0, 400);
+}
+
+TEST(LibertyEstimator, DualPortUsesPortAWriteAddressAndAsyncResetChecks) {
+    MainCliOptions opts;
+    opts.single_port = false;
+    opts.num_wls = 2;
+    opts.num_data_bits = 4;
+    opts.num_banks = 1;
+
+    const fs::path lef = write_file("dual_port.lef", mock_lef(false));
+    const fs::path lib_path = scratch_dir() / "dual_port.lib";
+    std::string err;
+    ASSERT_TRUE(OpenFinRAM::export_estimated_liberty(
+        opts, lef.string(), lib_path.string(), &err)) << err;
+
+    const std::string lib = read_file(lib_path);
+    EXPECT_NE(lib.find("bus (A_A)"), std::string::npos);
+    EXPECT_NE(lib.find("bus (A_B)"), std::string::npos);
+    EXPECT_NE(lib.find("bus (D_A)"), std::string::npos);
+    EXPECT_NE(lib.find("address : A_A;"), std::string::npos);
+    EXPECT_EQ(lib.find("address : A;"), std::string::npos);
+
+    const std::size_t reset_begin = lib.find("pin (rst_n)");
+    const std::size_t reset_end = lib.find("pin (ce_n_A)", reset_begin);
+    ASSERT_NE(reset_begin, std::string::npos);
+    ASSERT_NE(reset_end, std::string::npos);
+    const std::string reset = lib.substr(reset_begin, reset_end - reset_begin);
+    EXPECT_NE(reset.find("timing_type : recovery_rising;"), std::string::npos);
+    EXPECT_NE(reset.find("timing_type : removal_rising;"), std::string::npos);
+    EXPECT_EQ(reset.find("timing_type : setup_rising;"), std::string::npos);
+    EXPECT_EQ(reset.find("timing_type : hold_rising;"), std::string::npos);
+}
+
+TEST(LibertyEstimator, RejectsDualPortLibertyForSinglePortLef) {
+    MainCliOptions opts;
+    opts.single_port = false;
+    opts.num_wls = 2;
+    opts.num_data_bits = 4;
+    opts.num_banks = 1;
+
+    const fs::path lef = write_file("wrong_interface.lef", mock_lef(true));
+    const fs::path lib_path = scratch_dir() / "wrong_interface.lib";
+    std::string err;
+    EXPECT_FALSE(OpenFinRAM::export_estimated_liberty(
+        opts, lef.string(), lib_path.string(), &err));
+    EXPECT_NE(err.find("missing PIN rst_n"), std::string::npos) << err;
 }

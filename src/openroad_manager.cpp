@@ -52,6 +52,9 @@ bool OpenRoadManager::run_openroad_flow() {
     if (cli_options_.single_port) {
         sram_width = (cli_options_.bitcell_width * 2 + 2.376 + cli_options_.bitcell_width * ((cli_options_.num_wls + 3) * 2)) * cli_options_.num_banks - cli_options_.bitcell_width;
     } else {
+        // 8T dual-port: bitcell wider than 6T; keep conservative estimate
+        // until measured 8T GDS width is available.
+        LOGW << "Dual-port (8T) sram_width uses estimated placeholder 15.0; measure 8T GDS for refined width";
         sram_width = 15.0;
     }
     double col_width = (sram_width + cli_options_.bitcell_width) / cli_options_.num_banks;
@@ -60,6 +63,9 @@ bool OpenRoadManager::run_openroad_flow() {
     std::string tech_root_exe = join_path(get_executable_directory(), "tech");
     std::string tech_root = directory_exists(tech_root_cwd) ? tech_root_cwd : tech_root_exe;
     std::string platform_path = cli_options_.platform_path;
+    if (!platform_path.empty() && platform_path.front() != '/') {
+        platform_path = join_path(get_current_dir_name(), platform_path);
+    }
     if (platform_path.empty()) platform_path = tech_root;
     // If platform_path was default ~/iv3/repos/OpenROAD/platform/asap7 but doesn't exist, fallback to tech_root
     if (!directory_exists(platform_path) && !file_exists(join_path(platform_path, "lef/asap7_tech.lef"))) {
@@ -71,7 +77,8 @@ bool OpenRoadManager::run_openroad_flow() {
                               num_ysel, addr_width,
                               cli_options_.num_banks,
                               cli_options_.spice_only, col_width,
-                              platform_path, tech_root)) {
+                              platform_path, tech_root,
+                              cli_options_.single_port)) {
         LOGE << "Failed to generate OpenROAD run.tcl";
         return false;
     }

@@ -28,8 +28,22 @@ import gdstk
 
 
 BOUNDARY = 100
+TAP_CELL_NAME = "tapcell_sram_8t"
+GATE = 7
 PIN_TEXTTYPE = 251
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
+
+# Layers whose bitcell shapes intentionally extend beyond the placement
+# boundary.  This is the same mirrored-abutment convention used by the
+# published ASAP7 6T cell; checking it prevents a centered core with empty
+# east/west seams from passing the hierarchy verifier.
+PROCESS_SEAM_LAYERS = {
+    "WELL": 1,
+    "FIN": 2,
+    "ACTIVE": 11,
+    "NSELECT": 12,
+    "PSELECT": 13,
+}
 
 
 @dataclass(frozen=True)
@@ -121,12 +135,26 @@ def transformed_point(
     )
 
 
-def row_name(contract: CellContract, wordlines: int) -> str:
-    return f"sramcol_x{wordlines}_{contract.suffix}"
+def slot_layout(wordlines: int, tap_pitch: int) -> tuple[int, list[int]]:
+    """Physical slot count, and the slot each wordline's bitcell occupies."""
+    if not tap_pitch:
+        return wordlines, list(range(wordlines))
+    slot_of = [index + index // tap_pitch for index in range(wordlines)]
+    return wordlines + wordlines // tap_pitch, slot_of
 
 
-def array_name(contract: CellContract, wordlines: int, mux_rows: int) -> str:
-    return f"array_x{wordlines}x{mux_rows}_{contract.suffix}"
+def tap_tag(tap_pitch: int) -> str:
+    return f"_tap{tap_pitch}" if tap_pitch else ""
+
+
+def row_name(contract: CellContract, wordlines: int, tap_pitch: int = 0) -> str:
+    return f"sramcol_x{wordlines}{tap_tag(tap_pitch)}_{contract.suffix}"
+
+
+def array_name(contract: CellContract, wordlines: int, mux_rows: int,
+               tap_pitch: int = 0) -> str:
+    return (f"array_x{wordlines}x{mux_rows}"
+            f"{tap_tag(tap_pitch)}_{contract.suffix}")
 
 
 def build_row(
@@ -134,18 +162,27 @@ def build_row(
     bitcell: gdstk.Cell,
     contract: CellContract,
     wordlines: int,
+    tap_cell: gdstk.Cell | None = None,
+    tap_pitch: int = 0,
 ) -> gdstk.Cell:
     x0, y0, x1, y1 = boundary_box(bitcell)
     width = x1 - x0
     height = y1 - y0
-    row = library.new_cell(row_name(contract, wordlines))
+    if tap_pitch:
+        if tap_cell is None:
+            raise RuntimeError("a tap pitch needs a tap cell")
+        tx0, ty0, tx1, ty1 = boundary_box(tap_cell)
+        if abs((tx1 - tx0) - width) > 1e-6 or abs((ty1 - ty0) - height) > 1e-6:
+            raise RuntimeError("tap cell does not share the bitcell boundary")
+    row = library.new_cell(row_name(contract, wordlines, tap_pitch))
 
     origins: list[tuple[float, float]] = []
     mirrors: list[bool] = []
+    slot = 0
     for index in range(wordlines):
         mirror_x = index % 2 == 1
         origin = (
-            (index + 1) * width + x0 if mirror_x else index * width - x0,
+            (slot + 1) * width + x0 if mirror_x else slot * width - x0,
             -y0,
         )
         row.add(gdstk.Reference(
@@ -156,6 +193,7 @@ def build_row(
         ))
         origins.append(origin)
         mirrors.append(mirror_x)
+        slot += 1
 
         for pin in contract.wordlines:
             label = direct_label(bitcell, pin)
@@ -163,6 +201,14 @@ def build_row(
                 tuple(label.origin), origin, mirror_x=mirror_x
             )
             row.add(clone_label(label, f"{pin}[{index}]", point))
+
+        # Bound the distance from any bitcell to a well/substrate tie.  The tap
+        # hands every bitline straight through, so it can sit mid-row.
+        if tap_pitch and (index + 1) % tap_pitch == 0:
+            row.add(gdstk.Reference(
+                tap_cell, origin=(slot * width - tx0, -ty0)
+            ))
+            slot += 1
 
     # As in the academic sramcol hierarchy, expose each shared bitline at the
     # terminal bitcell.  Mirroring the row later moves these pins to the
@@ -181,7 +227,7 @@ def build_row(
                                   mirror_x=mirrors[terminal])
         row.add(clone_label(label, output_name, point))
 
-    row.add(gdstk.rectangle((0, 0), (wordlines * width, height),
+    row.add(gdstk.rectangle((0, 0), (slot * width, height),
                             layer=BOUNDARY, datatype=0))
     return row
 
@@ -192,11 +238,14 @@ def build_array(
     contract: CellContract,
     wordlines: int,
     mux_rows: int,
+    tap_pitch: int = 0,
 ) -> gdstk.Cell:
     x0, y0, x1, y1 = boundary_box(row)
     width = x1 - x0
     height = y1 - y0
-    array = library.new_cell(array_name(contract, wordlines, mux_rows))
+    array = library.new_cell(
+        array_name(contract, wordlines, mux_rows, tap_pitch)
+    )
 
     row_origins: list[tuple[float, float]] = []
     row_mirrors: list[bool] = []
@@ -258,6 +307,8 @@ def build_library(
     source_6t: Path,
     wordline_counts: list[int],
     mux_rows: int,
+    tap_gds: Path | None = None,
+    tap_pitch: int = 0,
 ) -> gdstk.Library:
     source_lib_8t, bitcell_8t = load_cell(source_8t, "sram_cell_8t")
     source_lib_6t, bitcell_6t = load_cell(source_6t, "sram_cell_6t_122")
@@ -265,6 +316,10 @@ def build_library(
         source_lib_6t.unit, source_lib_6t.precision
     ):
         raise RuntimeError("6T and 8T GDS units/precision do not match")
+    x8_0, _y8_0, x8_1, _y8_1 = boundary_box(bitcell_8t)
+    x6_0, _y6_0, x6_1, _y6_1 = boundary_box(bitcell_6t)
+    if abs((x8_1 - x8_0) - (x6_1 - x6_0)) > 1e-6:
+        raise RuntimeError("8T east/west pitch must match the published 6T cell")
 
     library = gdstk.Library(
         "openfinram_asap7_wordline_arrays",
@@ -273,10 +328,22 @@ def build_library(
     )
     library.add(bitcell_8t, bitcell_6t)
     bitcells = {"8t": bitcell_8t, "6t": bitcell_6t}
+
+    # Only the 8T tap hands every bitline through, so only the 8T rows can
+    # take an interleaved tap.  The published 6T tap terminates its column.
+    tap_cell = None
+    if tap_pitch:
+        if tap_gds is None:
+            raise RuntimeError("--tap-pitch needs --tap-gds")
+        _tap_lib, tap_cell = load_cell(tap_gds, TAP_CELL_NAME)
+        library.add(tap_cell)
+
     for contract in CONTRACTS:
+        pitch = tap_pitch if contract.key == "8t" else 0
         for count in wordline_counts:
-            row = build_row(library, bitcells[contract.key], contract, count)
-            build_array(library, row, contract, count, mux_rows)
+            row = build_row(library, bitcells[contract.key], contract, count,
+                            tap_cell=tap_cell, tap_pitch=pitch)
+            build_array(library, row, contract, count, mux_rows, pitch)
     return library
 
 
@@ -298,35 +365,163 @@ def assert_close(actual: float, expected: float, message: str) -> None:
         raise RuntimeError(f"{message}: {actual} != {expected}")
 
 
+def verify_8t_abutment(
+    row: gdstk.Cell,
+    array: gdstk.Cell,
+    wordlines: int,
+    mux_rows: int,
+    pitch_x: float,
+    pitch_y: float,
+    slots: int,
+    slot_of: list[int],
+) -> None:
+    """Audit electrical continuity and isolation across every array seam.
+
+    Boundary dimensions alone cannot catch an off-center core, a wordline
+    that stops before a north/south edge, or neighboring wordlines that
+    accidentally touch after mirroring.  Probe the actual flattened metal at
+    every cell/row seam and require one distinct vertical component per
+    address on both ports.
+    """
+    x_probes = sorted(
+        {(index + 0.5) * pitch_x for index in range(slots)}
+        | {index * pitch_x for index in range(1, slots)}
+    )
+    for pin in ("BLA", "BLAN", "BLB", "BLBN"):
+        label = direct_label(row, pin)
+        polygons = row.get_polygons(layer=label.layer, datatype=0)
+        points = [(x, float(label.origin[1])) for x in x_probes]
+        if not all(gdstk.inside(points, polygons)):
+            raise RuntimeError(f"{row.name}: {pin} is discontinuous east/west")
+
+    y_probes = sorted(
+        {(index + 0.5) * pitch_y for index in range(mux_rows)}
+        | {index * pitch_y for index in range(1, mux_rows)}
+    )
+    for pin in ("WLA", "WLB"):
+        labels = indexed_labels(array, pin)
+        ordered = [labels[index] for index in range(wordlines)]
+        for index, label in enumerate(ordered):
+            x = float(label.origin[0])
+            slot = slot_of[index]
+            left, right = slot * pitch_x, (slot + 1) * pitch_x
+            if not left < x < right:
+                raise RuntimeError(
+                    f"{array.name}: {pin}[{index}] lies outside its cell"
+                )
+
+        polygons = array.get_polygons(layer=contract_pin_layer(pin), datatype=0)
+        for label in ordered:
+            points = [(float(label.origin[0]), y) for y in y_probes]
+            if not all(gdstk.inside(points, polygons)):
+                raise RuntimeError(
+                    f"{array.name}: {label.text} is discontinuous north/south"
+                )
+
+        merged = gdstk.boolean(polygons, [], "or", precision=1e-6)
+        roots = []
+        for label in ordered:
+            hits = [index for index, polygon in enumerate(merged)
+                    if polygon.contain(label.origin)]
+            if len(hits) != 1:
+                raise RuntimeError(
+                    f"{array.name}: {label.text} belongs to {len(hits)} components"
+                )
+            roots.append(hits[0])
+        if len(set(roots)) != wordlines:
+            raise RuntimeError(f"{array.name}: neighboring {pin} nets are shorted")
+
+    # The two raw 20 nm GATE columns per address use the published cell's
+    # north/south overhang and must cross every mirrored row boundary.  GCUT
+    # still partitions these columns into the intended electrical gate nets.
+    gate_boxes = [bbox(poly) for poly in array.get_polygons(layer=GATE, datatype=0)]
+    expected_gate_centers = {
+        round(0.027 + index * 0.054, 7)
+        for index in range(2 * slots)
+    }
+    for index in range(1, mux_rows):
+        seam = index * pitch_y
+        crossing_centers = {
+            round((x0 + x1) / 2, 7)
+            for x0, y0, x1, y1 in gate_boxes
+            if y0 <= seam - 0.007 and y1 >= seam + 0.007
+        }
+        if crossing_centers != expected_gate_centers:
+            raise RuntimeError(
+                f"{array.name}: GATE does not overlap north/south at seam {index}"
+            )
+
+    # Every mirrored bitcell seam must be occupied by the process layers that
+    # form a continuous device-array fabric.  Requiring at least 7 nm on each
+    # side catches the former 216 nm centered-core implementation while
+    # preserving the official cell's 16 nm minimum ACTIVE overlap.
+    seam_half_span = 0.007
+    for layer_name, layer in PROCESS_SEAM_LAYERS.items():
+        boxes = [bbox(poly) for poly in row.get_polygons(layer=layer, datatype=0)]
+        for index in range(1, slots):
+            seam = index * pitch_x
+            if not any(
+                x0 <= seam - seam_half_span and x1 >= seam + seam_half_span
+                for x0, _y0, x1, _y1 in boxes
+            ):
+                raise RuntimeError(
+                    f"{row.name}: {layer_name} does not overlap east/west "
+                    f"at seam {index}"
+                )
+
+
+def contract_pin_layer(pin: str) -> int:
+    """Return the 8T contract layer without duplicating numeric constants."""
+    return CONTRACTS[0].pin_layers[pin]
+
+
 def verify_contract(
     cells: dict[str, gdstk.Cell],
     contract: CellContract,
     wordlines: int,
     mux_rows: int,
+    tap_pitch: int = 0,
 ) -> None:
     bitcell = cells[contract.bitcell_name]
     bx0, by0, bx1, by1 = boundary_box(bitcell)
     pitch_x, pitch_y = bx1 - bx0, by1 - by0
-    row = cells[row_name(contract, wordlines)]
-    array = cells[array_name(contract, wordlines, mux_rows)]
+    slots, slot_of = slot_layout(wordlines, tap_pitch)
+    row = cells[row_name(contract, wordlines, tap_pitch)]
+    array = cells[array_name(contract, wordlines, mux_rows, tap_pitch)]
 
     rx0, ry0, rx1, ry1 = boundary_box(row)
     ax0, ay0, ax1, ay1 = boundary_box(array)
     for actual, expected, description in (
         (rx0, 0, "row x0"), (ry0, 0, "row y0"),
-        (rx1, wordlines * pitch_x, "row width"),
+        (rx1, slots * pitch_x, "row width"),
         (ry1, pitch_y, "row height"),
         (ax0, 0, "array x0"), (ay0, 0, "array y0"),
-        (ax1, wordlines * pitch_x, "array width"),
+        (ax1, slots * pitch_x, "array width"),
         (ay1, mux_rows * pitch_y, "array height"),
     ):
         assert_close(actual, expected, f"{array.name}: {description}")
 
-    if len(row.references) != wordlines:
-        raise RuntimeError(f"{row.name}: expected {wordlines} bitcell references")
-    if any(reference.cell_name != contract.bitcell_name
+    if len(row.references) != slots:
+        raise RuntimeError(f"{row.name}: expected {slots} cell references")
+    allowed = {contract.bitcell_name} | ({TAP_CELL_NAME} if tap_pitch else set())
+    if any(reference.cell_name not in allowed
            for reference in row.references):
-        raise RuntimeError(f"{row.name}: contains a non-bitcell reference")
+        raise RuntimeError(f"{row.name}: contains an unexpected reference")
+
+    # Every tap_pitch bitcells must be followed by a tie, and the taps must
+    # land on the slots the bitcell origins skip.
+    taps = sorted(float(reference.origin[0]) - rx0
+                  for reference in row.references
+                  if reference.cell_name == TAP_CELL_NAME)
+    expected_taps = sorted(
+        set(range(slots)) - {slot_of[index] for index in range(wordlines)}
+    )
+    if len(taps) != len(expected_taps):
+        raise RuntimeError(
+            f"{row.name}: expected {len(expected_taps)} taps, found {len(taps)}"
+        )
+    for actual, slot in zip(taps, expected_taps):
+        assert_close(actual, slot * pitch_x, f"{row.name}: tap slot {slot}")
     if len(array.references) != mux_rows:
         raise RuntimeError(f"{array.name}: expected {mux_rows} row references")
     if any(reference.cell_name != row.name for reference in array.references):
@@ -352,14 +547,20 @@ def verify_contract(
                for label in labels.values()):
             raise RuntimeError(f"{array.name}: {pin} is on the wrong layer")
 
+    if contract.key == "8t":
+        verify_8t_abutment(
+            row, array, wordlines, mux_rows, pitch_x, pitch_y, slots, slot_of
+        )
+
 
 def verify_io_pitch(cells: dict[str, gdstk.Cell], io_gds: Path,
-                    wordlines: int, mux_rows: int) -> None:
+                    wordlines: int, mux_rows: int,
+                    tap_pitch: int = 0) -> None:
     if mux_rows != 4:
         return
     io_lib = gdstk.read_gds(str(io_gds))
     io_cells = {cell.name: cell for cell in io_lib.cells}
-    array = cells[array_name(CONTRACTS[0], wordlines, mux_rows)]
+    array = cells[array_name(CONTRACTS[0], wordlines, mux_rows, tap_pitch)]
     mappings = {
         "ioprech_sram_8t_a": {
             "BLA": "BLT_A", "BLAN": "BLTN_A",
@@ -407,24 +608,28 @@ def cell_digest(cell: gdstk.Cell) -> str:
 
 
 def verify_gds(path: Path, wordline_counts: list[int], mux_rows: int,
-               io_gds: Path) -> dict[str, str]:
+               io_gds: Path, tap_pitch: int = 0) -> dict[str, str]:
     library = gdstk.read_gds(str(path))
     cells = {cell.name: cell for cell in library.cells}
     expected = {contract.bitcell_name for contract in CONTRACTS}
+    if tap_pitch:
+        expected.add(TAP_CELL_NAME)
     for contract in CONTRACTS:
+        pitch = tap_pitch if contract.key == "8t" else 0
         for count in wordline_counts:
-            expected.add(row_name(contract, count))
-            expected.add(array_name(contract, count, mux_rows))
+            expected.add(row_name(contract, count, pitch))
+            expected.add(array_name(contract, count, mux_rows, pitch))
     if set(cells) != expected:
         missing = sorted(expected - set(cells))
         extra = sorted(set(cells) - expected)
         raise RuntimeError(f"{path}: cell set mismatch; missing={missing}, extra={extra}")
 
     for contract in CONTRACTS:
+        pitch = tap_pitch if contract.key == "8t" else 0
         for count in wordline_counts:
-            verify_contract(cells, contract, count, mux_rows)
+            verify_contract(cells, contract, count, mux_rows, pitch)
             if contract.key == "8t":
-                verify_io_pitch(cells, io_gds, count, mux_rows)
+                verify_io_pitch(cells, io_gds, count, mux_rows, pitch)
     return {name: cell_digest(cells[name]) for name in sorted(cells)
             if name.startswith(("sramcol_", "array_"))}
 
@@ -470,12 +675,27 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=repo / "tech/gds/sram_wordline_arrays.gds",
     )
     parser.add_argument(
+        "--tap-gds", type=Path,
+        default=repo / "tech/gds/sram_cell_8t_tap.gds",
+        help="8T array well/substrate tap cell",
+    )
+    parser.add_argument(
+        "--tap-pitch", type=int, default=0,
+        help="insert a well/substrate tap after every N 8T bitcells "
+             "(default: 0, no taps)",
+    )
+    parser.add_argument(
         "--verify", type=Path,
         help="verify an existing GDS instead of generating one",
     )
     args = parser.parse_args(argv)
     if args.mux_rows < 1:
         parser.error("--mux-rows must be positive")
+    if args.tap_pitch < 0:
+        parser.error("--tap-pitch must not be negative")
+    if args.tap_pitch and any(count % args.tap_pitch
+                              for count in args.word_lines):
+        parser.error("--tap-pitch must divide every wordline count")
     return args
 
 
@@ -484,17 +704,20 @@ def main(argv: list[str]) -> int:
     try:
         if args.verify:
             digests = verify_gds(
-                args.verify, args.word_lines, args.mux_rows, args.io_gds
+                args.verify, args.word_lines, args.mux_rows, args.io_gds,
+                args.tap_pitch,
             )
             print(f"PASS {args.verify}: {len(digests)} parameterized cells")
         else:
             library = build_library(
-                args.gds_8t, args.gds_6t, args.word_lines, args.mux_rows
+                args.gds_8t, args.gds_6t, args.word_lines, args.mux_rows,
+                args.tap_gds, args.tap_pitch,
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             library.write_gds(str(args.output), timestamp=FIXED_GDS_TIMESTAMP)
             digests = verify_gds(
-                args.output, args.word_lines, args.mux_rows, args.io_gds
+                args.output, args.word_lines, args.mux_rows, args.io_gds,
+                args.tap_pitch,
             )
             print(f"wrote {args.output}: {len(digests)} parameterized cells")
         for name, digest in digests.items():

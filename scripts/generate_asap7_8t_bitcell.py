@@ -44,6 +44,7 @@ EDGE_CELL_NAMES = (
     "sram_cell_8t_row_cap",
     "sram_cell_8t_corner",
 )
+TAP_CELL_NAME = "tapcell_sram_8t"
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
 
 # ASAP7 GDS drawing layers.
@@ -74,10 +75,24 @@ SRAMVT = 110
 PIN_TEXTTYPE = 251
 MARKER_LAYERS = {SRAMDRC, BOUNDARY, SRAMVT}
 
-# Coordinates are micrometers.  The cell uses two published 108 nm columns
-# and is 22 fin pitches high.  Fins deliberately overhang the marker by the
-# same half-pitch used in the official 6T cell.
-MARKER = (0.000, -0.162, 0.216, 0.432)
+# Coordinates are micrometers.  Port B grows the cell north/south while the
+# east/west pitch remains the published 108 nm 6T pitch.  As in the official
+# bitcell, FIN, select, ACTIVE, and horizontal rails deliberately overhang the
+# BOUNDARY so mirrored neighbors merge at the placement seam.
+MARKER = (0.000, -0.162, 0.108, 0.432)
+
+# Well/substrate tie geometry.  The tie diffusions sit between the bitcell's
+# two gate columns on its own fin grid, so no gate can cross them and the tap
+# stays device-free while keeping the array's FIN and poly pitch.
+TAP_ACTIVE_X = (0.046, 0.062)
+TAP_CONTACT_X = (0.042, 0.066)
+TAP_VIA_X = (0.045, 0.063)
+TAP_VIA_HEIGHT = 0.018
+TAP_BAND_INSET = 0.0135
+GATE_A = (0.017, -0.181, 0.037, 0.439)
+GATE_B = (0.071, -0.169, 0.091, 0.451)
+WLA_M3 = (0.045, -0.162, 0.063, 0.432)
+WLB_M5 = (0.048, -0.162, 0.072, 0.432)
 
 
 def rect(cell: gdstk.Cell, box: tuple[float, float, float, float], layer: int) -> None:
@@ -130,21 +145,25 @@ def clone_base(source: gdstk.Cell, target: gdstk.Cell) -> None:
     for poly in source.polygons:
         if poly.datatype != 0:
             target.add(
-                gdstk.Polygon(poly.points.copy(), layer=poly.layer, datatype=poly.datatype)
+                gdstk.Polygon(poly.points.copy(), layer=poly.layer,
+                              datatype=poly.datatype)
             )
             continue
         if poly.layer in MARKER_LAYERS:
             continue
         if poly.layer == FIN:
             _x0, y0, _x1, y1 = bbox(poly)
-            rect(target, (-0.027, y0, 0.243, y1), FIN)
+            rect(target, (-0.027, y0, 0.135, y1), FIN)
             continue
         if poly.layer == GATE and is_box(poly, gate_a):
-            rect(target, (0.017, -0.145, 0.037, 0.277), GATE)
+            # Retain the official gate's 19/7 nm boundary overhang while
+            # extending it through the taller cell.
+            rect(target, GATE_A, GATE)
             replaced["gate_a"] = True
             continue
         if poly.layer == GATE and is_box(poly, gate_b):
-            rect(target, (0.071, -0.007, 0.091, 0.409), GATE)
+            # Retain the complementary 7/19 nm official overhang.
+            rect(target, GATE_B, GATE)
             replaced["gate_b"] = True
             continue
         key = (poly.layer, bbox(poly))
@@ -152,11 +171,12 @@ def clone_base(source: gdstk.Cell, target: gdstk.Cell) -> None:
             relocated_found.add(relocated[key])
             continue
         if poly.layer == M2 and bbox(poly) in full_width_m2:
-            x0, y0, _x1, y1 = bbox(poly)
-            rect(target, (x0, y0, 0.243 + (x0 + 0.027), y1), M2)
+            x0, y0, x1, y1 = bbox(poly)
+            rect(target, (x0, y0, x1, y1), M2)
             continue
         target.add(
-            gdstk.Polygon(poly.points.copy(), layer=poly.layer, datatype=poly.datatype)
+            gdstk.Polygon(poly.points.copy(), layer=poly.layer,
+                          datatype=poly.datatype)
         )
 
     missing = [name for name, found in replaced.items() if not found]
@@ -166,10 +186,14 @@ def clone_base(source: gdstk.Cell, target: gdstk.Cell) -> None:
 
     rename = {"WL": "WLA", "BL": "BLA", "BLN": "BLAN"}
     for label in source.labels:
+        text = rename.get(label.text, label.text)
+        # Place the wordline label on the exact center of its M3 trunk so
+        # mirrored array instances retain the 108 nm address pitch.
+        x = 0.054 if text == "WLA" else float(label.origin[0])
         target.add(
             gdstk.Label(
-                rename.get(label.text, label.text),
-                tuple(label.origin),
+                text,
+                (x, float(label.origin[1])),
                 anchor=label.anchor,
                 rotation=label.rotation,
                 magnification=label.magnification,
@@ -180,9 +204,20 @@ def clone_base(source: gdstk.Cell, target: gdstk.Cell) -> None:
         )
 
 
-def add_via_stack_to_m4(cell: gdstk.Cell, cx: float, cy: float) -> None:
+def add_via_stack_to_m4(
+    cell: gdstk.Cell,
+    cx: float,
+    cy: float,
+    *,
+    v0_cy: float | None = None,
+) -> None:
     """Connect an LISD terminal to an M4 horizontal track at (cx, cy)."""
-    rect(cell, (cx - 0.009, cy - 0.009, cx + 0.009, cy + 0.009), V0)
+    landing_y = cy if v0_cy is None else v0_cy
+    rect(
+        cell,
+        (cx - 0.009, landing_y - 0.009, cx + 0.009, landing_y + 0.009),
+        V0,
+    )
     rect(cell, (cx - 0.009, cy - 0.014, cx + 0.009, cy + 0.014), M1)
     rect(cell, (cx - 0.009, cy - 0.009, cx + 0.009, cy + 0.009), V1)
     rect(cell, (cx - 0.014, cy - 0.009, cx + 0.014, cy + 0.009), M2)
@@ -210,50 +245,82 @@ def add_gate_to_m5(
     rect(cell, (bridge_x - 0.009, y - 0.012,
                 bridge_x + 0.009, y + 0.012), V3)
     # At least 2,000 nm^2 of M4, on the 48 nm routing grid.
-    rect(cell, (0.012, y - 0.012, 0.224, y + 0.012), M4)
-    rect(cell, (0.192, y - 0.012, 0.216, y + 0.012), V4)
+    rect(cell, (0.003, y - 0.012, 0.087, y + 0.012), M4)
+    rect(cell, (0.048, y - 0.012, 0.072, y + 0.012), V4)
 
 
 def add_wla_routes(cell: gdstk.Cell) -> None:
     """Add the two WLA gate contacts and their common M3 route."""
-    # Bottom WLA contact: moved left of the Q strap.  The 14.5 nm vertical
-    # clearance to the BLAN LISD is deliberate (ASAP7 requires 14 nm).
-    rect(cell, (0.000, -0.011, 0.037, 0.005), LIG)
-    rect(cell, (0.009, -0.012, 0.027, 0.006), V0)
-    rect(cell, (0.009, -0.017, 0.027, 0.011), M1)
-    rect(cell, (0.009, -0.012, 0.027, 0.006), V1)
+    # Bottom WLA contact: moved left of the Q strap.  The 0.5 nm south shift
+    # gives the required 15 nm corner spacing to the LISD above.
+    rect(cell, (0.000, -0.0115, 0.037, 0.0045), LIG)
+    rect(cell, (0.006, -0.0125, 0.024, 0.0055), V0)
+    rect(cell, (0.006, -0.017, 0.024, 0.011), M1)
+    rect(cell, (0.006, -0.012, 0.024, 0.006), V1)
     rect(cell, (0.004, -0.012, 0.072, 0.006), M2)
     rect(cell, (0.045, -0.012, 0.063, 0.006), V2)
 
-    # Top WLA contact: the second 108 nm column provides clean pin-access
-    # room while the LIG still overlaps the original x=81 nm gate by 20 nm.
-    rect(cell, (0.071, 0.2645, 0.144, 0.2805), LIG)
-    rect(cell, (0.126, 0.2635, 0.144, 0.2815), V0)
-    rect(cell, (0.126, 0.2585, 0.144, 0.2865), M1)
-    rect(cell, (0.126, 0.2635, 0.144, 0.2815), V1)
-    rect(cell, (0.040, 0.2635, 0.149, 0.2815), M2)
+    # Keep the top WLA landing away from the east/west placement seam.  The
+    # upper storage strap jogs around this M1 landing below.
+    # The 1 nm north shift gives 15 nm corner spacing to the LISD below.
+    rect(cell, (0.071, 0.2655, 0.096, 0.2815), LIG)
+    rect(cell, (0.072, 0.2645, 0.090, 0.2825), V0)
+    rect(cell, (0.072, 0.2585, 0.090, 0.2865), M1)
+    rect(cell, (0.072, 0.2635, 0.090, 0.2815), V1)
+    rect(cell, (0.040, 0.2635, 0.092, 0.2815), M2)
     rect(cell, (0.045, 0.2635, 0.063, 0.2815), V2)
-    rect(cell, (0.045, -0.040, 0.063, 0.310), M3)
+    # Both wordline ports are full-height trunks.  Array verification relies
+    # on these shapes continuing through every north/south row abutment.
+    rect(cell, WLA_M3, M3)
 
 
 def add_storage_straps(cell: gdstk.Cell) -> None:
     """Strap the added access drains to the published core's Q and QB."""
 
-    # Q/QB straps use M1 only.  V0 is fully enclosed by the 24 nm LISD
-    # terminals and by at least 5 nm of M1 at each route end.
-    for cy in (-0.0675, 0.052, 0.2295, 0.3375):
+    # Center every storage V0 and its M1 landing on the 54 nm midpoint between
+    # the two GATE columns.  The canonical x=42..66 nm LISD terminals enclose
+    # each 18 nm V0 by 3 nm on both sides without approaching GATE.
+    # The upper core landing is 1 nm below its LISD center to retain the
+    # required diagonal V0 spacing to the adjacent WLA landing.
+    for cy in (-0.0675, 0.052, 0.2285, 0.3375):
         rect(cell, (0.045, cy - 0.009, 0.063, cy + 0.009), V0)
     rect(cell, (0.045, -0.0815, 0.063, 0.066), M1)
-    rect(cell, (0.045, 0.2155, 0.063, 0.3515), M1)
+    # The upper M1 is one polygon with 18 nm-wide landing/bypass sections.  It
+    # jogs left only while passing the top WLA landing, preserving the prior
+    # 18 nm clearance without displacing either storage V0 toward GATE.
+    cell.add(
+        gdstk.Polygon(
+            (
+                (0.045, 0.2155), (0.063, 0.2155),
+                (0.063, 0.2435), (0.054, 0.2435),
+                (0.054, 0.3235), (0.063, 0.3235),
+                (0.063, 0.3515), (0.045, 0.3515),
+                (0.045, 0.3415), (0.036, 0.3415),
+                (0.036, 0.2255), (0.045, 0.2255),
+            ),
+            layer=M1,
+            datatype=0,
+        )
+    )
 
 
 def add_wlb_routes(cell: gdstk.Cell) -> None:
     """Add the two WLB gate contacts and their common M5 route."""
     rect(cell, (0.017, -0.140, 0.054, -0.124), LIG)
     rect(cell, (0.054, 0.388, 0.086, 0.404), LIG)
-    add_gate_to_m5(cell, gate_via_x=0.0395, bridge_x=0.0685, y=-0.132)
-    add_gate_to_m5(cell, gate_via_x=0.0685, bridge_x=0.0395, y=0.396)
-    rect(cell, (0.192, -0.162, 0.216, 0.432), M5)
+    add_gate_to_m5(
+        cell,
+        gate_via_x=0.0395,
+        bridge_x=0.018,
+        y=-0.132,
+    )
+    add_gate_to_m5(
+        cell,
+        gate_via_x=0.0685,
+        bridge_x=0.018,
+        y=0.396,
+    )
+    rect(cell, WLB_M5, M5)
 
 
 def add_storage_straps_and_wla(cell: gdstk.Cell) -> None:
@@ -275,8 +342,8 @@ def add_port_b(cell: gdstk.Cell) -> None:
     rect(cell, (0.054, 0.2885, 0.108, 0.3055), GCUT)
 
     # Storage and outside source/drain terminals plus diffusion/contact
-    # marker shapes.  Storage LISD remains separate from the core across each
-    # WLA contact and is joined by the M1 straps above.
+    # marker shapes.  Storage LISD and SDT retain the canonical 24 nm width;
+    # their centered V0 landings connect to the core through the M1 straps.
     rect(cell, (0.042, -0.0945, 0.066, -0.0405), LISD)
     rect(cell, (0.042, 0.3105, 0.066, 0.3645), LISD)
     rect(cell, (-0.012, -0.0885, 0.012, -0.0405), LISD)
@@ -291,10 +358,12 @@ def add_port_b(cell: gdstk.Cell) -> None:
 
     # M4 bitlines lie on legal 48 nm tracks and stay isolated where the M5
     # wordline crosses them (there is no V4 at either crossing).
-    add_via_stack_to_m4(cell, 0.000, -0.084)
-    rect(cell, (-0.027, -0.096, 0.243, -0.072), M4)
+    # Move only the BLBN V0 4.5 nm north so its south edge no longer
+    # protrudes beyond LISD; the remainder of the stack stays on its track.
+    add_via_stack_to_m4(cell, 0.000, -0.084, v0_cy=-0.0795)
+    rect(cell, (-0.027, -0.096, 0.135, -0.072), M4)
     add_via_stack_to_m4(cell, 0.108, 0.348)
-    rect(cell, (-0.027, 0.336, 0.243, 0.360), M4)
+    rect(cell, (-0.027, 0.336, 0.135, 0.360), M4)
 
     # WLB gate stacks occupy the neighboring M4 tracks, leaving exactly the
     # required 24 nm M4 spacing to the port-B bitlines.
@@ -304,7 +373,7 @@ def add_port_b(cell: gdstk.Cell) -> None:
                            texttype=PIN_TEXTTYPE))
     cell.add(gdstk.Label("BLB", (0.130, 0.348), layer=M4,
                            texttype=PIN_TEXTTYPE))
-    cell.add(gdstk.Label("WLB", (0.204, -0.150), layer=M5,
+    cell.add(gdstk.Label("WLB", (0.060, -0.150), layer=M5,
                            texttype=PIN_TEXTTYPE))
     # The added NMOS bodies use the same p-substrate connection as the core.
     cell.add(gdstk.Label("vss!", (0.048, -0.0675), layer=3,
@@ -335,7 +404,7 @@ def build_cell(source_gds: Path) -> gdstk.Library:
     for index in range(-6, 17):
         center = round(index * 0.027, 6)
         if center not in existing_centers:
-            rect(cell, (-0.027, center - 0.0035, 0.243, center + 0.0035), FIN)
+            rect(cell, (-0.027, center - 0.0035, 0.135, center + 0.0035), FIN)
 
     return lib
 
@@ -389,15 +458,15 @@ def is_full_m2_rail(poly: gdstk.Polygon) -> bool:
     if poly.layer != M2 or poly.datatype != 0:
         return False
     x0, _y0, x1, _y1 = bbox(poly)
-    return x1 - x0 >= 0.260
+    return x1 - x0 >= 0.160
 
 
 def is_bitline_m4_rail(poly: gdstk.Polygon) -> bool:
     if poly.layer != M4 or poly.datatype != 0:
         return False
     return bbox(poly) in {
-        (-0.027, -0.096, 0.243, -0.072),
-        (-0.027, 0.336, 0.243, 0.360),
+        (-0.027, -0.096, 0.135, -0.072),
+        (-0.027, 0.336, 0.135, 0.360),
     }
 
 
@@ -454,9 +523,9 @@ def build_edge_library(
         {"WLA": "vss!", "WLB": "vss!"},
     )
     dummy.add(
-        gdstk.Label("vdd!", (0.054, 0.052), layer=LISD,
+        gdstk.Label("vdd!", (0.051, 0.052), layer=LISD,
                      texttype=PIN_TEXTTYPE),
-        gdstk.Label("vss!", (0.054, 0.2295), layer=LISD,
+        gdstk.Label("vss!", (0.045, 0.2295), layer=LISD,
                      texttype=PIN_TEXTTYPE),
     )
 
@@ -480,9 +549,9 @@ def build_edge_library(
     add_wla_routes(row_cap)
     add_wlb_routes(row_cap)
     row_cap.add(
-        gdstk.Label("WLA", (0.0555, -0.028), layer=M3,
+        gdstk.Label("WLA", (0.054, -0.028), layer=M3,
                      texttype=PIN_TEXTTYPE),
-        gdstk.Label("WLB", (0.204, -0.150), layer=M5,
+        gdstk.Label("WLB", (0.060, -0.150), layer=M5,
                      texttype=PIN_TEXTTYPE),
     )
     copy_labels(bitcell, row_cap, {"vss!"})
@@ -501,11 +570,113 @@ def build_edge_library(
         {"BLA": "vss!", "BLAN": "vss!", "BLB": "vss!", "BLBN": "vss!"},
     )
     corner.add(
-        gdstk.Label("vss!", (0.0555, -0.028), layer=M3,
+        gdstk.Label("vss!", (0.054, -0.028), layer=M3,
                      texttype=PIN_TEXTTYPE),
-        gdstk.Label("vss!", (0.204, -0.150), layer=M5,
+        gdstk.Label("vss!", (0.060, -0.150), layer=M5,
                      texttype=PIN_TEXTTYPE),
     )
+    return lib
+
+
+def supply_rails(bitcell: gdstk.Cell) -> dict[str, list[tuple[float, float]]]:
+    """Map vdd!/vss! to the y-extent of the full-width M2 rails they pin."""
+    rails = [bbox(poly) for poly in bitcell.polygons if is_full_m2_rail(poly)]
+    nets: dict[str, list[tuple[float, float]]] = {}
+    for label in bitcell.labels:
+        if label.layer != M2 or label.text not in ("vdd!", "vss!"):
+            continue
+        x, y = float(label.origin[0]), float(label.origin[1])
+        hits = [r for r in rails if r[0] <= x <= r[2] and r[1] <= y <= r[3]]
+        _assert(len(hits) == 1, f"{label.text} pin is not on exactly one M2 rail")
+        nets.setdefault(label.text, []).append((hits[0][1], hits[0][3]))
+    _assert(set(nets) == {"vdd!", "vss!"}, "bitcell is missing an M2 supply pin")
+    return nets
+
+
+def tie_bands(bitcell: gdstk.Cell) -> list[tuple[float, float, str]]:
+    """Regions the tap must tie, as (y0, y1, net), ordered bottom to top.
+
+    Tie polarity is inverted with respect to the bitcell: the n-well takes an
+    n+ tie to VDD, and every substrate band the bitcell implants n+ for its
+    NMOS takes a p+ tie to VSS.
+    """
+    well = bbox(next(p for p in bitcell.polygons if p.layer == WELL))
+    bands = [(bbox(p)[1], bbox(p)[3], "vss!")
+             for p in bitcell.polygons if p.layer == NSELECT]
+    bands.append((well[1], well[3], "vdd!"))
+    return sorted(bands)
+
+
+def group_tie_bands(
+    bands: list[tuple[float, float, str]]
+) -> list[tuple[str, list[tuple[float, float, str]]]]:
+    """Collapse adjacent same-net bands so each takes one shared M1 strap."""
+    groups: list[tuple[str, list[tuple[float, float, str]]]] = []
+    for band in bands:
+        if groups and groups[-1][0] == band[2]:
+            groups[-1][1].append(band)
+        else:
+            groups.append((band[2], [band]))
+    return groups
+
+
+def build_tap_library(
+    bitcell: gdstk.Cell, unit: float = 1e-6, precision: float = 2.5e-10
+) -> gdstk.Library:
+    """Build the array well/substrate tap, following tapcell_sram_6t122."""
+    lib = gdstk.Library(
+        "openfinram_asap7_8t_tap", unit=unit, precision=precision
+    )
+    cell = lib.new_cell(TAP_CELL_NAME)
+    x0, y0, x1, y1 = bbox(
+        next(p for p in bitcell.polygons if p.layer == BOUNDARY)
+    )
+
+    # Fin and poly grids run through the tap column unchanged; the dummy gates
+    # are cut at the row-abutment line exactly as tapcell_sram_6t122 does.
+    clone_polygons(bitcell, cell, lambda poly: poly.layer in (FIN, GATE))
+    rect(cell, (x0, y0 - 0.0085, x1, y0 + 0.0085), GCUT)
+    for layer in (SRAMDRC, BOUNDARY):
+        rect(cell, (x0, y0, x1, y1), layer)
+
+    # Bitlines and supplies pass straight through, so the tap can be inserted
+    # anywhere in a row without breaking a bitline.
+    add_full_rails(bitcell, cell)
+
+    bands = tie_bands(bitcell)
+    rails = supply_rails(bitcell)
+    well_y0, well_y1, _ = next(b for b in bands if b[2] == "vdd!")
+    rect(cell, (x0, well_y0, x1, well_y1), WELL)
+    rect(cell, (x0, well_y0, x1, well_y1), NSELECT)
+    for band_y0, band_y1, net in bands:
+        if net == "vss!":
+            rect(cell, (x0, band_y0, x1, band_y1), PSELECT)
+
+    ax0, ax1 = TAP_ACTIVE_X
+    cx0, cx1 = TAP_CONTACT_X
+    vx0, vx1 = TAP_VIA_X
+    for band_y0, band_y1, _net in bands:
+        ty0, ty1 = band_y0 + TAP_BAND_INSET, band_y1 - TAP_BAND_INSET
+        rect(cell, (ax0, ty0, ax1, ty1), ACTIVE)
+        for layer in (LISD, SDT):
+            rect(cell, (cx0, ty0, cx1, ty1), layer)
+        centre = (ty0 + ty1) / 2
+        rect(cell, (vx0, centre - TAP_VIA_HEIGHT / 2,
+                    vx1, centre + TAP_VIA_HEIGHT / 2), V0)
+
+    # One M1 strap per run of same-net bands, each landing on a supply rail of
+    # its own net.  The runs are separated by a whole implant band, so the
+    # straps cannot merge.
+    for net, group in group_tie_bands(bands):
+        bottom = group[0][0] + TAP_BAND_INSET
+        top = group[-1][1] - TAP_BAND_INSET
+        rect(cell, (vx0, bottom, vx1, top), M1)
+        landed = [r for r in rails[net] if bottom <= r[0] and r[1] <= top]
+        _assert(bool(landed), f"tap {net} strap reaches no {net} rail")
+        for rail_y0, rail_y1 in landed:
+            rect(cell, (vx0, rail_y0, vx1, rail_y1), V1)
+
+    copy_labels(bitcell, cell, {"vdd!", "vss!"})
     return lib
 
 
@@ -621,6 +792,7 @@ def extract_connectivity(
     # each side.  All ASAP7 devices here have vertical gates.
     devices: list[dict] = []
     wells = _layer_polygons(cell, WELL)
+    fins = _layer_polygons(cell, FIN)
     for channel in channels:
         (x0, y0), (x1, y1) = channel.bounding_box()
         gate_hits = [dsu.find(i) for i, (layer, poly) in enumerate(objects)
@@ -637,8 +809,12 @@ def extract_connectivity(
             terminals.append(hits[0])
 
         is_pmos = any(_overlap(channel, well) for well in wells)
+        # Fin count is the device width in this technology, so it is the only
+        # thing binding the netlist's nfin= to the drawn geometry.
+        nfin = sum(1 for fin in fins if _overlap(channel, fin))
+        _assert(nfin > 0, "channel is not crossed by any fin")
         devices.append({"gate": gate_hits[0], "terminals": tuple(terminals),
-                        "pmos": is_pmos,
+                        "pmos": is_pmos, "nfin": nfin,
                         "center": ((x0 + x1) / 2, (y0 + y1) / 2)})
     return devices, labels
 
@@ -652,6 +828,8 @@ def verify_topology(cell: gdstk.Cell) -> None:
         _assert(len(labels[pin]) == 1, f"{pin} must label exactly one electrical net")
     signal_roots = {next(iter(labels[p])) for p in ("WLA", "WLB", "BLA", "BLAN", "BLB", "BLBN")}
     _assert(len(signal_roots) == 6, "one or more independent signal pins are shorted")
+    _assert(not (signal_roots & (labels["vdd!"] | labels["vss!"])),
+            "a signal pin is shorted to a supply rail")
 
     def access_map(wordline: str, bitlines: tuple[str, str]) -> dict[str, int]:
         wl = next(iter(labels[wordline]))
@@ -661,6 +839,8 @@ def verify_topology(cell: gdstk.Cell) -> None:
         for device in selected:
             terms = set(device["terminals"])
             _assert(not device["pmos"], f"{wordline} access device is not NMOS")
+            _assert(device["nfin"] == 2,
+                    f"{wordline} access device is {device['nfin']}-fin, not nfin=2")
             matches = [pin for pin in bitlines if next(iter(labels[pin])) in terms]
             _assert(len(matches) == 1,
                     f"{wordline} access device is not tied to one {bitlines} bitline")
@@ -689,6 +869,10 @@ def verify_topology(cell: gdstk.Cell) -> None:
                 "storage inverter is not one PMOS plus one NMOS")
         for device in inverter:
             terms = set(device["terminals"])
+            expected_fins = 1 if device["pmos"] else 2
+            _assert(device["nfin"] == expected_fins,
+                    f"inverter {'pull-up' if device['pmos'] else 'pull-down'} is "
+                    f"{device['nfin']}-fin, not nfin={expected_fins}")
             _assert(drain_root in terms, "cross-coupled inverter drain is disconnected")
             other = terms - {drain_root}
             expected_supply = supply_vdd if device["pmos"] else supply_vss
@@ -735,6 +919,11 @@ def verify_dummy_topology(cell: gdstk.Cell) -> None:
             "dummy expected 2 PMOS devices")
     _assert(sum(not device["pmos"] for device in devices) == 6,
             "dummy expected 6 NMOS devices")
+    for device in devices:
+        expected_fins = 1 if device["pmos"] else 2
+        _assert(device["nfin"] == expected_fins,
+                f"dummy {'PMOS' if device['pmos'] else 'NMOS'} is "
+                f"{device['nfin']}-fin, not nfin={expected_fins}")
 
 
 def process_fingerprint(cell: gdstk.Cell) -> str:
@@ -794,6 +983,100 @@ def verify_cap_topology(cell: gdstk.Cell, cap_kind: str) -> None:
     _assert("vss!" in labels, f"{cell.name} is missing ground continuity")
 
 
+def _contains(outer: tuple, inner: tuple) -> bool:
+    """True when box `inner` sits inside box `outer`."""
+    return (outer[0] <= inner[0] and outer[1] <= inner[1]
+            and inner[2] <= outer[2] and inner[3] <= outer[3])
+
+
+def verify_tap_rules(cell: gdstk.Cell) -> None:
+    """Grid rules for the tap: the bitcell's frame without its devices."""
+    for layer in (SRAMDRC, BOUNDARY):
+        _assert([bbox(p) for p in _layer_polygons(cell, layer)] == [MARKER],
+                f"tap layer {layer} marker is not {MARKER}")
+    _assert(not _layer_polygons(cell, SRAMVT),
+            "tap must not carry the SRAM-Vt implant")
+
+    fins = sorted(_layer_polygons(cell, FIN), key=lambda p: bbox(p)[1])
+    centres = [round((bbox(p)[1] + bbox(p)[3]) / 2, 6) for p in fins]
+    _assert(all(round(bbox(p)[3] - bbox(p)[1], 6) == 0.007 for p in fins),
+            "tap FIN width is not exactly 7 nm")
+    _assert(all(round(right - left, 6) == 0.027
+                for left, right in zip(centres, centres[1:])),
+            "tap FIN pitch is not exactly 27 nm")
+    _assert(sorted(bbox(p) for p in _layer_polygons(cell, GATE))
+            == sorted((GATE_A, GATE_B)),
+            "tap does not reuse the bitcell gate columns")
+
+
+def verify_tap_topology(cell: gdstk.Cell, bitcell: gdstk.Cell) -> None:
+    """The tap ties both polarities, holds no device, and passes bitlines."""
+    devices, labels = extract_connectivity(cell, expected_channels=0)
+    _assert(not devices, "tap cell must be device-free")
+
+    well = [bbox(p) for p in _layer_polygons(cell, WELL)]
+    nsel = [bbox(p) for p in _layer_polygons(cell, NSELECT)]
+    psel = sorted(bbox(p) for p in _layer_polygons(cell, PSELECT))
+    _assert(len(well) == 1, "tap must have exactly one n-well band")
+    _assert(nsel == well,
+            "tap n+ implant must cover exactly the n-well (the VDD tie)")
+    _assert(bool(psel), "tap has no p+ substrate tie")
+    for box in psel:
+        _assert(box[3] <= well[0][1] or well[0][3] <= box[1],
+                "tap p+ implant overlaps the n-well")
+
+    # One tie diffusion per implant band, clear of both gate columns so no
+    # channel can form, each climbing LISD -> V0 -> M1.
+    implants = nsel + psel
+    actives = sorted(bbox(p) for p in _layer_polygons(cell, ACTIVE))
+    _assert(len(actives) == len(implants),
+            "tap does not place one tie diffusion per implant band")
+    gates = [bbox(p) for p in _layer_polygons(cell, GATE)]
+    contacts = [bbox(p) for p in _layer_polygons(cell, LISD)]
+    vias = [bbox(p) for p in _layer_polygons(cell, V0)]
+    straps = [bbox(p) for p in _layer_polygons(cell, M1)]
+    for active in actives:
+        host = [box for box in implants if _contains(box, active)]
+        _assert(len(host) == 1, "tie diffusion is not inside one implant band")
+        for gate in gates:
+            _assert(active[2] <= gate[0] or gate[2] <= active[0],
+                    "tie diffusion crosses a gate column")
+        contact = [box for box in contacts if _contains(box, active)]
+        _assert(len(contact) == 1, "tie diffusion has no local-interconnect tab")
+        via = [box for box in vias if _contains(contact[0], box)]
+        _assert(len(via) == 1, "tie contact has no V0")
+        _assert(any(_contains(strap, via[0]) for strap in straps),
+                "tie V0 is not covered by an M1 strap")
+
+    # Every strap lands a V1 on a supply rail carrying its own net.
+    rails = supply_rails(cell)
+    v1_boxes = [bbox(p) for p in _layer_polygons(cell, V1)]
+    for net, group in group_tie_bands(tie_bands(bitcell)):
+        bottom = group[0][0] + TAP_BAND_INSET
+        top = group[-1][1] - TAP_BAND_INSET
+        strap = [m for m in straps
+                 if abs(m[1] - bottom) < 1e-9 and abs(m[3] - top) < 1e-9]
+        _assert(len(strap) == 1, f"tap has no single {net} strap")
+        landed = [v for v in v1_boxes if _contains(strap[0], v)]
+        _assert(bool(landed), f"tap {net} strap has no V1 to a supply rail")
+        for via in landed:
+            _assert(any(rail[0] <= via[1] and via[3] <= rail[1]
+                        for rail in rails[net]),
+                    f"tap {net} V1 does not land on a {net} rail")
+
+    _assert(labels["vdd!"].isdisjoint(labels["vss!"]),
+            "tap shorts VDD to VSS")
+
+    # A tap sits mid-row, so it must hand every bitline and supply straight
+    # through at exactly the bitcell's coordinates.
+    rail_predicate = lambda poly: is_full_m2_rail(poly) or is_bitline_m4_rail(poly)
+    _assert(
+        filtered_polygon_fingerprint(cell, rail_predicate)
+        == filtered_polygon_fingerprint(bitcell, rail_predicate),
+        "tap rails do not abut the bitcell's bitlines and supplies",
+    )
+
+
 def verify_rules(cell: gdstk.Cell) -> None:
     """Check the exact-grid and focused routing rules used by this generator."""
     markers = {layer: [bbox(p) for p in _layer_polygons(cell, layer)]
@@ -811,6 +1094,8 @@ def verify_rules(cell: gdstk.Cell) -> None:
 
     gates = _layer_polygons(cell, GATE)
     _assert(len(gates) == 2, "expected the two official gate columns")
+    _assert(sorted(bbox(poly) for poly in gates) == sorted((GATE_A, GATE_B)),
+            "GATE columns do not span the complete north/south boundary")
     gate_centers = sorted(round((bbox(p)[0] + bbox(p)[2]) / 2, 6) for p in gates)
     _assert(gate_centers == [0.027, 0.081], "gate centers are off the 54 nm pitch")
     _assert(all(round(bbox(p)[2] - bbox(p)[0], 6) == 0.020 for p in gates),
@@ -843,6 +1128,50 @@ def verify_rules(cell: gdstk.Cell) -> None:
                 abs(x1 / 0.024 - round(x1 / 0.024)) < 1e-6,
                 "M5 vertical edges are off the 24 nm grid")
 
+    # All four storage terminals retain the source cell's 24 nm LISD/SDT
+    # width.  Their 18 nm V0 landings are centered on the 54 nm inter-gate
+    # midpoint with 3 nm LISD enclosure on each side.
+    lisd = _layer_polygons(cell, LISD)
+    for index, left in enumerate(lisd):
+        for right in lisd[:index]:
+            _assert(not _overlap(left, right),
+                    "LISD contains redundant overlapping polygons")
+    if cell.name == CELL_NAME:
+        wla_lig = {
+            (0.000, -0.0115, 0.037, 0.0045),
+            (0.071, 0.2655, 0.096, 0.2815),
+        }
+        _assert(wla_lig <= {bbox(poly) for poly in _layer_polygons(cell, LIG)},
+                "WLA LIG landings do not preserve 15 nm LISD spacing")
+        storage_lisd = {
+            (0.042, -0.0945, 0.066, -0.0405),
+            (0.042, 0.0235, 0.066, 0.118),
+            (0.042, 0.152, 0.066, 0.2465),
+            (0.042, 0.3105, 0.066, 0.3645),
+        }
+        _assert(storage_lisd <= {bbox(poly) for poly in lisd},
+                "storage LISD terminals are not canonical 24 nm shapes")
+        storage_v0 = {
+            (0.045, -0.0765, 0.063, -0.0585),
+            (0.045, 0.043, 0.063, 0.061),
+            (0.045, 0.2195, 0.063, 0.2375),
+            (0.045, 0.3285, 0.063, 0.3465),
+        }
+        _assert(storage_v0 <= {bbox(poly) for poly in _layer_polygons(cell, V0)},
+                "storage V0 landings are not centered at x=54 nm")
+        _assert(
+            (-0.009, -0.0885, 0.009, -0.0705)
+            in {bbox(poly) for poly in _layer_polygons(cell, V0)},
+            "BLBN V0 landing protrudes beyond its LISD terminal",
+        )
+    lisd_gate_overlap = gdstk.boolean(lisd, gates, "and", precision=1e-6)
+    _assert(not lisd_gate_overlap, "LISD must not overlap either GATE column")
+    lisd_union = gdstk.boolean(lisd, [], "or", precision=1e-6)
+    uncovered_sdt = gdstk.boolean(
+        _layer_polygons(cell, SDT), lisd_union, "not", precision=1e-6
+    )
+    _assert(not uncovered_sdt, "SDT must be completely contained by LISD")
+
 
 def verify_gds(path: Path) -> str:
     lib = gdstk.read_gds(str(path))
@@ -852,6 +1181,21 @@ def verify_gds(path: Path) -> str:
     _assert(len(lib.cells) == 1, f"{path} must contain only {CELL_NAME}")
     verify_rules(cell)
     verify_topology(cell)
+    return polygon_fingerprint(cell)
+
+
+def verify_tap_gds(path: Path, bitcell_path: Path) -> str:
+    lib = gdstk.read_gds(str(path))
+    cells = {cell.name: cell for cell in lib.cells}
+    _assert(set(cells) == {TAP_CELL_NAME},
+            f"tap library cells are {sorted(cells)}, expected [{TAP_CELL_NAME}]")
+    bit_lib = gdstk.read_gds(str(bitcell_path))
+    bitcell = next((c for c in bit_lib.cells if c.name == CELL_NAME), None)
+    if bitcell is None:
+        raise ValueError(f"{CELL_NAME!r} not found in {bitcell_path}")
+    cell = cells[TAP_CELL_NAME]
+    verify_tap_rules(cell)
+    verify_tap_topology(cell, bitcell)
     return polygon_fingerprint(cell)
 
 
@@ -895,20 +1239,20 @@ def verify_edge_gds(path: Path) -> dict[str, str]:
     col_rail_boxes = {bbox(poly) for poly in col_cap.polygons
                       if rail_predicate(poly)}
     expected_rails = {
-        (-0.027, 0.027, 0.243, 0.045),
-        (-0.026, 0.0745, 0.244, 0.0925),
-        (-0.027, 0.126, 0.243, 0.144),
-        (-0.026, 0.1775, 0.244, 0.1955),
-        (-0.027, 0.225, 0.243, 0.243),
-        (-0.027, -0.096, 0.243, -0.072),
-        (-0.027, 0.336, 0.243, 0.360),
+        (-0.027, 0.027, 0.135, 0.045),
+        (-0.026, 0.0745, 0.136, 0.0925),
+        (-0.027, 0.126, 0.135, 0.144),
+        (-0.026, 0.1775, 0.136, 0.1955),
+        (-0.027, 0.225, 0.135, 0.243),
+        (-0.027, -0.096, 0.135, -0.072),
+        (-0.027, 0.336, 0.135, 0.360),
     }
     _assert(col_rail_boxes == expected_rails,
             "column-cap rails do not span the complete mirrored cell pitch")
-    _assert(any(is_box(poly, (0.045, -0.040, 0.063, 0.310))
+    _assert(any(is_box(poly, WLA_M3)
                 for poly in _layer_polygons(row_cap, M3)),
-            "row cap is missing the WLA M3 trunk")
-    _assert(any(is_box(poly, (0.192, -0.162, 0.216, 0.432))
+            "row cap is missing the full-height WLA M3 trunk")
+    _assert(any(is_box(poly, WLB_M5)
                 for poly in _layer_polygons(row_cap, M5)),
             "row cap is missing the full-height WLB M5 trunk")
     return {name: polygon_fingerprint(cell) for name, cell in sorted(cells.items())}
@@ -934,6 +1278,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=Path,
         help="generated dummy/row-cap/column-cap/corner GDS; defaults beside --output",
     )
+    parser.add_argument(
+        "--tap-output",
+        type=Path,
+        help="generated array well/substrate tap GDS; defaults beside --output",
+    )
     verify_group = parser.add_mutually_exclusive_group()
     verify_group.add_argument(
         "--verify",
@@ -944,6 +1293,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--verify-edges",
         type=Path,
         help="verify an existing 8T edge-cell GDS instead of generating",
+    )
+    verify_group.add_argument(
+        "--verify-tap",
+        type=Path,
+        help="verify an existing 8T tap GDS instead of generating",
     )
     return parser.parse_args(argv)
 
@@ -963,6 +1317,12 @@ def main(argv: list[str]) -> int:
                 print(f"  {name}: sha256={digest}")
             return 0
 
+        if args.verify_tap:
+            bitcell_path = args.output
+            digest = verify_tap_gds(args.verify_tap, bitcell_path)
+            print(f"PASS {args.verify_tap}: {TAP_CELL_NAME}, sha256={digest}")
+            return 0
+
         lib = build_cell(args.source_gds)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         lib.write_gds(str(args.output), timestamp=FIXED_GDS_TIMESTAMP)
@@ -979,6 +1339,17 @@ def main(argv: list[str]) -> int:
         print(f"wrote {edge_output}: {len(edge_digests)} edge cells")
         for name, edge_digest in edge_digests.items():
             print(f"  {name}: sha256={edge_digest}")
+
+        tap_output = args.tap_output or args.output.with_name(
+            "sram_cell_8t_tap.gds"
+        )
+        tap_output.parent.mkdir(parents=True, exist_ok=True)
+        tap_lib = build_tap_library(
+            lib.cells[0], unit=lib.unit, precision=lib.precision
+        )
+        tap_lib.write_gds(str(tap_output), timestamp=FIXED_GDS_TIMESTAMP)
+        tap_digest = verify_tap_gds(tap_output, args.output)
+        print(f"wrote {tap_output}: {TAP_CELL_NAME}, sha256={tap_digest}")
         return 0
     except (OSError, RuntimeError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

@@ -49,13 +49,13 @@ std::size_t count_occurrences(const std::string& text,
 YosysManager::YosysManager(const MainCliOptions& cli_options)
     : cli_options_(cli_options) {
     cur_path_ = get_executable_directory();
-    // Prefer CWD tech (repo root) if it exists; fallback to executable dir (supports `build` with `cp -r ../tech .`)
-    std::string cwd_tech_sp = join_path(get_current_dir_name(), "tech/verilog_sp");
-    if (directory_exists(cwd_tech_sp) || file_exists(join_path(cwd_tech_sp, "sram_control.v"))) {
-        rtl_path_ = cwd_tech_sp;
+    const std::string verilog_subdir = cli_options_.single_port ? "tech/verilog_sp" : "tech/verilog_dp";
+    std::string cwd_tech = join_path(get_current_dir_name(), verilog_subdir);
+    if (directory_exists(cwd_tech) || file_exists(join_path(cwd_tech, "sram_control.v"))) {
+        rtl_path_ = cwd_tech;
         cur_path_ = get_current_dir_name();
     } else {
-        rtl_path_ = join_path(cur_path_, "tech/verilog_sp");
+        rtl_path_ = join_path(cur_path_, verilog_subdir);
     }
     // Syn path must match SpiceIntegrator's CWD-based tmp (repo/tmp) so downstream can find netlist
     syn_path_ = join_path(get_current_dir_name(), "tmp/syn_" + get_run_timestamp());
@@ -76,13 +76,21 @@ std::string YosysManager::generate_parameter_string() const {
     std::ostringstream oss;
     oss << "ADDR_WIDTH=" << addr_width
         << ",NUM_WL=" << cli_options_.num_wls
-        << ",NUM_BANK=" << cli_options_.num_banks;
+        << ",NUM_BANK=" << cli_options_.num_banks
+        << ",COLUMN_MUX=" << cli_options_.num_rows_per_mux;
+    if (!cli_options_.single_port) {
+        oss << ",WL_BUF=" << cli_options_.num_wl_buf
+            << ",SAE_BUF=" << cli_options_.num_sae_buf;
+    }
     return oss.str();
 }
 
 std::string YosysManager::generate_yosys_script() const {
     OpenFinRAM::YosysTclGenerator gen;
     std::string platform = cli_options_.platform_path;
+    if (!platform.empty() && platform.front() != '/') {
+        platform = join_path(get_current_dir_name(), platform);
+    }
     std::string tech_lib = join_path(cur_path_, "tech/lib");
     return gen.generate_script(
         rtl_path_, syn_path_, generate_parameter_string(),
@@ -91,7 +99,8 @@ std::string YosysManager::generate_yosys_script() const {
         cli_options_.num_rows_per_mux,
         cli_options_.num_wl_buf, cli_options_.num_sae_buf,
         abc_output_load_ff(), kAbcDelayTargetPs,
-        platform, tech_lib);
+        platform, tech_lib,
+        cli_options_.single_port);
 }
 
 double YosysManager::abc_output_load_ff() const {
@@ -122,15 +131,23 @@ bool YosysManager::generate_timing_constraints() const {
         return false;
     }
     sdc << "# OpenFinRAM ctrl_decode constraints; time=ns capacitance=pF\n";
+    sdc << "# mode: " << (cli_options_.single_port ? "single-port" : "dual-port") << "\n";
     sdc << "create_clock -name clk -period " << std::fixed
         << std::setprecision(3) << kClockPeriodNs << " [get_ports {clk}]\n";
     sdc << "set_clock_uncertainty " << kClockUncertaintyNs
         << " [get_clocks {clk}]\n";
     sdc << "set_input_transition " << kInputSlewNs << " [all_inputs]\n";
-    sdc << "set_input_delay -clock clk -max " << kIoDelayNs
-        << " [get_ports -quiet {ce_n we_n oe_n A* sdel*}]\n";
-    sdc << "set_input_delay -clock clk -min " << kInputMinDelayNs
-        << " [get_ports -quiet {ce_n we_n oe_n A* sdel*}]\n";
+    if (cli_options_.single_port) {
+        sdc << "set_input_delay -clock clk -max " << kIoDelayNs
+            << " [get_ports -quiet {ce_n we_n oe_n A* sdel*}]\n";
+        sdc << "set_input_delay -clock clk -min " << kInputMinDelayNs
+            << " [get_ports -quiet {ce_n we_n oe_n A* sdel*}]\n";
+    } else {
+        sdc << "set_input_delay -clock clk -max " << kIoDelayNs
+            << " [get_ports -quiet {ce_n_A ce_n_B we_n_A oe_n_A oe_n_B A_A* A_B* rst_n}]\n";
+        sdc << "set_input_delay -clock clk -min " << kInputMinDelayNs
+            << " [get_ports -quiet {ce_n_A ce_n_B we_n_A oe_n_A oe_n_B A_A* A_B* rst_n}]\n";
+    }
     sdc << "set_output_delay -clock clk -max " << kIoDelayNs
         << " [all_outputs]\n";
     sdc << "set_output_delay -clock clk -min " << kOutputMinDelayNs
@@ -174,7 +191,8 @@ bool YosysManager::generate_timing_constraints() const {
 
 bool YosysManager::generate_synthesis_script() {
     LOGD << std::string(70, '=');
-    LOGD << "Generating Yosys Synthesis Script (open-source ASAP7 single-port)";
+    LOGD << "Generating Yosys Synthesis Script (open-source ASAP7 "
+         << (cli_options_.single_port ? "single-port" : "dual-port") << ")";
     LOGD << std::string(70, '=');
 
     if (!directory_exists(syn_path_)) {
@@ -252,51 +270,94 @@ bool YosysManager::verify_periphery_structure() {
         count_occurrences(text, "DFFHQNx1_ASAP7_75t_R") +
         count_occurrences(text, "DFFHQNx2_ASAP7_75t_R") +
         count_occurrences(text, "DFFHQNx3_ASAP7_75t_R");
-    const std::size_t invx1_count =
-        count_occurrences(text, "INVx1_ASAP7_75t_R");
-    const std::size_t bufx4_count =
-        count_occurrences(text, "BUFx4_ASAP7_75t_R");
-    std::size_t sdel_d_count = 0;
-    for (unsigned bit = 0; bit < 4; ++bit) {
-        sdel_d_count += count_occurrences(
-            text, ".D(sdel[" + std::to_string(bit) + "])");
-    }
 
-    const std::size_t expected_dffs =
-        static_cast<std::size_t>(get_addr_width(cli_options_) + 7);
-    constexpr std::size_t kExpectedDelayInverters = 108;
-    const std::size_t expected_wl_drivers =
-        static_cast<std::size_t>(2 * cli_options_.num_wls * cli_options_.num_banks);
-    const bool pass = dff_count == expected_dffs &&
-                      invx1_count >= kExpectedDelayInverters &&
-                      bufx4_count >= expected_wl_drivers &&
-                      sdel_d_count == 4;
+    if (cli_options_.single_port) {
+        const std::size_t invx1_count =
+            count_occurrences(text, "INVx1_ASAP7_75t_R");
+        const std::size_t bufx4_count =
+            count_occurrences(text, "BUFx4_ASAP7_75t_R");
+        std::size_t sdel_d_count = 0;
+        for (unsigned bit = 0; bit < 4; ++bit) {
+            sdel_d_count += count_occurrences(
+                text, ".D(sdel[" + std::to_string(bit) + "])");
+        }
 
-    const std::string report_path = syn_path_ + "/periphery_structure.rpt";
-    std::ofstream report(report_path);
-    if (report.is_open()) {
-        report << "dff_count " << dff_count << " expected " << expected_dffs << "\n";
-        report << "invx1_count " << invx1_count << " expected_min "
-               << kExpectedDelayInverters << "\n";
-        report << "bufx4_wordline_drivers " << bufx4_count << " expected_min "
-               << expected_wl_drivers << "\n";
-        report << "sdel_register_inputs " << sdel_d_count << " expected 4\n";
-        report << "status " << (pass ? "PASS" : "FAIL") << "\n";
-    }
+        const std::size_t expected_dffs =
+            static_cast<std::size_t>(get_addr_width(cli_options_) + 7);
+        constexpr std::size_t kExpectedDelayInverters = 108;
+        const std::size_t expected_wl_drivers =
+            static_cast<std::size_t>(2 * cli_options_.num_wls * cli_options_.num_banks);
+        const bool pass = dff_count == expected_dffs &&
+                          invx1_count >= kExpectedDelayInverters &&
+                          bufx4_count >= expected_wl_drivers &&
+                          sdel_d_count == 4;
 
-    if (!pass) {
-        LOGE << "Periphery structural signoff failed: DFF=" << dff_count
-             << "/" << expected_dffs << ", INVx1=" << invx1_count
-             << "/>=108, BUFx4=" << bufx4_count << "/>="
-             << expected_wl_drivers << ", sdel D pins=" << sdel_d_count << "/4 (see "
-             << report_path << ")";
-        return false;
+        const std::string report_path = syn_path_ + "/periphery_structure.rpt";
+        std::ofstream report(report_path);
+        if (report.is_open()) {
+            report << "dff_count " << dff_count << " expected " << expected_dffs << "\n";
+            report << "invx1_count " << invx1_count << " expected_min "
+                   << kExpectedDelayInverters << "\n";
+            report << "bufx4_wordline_drivers " << bufx4_count << " expected_min "
+                   << expected_wl_drivers << "\n";
+            report << "sdel_register_inputs " << sdel_d_count << " expected 4\n";
+            report << "status " << (pass ? "PASS" : "FAIL") << "\n";
+        }
+
+        if (!pass) {
+            LOGE << "Periphery structural signoff failed: DFF=" << dff_count
+                 << "/" << expected_dffs << ", INVx1=" << invx1_count
+                 << "/>=108, BUFx4=" << bufx4_count << "/>="
+                 << expected_wl_drivers << ", sdel D pins=" << sdel_d_count << "/4 (see "
+                 << report_path << ")";
+            return false;
+        }
+        LOGI << "Periphery structural signoff PASS: " << dff_count
+             << " state flops, " << invx1_count
+             << " INVx1 cells, " << bufx4_count
+             << " BUFx4 drivers, all sdel bits retained";
+        return true;
+    } else {
+        // Dual-port DP: BUFx2 delay chain, async-reset flops (DFFASR)
+        // Count any DFF variant (DFFHQN for plain, DFFASR for reset).
+        std::size_t dff_asr_count = count_occurrences(text, "DFFASRHQN");
+        std::size_t dff_total = dff_count + dff_asr_count;
+        const std::size_t bufx2_count =
+            count_occurrences(text, "BUFx2_ASAP7_75t_R");
+        const std::size_t expected_bufx2 =
+            static_cast<std::size_t>(2 * (cli_options_.num_wl_buf + cli_options_.num_sae_buf));
+        const std::size_t expected_dffs =
+            static_cast<std::size_t>(2 * get_addr_width(cli_options_) + 3);
+        const std::size_t named_delay_count =
+            count_occurrences(text, "physical_dp_delay_");
+
+        const bool pass = dff_total == expected_dffs &&
+                          named_delay_count == expected_bufx2;
+
+        const std::string report_path = syn_path_ + "/periphery_structure.rpt";
+        std::ofstream report(report_path);
+        if (report.is_open()) {
+            report << "mode dual-port\n";
+            report << "dff_count " << dff_total << " expected " << expected_dffs << "\n";
+            report << "  dff_hqn=" << dff_count << " dff_asr=" << dff_asr_count << "\n";
+            report << "bufx2_total " << bufx2_count << "\n";
+            report << "named_delay_bufx2 " << named_delay_count << " expected "
+                   << expected_bufx2 << "\n";
+            report << "status " << (pass ? "PASS" : "FAIL") << "\n";
+        }
+
+        if (!pass) {
+            LOGE << "Periphery structural signoff failed (DP): DFF=" << dff_total
+                 << " (HQN=" << dff_count << " ASR=" << dff_asr_count << ") /" << expected_dffs
+                 << ", named delay BUFx2=" << named_delay_count << "/" << expected_bufx2
+                 << " (total BUFx2=" << bufx2_count << "; see " << report_path << ")";
+            return false;
+        }
+        LOGI << "Periphery structural signoff PASS (DP): " << dff_total
+             << " state/address flops, " << named_delay_count
+             << " protected BUFx2 delay cells";
+        return true;
     }
-    LOGI << "Periphery structural signoff PASS: " << dff_count
-         << " state flops, " << invx1_count
-         << " INVx1 cells, " << bufx4_count
-         << " BUFx4 drivers, all sdel bits retained";
-    return true;
 }
 
 bool YosysManager::fix_assign_statements() {
@@ -334,16 +395,24 @@ bool YosysManager::predict_capacitance() {
     LOGD << std::string(70, '=');
     LOGD << "Predicting Capacitance (Yosys path)";
     LOGD << std::string(70, '=');
-    LOGD << "  Configuration: num_wls*2=" << cli_options_.num_wls * 2 << ", num_data_bits=" << cli_options_.num_data_bits;
+    LOGD << "  Configuration: num_wls*2=" << cli_options_.num_wls * 2 << ", num_data_bits=" << cli_options_.num_data_bits
+         << ", single_port=" << cli_options_.single_port;
     OpenFinRAM::CapacitancePredictor predictor;
     auto predictions = predictor.predict_all(cli_options_.num_wls * 2, cli_options_.num_data_bits);
     std::map<std::string, std::vector<std::string>> signal_map;
-    // single-port focused
-    signal_map["WLT"] = {"wlt", "wlb"};
-    signal_map["YSELT"] = {"yselt", "yseltn", "yselb", "yselbn"};
-    signal_map["BLPRECHTN"] = {"blprechtn", "blprechbn"};
-    signal_map["WRENA"] = {"wrena", "wrenan"};
-    signal_map["SAE"] = {"sae", "saprechn", "oeb_out", "oe_out"};
+    if (cli_options_.single_port) {
+        signal_map["WLT"] = {"wlt", "wlb"};
+        signal_map["YSELT"] = {"yselt", "yseltn", "yselb", "yselbn"};
+        signal_map["BLPRECHTN"] = {"blprechtn", "blprechbn"};
+        signal_map["WRENA"] = {"wrena", "wrenan"};
+        signal_map["SAE"] = {"sae", "saprechn", "oeb_out", "oe_out"};
+    } else {
+        signal_map["WLT"] = {"wlt_A", "wlt_B", "wlb_A", "wlb_B"};
+        signal_map["YSELT"] = {"yselt_A", "yseltn_A", "yselb_A", "yselbn_A", "yselt_B", "yseltn_B", "yselb_B", "yselbn_B"};
+        signal_map["BLPRECHTN"] = {"blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B"};
+        signal_map["WRENA"] = {"wrena_A", "wrenan_A"};
+        signal_map["SAE"] = {"sae_A", "sae_B", "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"};
+    }
     for (auto &pred : predictions) {
         auto it = signal_map.find(pred.first);
         if (it != signal_map.end()) {
@@ -357,7 +426,7 @@ bool YosysManager::predict_capacitance() {
 
 bool YosysManager::run_synthesis() {
     LOGD << std::string(70, '#');
-    LOGD << "# Yosys Synthesis Flow (single-port ASAP7)";
+    LOGD << "# Yosys Synthesis Flow (" << (cli_options_.single_port ? "single-port" : "dual-port") << " ASAP7)";
     LOGD << std::string(70, '#');
     if (!predict_capacitance()) return false;
     if (!generate_synthesis_script()) return false;

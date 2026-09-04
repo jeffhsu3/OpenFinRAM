@@ -36,13 +36,15 @@ public:
     std::string generate_floorplan_command(double& w, double& h) const;
 
     // main TCL for OpenROAD flow (replaces Innovus run.tcl)
+    // single_port=true keeps SP checks (sdel, 108 INVx1). false for DP 8T.
     bool generate_run_tcl(double width, double height,
                           const std::string& output_file,
                           int num_wlt, int num_wlb, int num_ysel,
                           int addr_width, int num_mux,
                           bool spice_only, double col_width,
                           const std::string& platform_path,
-                          const std::string& tech_root) const;
+                          const std::string& tech_root,
+                          bool single_port = true) const;
 
     bool run_openroad(const std::string& tcl_file,
                       const std::string& work_dir,

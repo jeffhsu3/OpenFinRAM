@@ -66,7 +66,8 @@ int main(int argc, char **argv) {
 
     // Run synthesis flow (open-source Yosys or commercial Design Compiler)
     if (cli_options.use_yosys || cli_options.openroad_only) {
-        LOGI << "=== Running Yosys Synthesis (OpenROAD single-port ASAP7) ===";
+        LOGI << "=== Running Yosys Synthesis (OpenROAD ASAP7"
+             << (cli_options.single_port ? " single-port" : " dual-port") << ") ===";
         YosysManager yosys_manager(cli_options);
         if (!yosys_manager.run_synthesis()) {
             LOGE << "Yosys periphery synthesis/signoff failed.";
@@ -81,7 +82,9 @@ int main(int argc, char **argv) {
 
     // Run P&R flow (OpenROAD or Innovus)
     if (cli_options.use_openroad || cli_options.openroad_only) {
-        LOGI << "=== Running OpenROAD P&R (single-port ASAP7, platform/asap7) ===";
+        LOGI << "=== Running OpenROAD P&R ("
+             << (cli_options.single_port ? "single-port" : "dual-port")
+             << " ASAP7, platform/asap7) ===";
         OpenRoadManager openroad_manager(cli_options);
         if (!openroad_manager.run_openroad_flow()) {
             LOGE << "OpenROAD periphery implementation/STA failed.";

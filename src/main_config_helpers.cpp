@@ -55,7 +55,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .scan<'u', unsigned>();
 
     program.add_argument("--use-yosys")
-        .help("Use Yosys for synthesis (open-source, instead of Design Compiler). Implies --single-port ASAP7 flow.")
+        .help("Use Yosys for synthesis (open-source, instead of Design Compiler).")
         .default_value(false)
         .implicit_value(true);
 
@@ -65,7 +65,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .implicit_value(true);
 
     program.add_argument("--openroad")
-        .help("Alias for --use-yosys --use-openroad (single-port ASAP7 open-source flow).")
+        .help("Alias for --use-yosys --use-openroad (ASAP7 open-source flow).")
         .default_value(false)
         .implicit_value(true);
 
@@ -140,10 +140,10 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     if (options.platform_path.empty()) {
         options.platform_path = options.openroad_path + "/platform/asap7";
     }
-    // open-source flow is single-port focused; warn if dual-port requested
     if ((options.use_yosys || options.use_openroad) && !options.single_port) {
-        LOGW << "OpenROAD/Yosys flow is validated for --single-port; forcing single_port=true";
-        options.single_port = true;
+        LOGI << "Open-source flow in dual-port (8T) mode";
+    } else if ((options.use_yosys || options.use_openroad) && options.single_port) {
+        LOGI << "Open-source flow in single-port (6T) mode";
     }
 
     if (options.num_wls % 2 != 0) {

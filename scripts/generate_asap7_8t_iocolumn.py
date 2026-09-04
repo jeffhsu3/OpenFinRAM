@@ -32,7 +32,7 @@ M1, V1, M2, V2, M3, V3, M4, V4, M5, V5, M6, V6, M7 = (
     19, 21, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70
 )
 MUX_ROWS = 4
-GAP_WIDTH = 0.216
+GAP_WIDTH = 0.108
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
 
 

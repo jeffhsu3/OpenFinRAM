@@ -33,9 +33,9 @@ M1 VDD VSS VSS VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
 M2 VSS VDD VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
 M3 VDD VSS VDD VDD pmos_sram L=2e-08 W=2.7e-08 nfin=1
 M4 VSS WLA RBLA VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M5 VDD WLA RBLAN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M5 VDD WLA VDD  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
 M6 VSS WLB RBLB VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
-M7 VDD WLB RBLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
+M7 VDD WLB VDD  VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
 .ENDS)";
 }
 

@@ -6,7 +6,7 @@
 #include "main_config_helpers.hpp"
 
 /**
- * Manages Yosys synthesis for open-source ASAP7 flow (single-port).
+ * Manages Yosys synthesis for the open-source ASAP7 single- and dual-port flows.
  * Mirrors SynthesisManager API but emits Yosys script instead of DC TCL.
  */
 class YosysManager {

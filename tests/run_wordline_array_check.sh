@@ -36,4 +36,10 @@ nonstandard="$scratch/sram_wordline_arrays_x18_m2.gds"
 "$python_bin" "$generator" --word-lines 18 --mux-rows 2 --output "$nonstandard"
 "$python_bin" "$generator" --word-lines 18 --mux-rows 2 --verify "$nonstandard"
 
-echo "PASS: parameterized 8T/6T wordline rows, arrays, and 8T IO pitch"
+# Well/substrate taps interleaved into the 8T rows.  The tap hands every
+# bitline through, so the abutment probes must still find them continuous.
+tapped="$scratch/sram_wordline_arrays_tap8.gds"
+"$python_bin" "$generator" --word-lines 32 --tap-pitch 8 --output "$tapped"
+"$python_bin" "$generator" --word-lines 32 --tap-pitch 8 --verify "$tapped"
+
+echo "PASS: parameterized 8T/6T wordline rows, arrays, taps, and 8T IO pitch"

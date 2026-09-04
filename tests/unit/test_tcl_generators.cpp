@@ -124,6 +124,36 @@ TEST(YosysTclGeneratorGoldenTest, GenerateScriptMatchesGolden) {
     expect_matches_golden("yosys_synth_ref.ys", script);
 }
 
+TEST(YosysTclGeneratorTest, DualPortChecksAndNamesExactPhysicalStructure) {
+    YosysTclGenerator gen;
+    const std::string script = gen.generate_script(
+        /*rtl_path=*/std::string(REPO_ROOT) + "/tech/verilog_dp",
+        /*syn_path=*/"tmp/syn_dp_fixed",
+        /*param_str=*/"ADDR_WIDTH=6,NUM_WL=8,NUM_BANK=2,COLUMN_MUX=4,WL_BUF=3,SAE_BUF=2",
+        /*addr_width=*/6,
+        /*num_wls=*/8,
+        /*num_banks=*/2,
+        /*column_mux=*/4,
+        /*num_wl_buf=*/3,
+        /*num_sae_buf=*/2,
+        /*abc_load_ff=*/24.5,
+        /*abc_delay_ps=*/2500.0,
+        /*platform_path=*/"",
+        /*tech_lib_path=*/std::string(REPO_ROOT) + "/tech/lib",
+        /*single_port=*/false);
+
+    EXPECT_NE(script.find("-set WL_BUF 3 -set SAE_BUF 2 ctrl_decode"),
+              std::string::npos);
+    EXPECT_NE(script.find("select -assert-count 15 t:*DFF*ASAP7_75t_R"),
+              std::string::npos);  // 2 * addr_width + 3 state bits
+    EXPECT_NE(script.find("select -assert-count 10 t:BUFx2_ASAP7_75t_R "
+                          "a:physical_dp_delay %i"),
+              std::string::npos);  // 2 * (WL_BUF + SAE_BUF)
+    EXPECT_NE(script.find("rename -enumerate -pattern physical_dp_delay_%"),
+              std::string::npos);
+    EXPECT_EQ(script.find("select -assert-min 108"), std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // OpenRoadTclGenerator: floorplan math + QoR parsing (pure functions)
 // ---------------------------------------------------------------------------
@@ -194,6 +224,37 @@ TEST(OpenRoadTclGeneratorGoldenTest, RunTclMatchesGolden) {
         /*platform_path=*/fake_platform, /*tech_root=*/tech_root));
 
     expect_matches_golden("openroad_run_ref.tcl", read_file(out));
+}
+
+TEST(OpenRoadTclGeneratorTest, DualPortProtectsDelayCellsAndRejectsNegativeHold) {
+    OpenRoadTclGenerator gen;
+    gen.set_design_name("ctrl_decode");
+    gen.set_site_name("asap7sc7p5t");
+    gen.set_site_height(0.27);
+    ASSERT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+
+    const std::string out =
+        (std::filesystem::temp_directory_path() / "or_run_tcl_dp_test" / "run.tcl").string();
+    ASSERT_TRUE(gen.generate_run_tcl(
+        /*width=*/15.0, /*height=*/0.0, /*output_file=*/out,
+        /*num_wlt=*/8, /*num_wlb=*/8, /*num_ysel=*/4,
+        /*addr_width=*/6, /*num_mux=*/2,
+        /*spice_only=*/false, /*col_width=*/7.5,
+        /*platform_path=*/"/nonexistent/platform/asap7",
+        /*tech_root=*/std::string(REPO_ROOT) + "/tech",
+        /*single_port=*/false));
+
+    const std::string script = read_file(out);
+    EXPECT_NE(script.find("set dp_delay_cells [get_cells -hierarchical -quiet "
+                          "{physical_dp_delay_*}]"),
+              std::string::npos);
+    EXPECT_NE(script.find("set_dont_touch $dp_delay_cells"), std::string::npos);
+    EXPECT_NE(script.find("buffer_ports -outputs -buffer_cell BUFx2_ASAP7_75t_R"),
+              std::string::npos);
+    EXPECT_NE(script.find("DP delay topology changed during implementation"),
+              std::string::npos);
+    EXPECT_NE(script.find("if {$hold_slack < -0.001}"), std::string::npos);
+    EXPECT_EQ(script.find("if {$hold_slack < -0.010}"), std::string::npos);
 }
 
 }  // namespace OpenFinRAM

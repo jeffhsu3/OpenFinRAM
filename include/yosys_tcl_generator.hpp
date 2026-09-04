@@ -28,6 +28,8 @@ public:
         const std::string& tech_lib_path);
 
     // Build the Yosys synthesis script content
+    // single_port=true preserves the historical single-port path (SP goldens)
+    // single_port=false emits the dual-port 8T path (tech/verilog_dp).
     std::string generate_script(
         const std::string& rtl_path,
         const std::string& syn_path,
@@ -41,7 +43,8 @@ public:
         double abc_load_ff,
         double abc_delay_ps,
         const std::string& platform_path,
-        const std::string& tech_lib_path) const;
+        const std::string& tech_lib_path,
+        bool single_port = true) const;
 };
 
 } // namespace OpenFinRAM
