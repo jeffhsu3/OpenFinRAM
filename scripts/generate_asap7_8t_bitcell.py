@@ -75,6 +75,42 @@ SRAMVT = 110
 PIN_TEXTTYPE = 251
 MARKER_LAYERS = {SRAMDRC, BOUNDARY, SRAMVT}
 
+# Device sizing, as fin counts.  All eight devices share one gate pitch, so L
+# is common to every channel and a fin-count ratio *is* a width ratio is a
+# drive-strength ratio.  These are the single source of truth: verify_topology
+# asserts the extracted GDS against them, so changing a number here without
+# changing the layout fails, and vice versa.
+#
+# The values are inherited from the published sram_cell_6t_122 -- build_cell
+# only *adds* two access devices to that core -- rather than chosen for
+# dual-port operation.  See CELL_RATIO below for why that matters.
+PULLDOWN_NFIN = 2
+ACCESS_NFIN = 2
+PULLUP_NFIN = 1
+
+# Cell ratio (pull-down / access) sets read stability.  During a read the
+# access device lifts the storage-low node while the pull-down holds it down;
+# the ratio decides how far it rises before the latch is at risk.
+CELL_RATIO = PULLDOWN_NFIN / ACCESS_NFIN
+
+# ...but this is a *dual-port* cell and both ports land on the same storage
+# nodes.  With WLA and WLB both asserted -- which the macro contract permits,
+# both for same-address read/read and for a row half-selected on both ports --
+# two access devices load one pull-down, so the effective ratio halves.
+CONCURRENT_CELL_RATIO = PULLDOWN_NFIN / (2 * ACCESS_NFIN)
+
+# Pull-up ratio (pull-up / access) sets write-ability: the access device has to
+# overpower the pull-up holding the storage-high node.  Lower is easier to
+# write, so unlike CELL_RATIO a small number here is not a concern.
+PULLUP_RATIO = PULLUP_NFIN / ACCESS_NFIN
+
+# Textbook guidance for a 6T single-port read is 1.5-2.0.  We are at 1.0, and
+# half that with both ports selected.  This is a warning rather than an assert
+# because failing here would only stop the cell being generated at all; the
+# real gate is measured read SNM.  Promote it to an assertion once
+# tests/run_8t_stability_check.sh has numbers to back a bound.
+RECOMMENDED_MIN_CELL_RATIO = 1.5
+
 # Coordinates are micrometers.  Port B grows the cell north/south while the
 # east/west pitch remains the published 108 nm 6T pitch.  As in the official
 # bitcell, FIN, select, ACTIVE, and horizontal rails deliberately overhang the
@@ -839,8 +875,9 @@ def verify_topology(cell: gdstk.Cell) -> None:
         for device in selected:
             terms = set(device["terminals"])
             _assert(not device["pmos"], f"{wordline} access device is not NMOS")
-            _assert(device["nfin"] == 2,
-                    f"{wordline} access device is {device['nfin']}-fin, not nfin=2")
+            _assert(device["nfin"] == ACCESS_NFIN,
+                    f"{wordline} access device is {device['nfin']}-fin, not "
+                    f"nfin={ACCESS_NFIN}")
             matches = [pin for pin in bitlines if next(iter(labels[pin])) in terms]
             _assert(len(matches) == 1,
                     f"{wordline} access device is not tied to one {bitlines} bitline")
@@ -869,7 +906,7 @@ def verify_topology(cell: gdstk.Cell) -> None:
                 "storage inverter is not one PMOS plus one NMOS")
         for device in inverter:
             terms = set(device["terminals"])
-            expected_fins = 1 if device["pmos"] else 2
+            expected_fins = PULLUP_NFIN if device["pmos"] else PULLDOWN_NFIN
             _assert(device["nfin"] == expected_fins,
                     f"inverter {'pull-up' if device['pmos'] else 'pull-down'} is "
                     f"{device['nfin']}-fin, not nfin={expected_fins}")
@@ -883,6 +920,36 @@ def verify_topology(cell: gdstk.Cell) -> None:
             "expected 2 PMOS devices")
     _assert(sum(not device["pmos"] for device in devices) == 6,
             "expected 6 NMOS devices")
+
+
+def sizing_report() -> list[str]:
+    """The cell's strength ratios, derived from the sizing constants.
+
+    Every device shares one gate pitch, so fin counts alone fix these ratios;
+    verify_topology has already asserted the extracted GDS matches the
+    constants, so reporting from the constants reports the layout.
+
+    This is deliberately printed on every --verify rather than buried, because
+    the numbers are the argument for or against the macro's concurrent-access
+    contract and were previously stated nowhere at all.
+    """
+    lines = [
+        f"pull-down nfin={PULLDOWN_NFIN}, access nfin={ACCESS_NFIN}, "
+        f"pull-up nfin={PULLUP_NFIN} (shared L, one gate pitch)",
+        f"cell ratio (pull-down/access)      = {CELL_RATIO:.2f}",
+        f"  with both ports selected         = {CONCURRENT_CELL_RATIO:.2f}",
+        f"pull-up ratio (pull-up/access)     = {PULLUP_RATIO:.2f}",
+    ]
+    if CELL_RATIO < RECOMMENDED_MIN_CELL_RATIO:
+        lines.append(
+            f"WARNING: cell ratio {CELL_RATIO:.2f} is below the "
+            f"{RECOMMENDED_MIN_CELL_RATIO:.2f} usually recommended for a "
+            f"single-port read, and both ports selected halves it to "
+            f"{CONCURRENT_CELL_RATIO:.2f}.  docs/asap7_8t_bitcell.md declares "
+            f"same-address read/read legal, so this is the sizing that "
+            f"contract rests on.  Measure it: "
+            f"ctest -R asap7_8t_stability_check")
+    return lines
 
 
 def verify_dummy_topology(cell: gdstk.Cell) -> None:
@@ -1308,6 +1375,8 @@ def main(argv: list[str]) -> int:
         if args.verify:
             digest = verify_gds(args.verify)
             print(f"PASS {args.verify}: {CELL_NAME}, topology=8T, sha256={digest}")
+            for line in sizing_report():
+                print(f"  {line}")
             return 0
 
         if args.verify_edges:

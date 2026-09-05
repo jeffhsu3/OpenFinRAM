@@ -132,6 +132,12 @@ Liberty marks the exact control-and-address combination with the cell-level
 `contention_condition` attribute and repeats the restriction in its comment.
 Integrators must prevent that condition before the macro boundary.
 
+The same-address read/read half of that contract is backed by measurement, not
+assumption: see "Measured stability" below. Concurrent dual-port read holds
+101 mV of static noise margin at the worst corner, about 79% of the
+single-port figure — with the caveat, stated there, that these are nominal
+corner values and carry no mismatch or yield claim.
+
 The physical `iocolgrp_sram_8t` implements that composite contract. It places
 the A and B wrappers side by side with 0.144 um routing gaps at each outside
 edge and between the cores. Port B passes across the A wrapper on M4; the A
@@ -150,6 +156,92 @@ per-port sense phase.
 - Port B: `BLB`/`BLBN` on M4 and `WLB` on M5
 - Supplies: the published core's `vdd!`/`vss!` interface
 - Device count: 2 PMOS and 6 NMOS
+
+## Device sizing and strength ratios
+
+Every channel sits on one gate pitch, so `L` is common to all eight devices and
+a fin-count ratio is a width ratio is a drive-strength ratio.
+
+| Devices | Role | `nfin` | Model |
+| --- | --- | --- | --- |
+| M0, M1 | pull-down (driver) | 2 | `nmos_sram` |
+| M2, M3 | pull-up (load) | 1 | `pmos_sram` |
+| M4–M7 | access, **both ports** | 2 | `nmos_sram` |
+
+| Ratio | Value | Governs |
+| --- | --- | --- |
+| Cell ratio, pull-down / access | **1.00** | read stability, one port selected |
+| Cell ratio, **both ports selected** | **0.50** | read stability under concurrent access |
+| Pull-up ratio, pull-up / access | 0.50 | write-ability (lower is easier to write) |
+
+These derive from `PULLDOWN_NFIN` / `ACCESS_NFIN` / `PULLUP_NFIN` in
+`scripts/generate_asap7_8t_bitcell.py`, which `verify_topology()` asserts
+against the extracted GDS — the constants and the layout cannot drift apart,
+and `--verify` prints the ratios on every run.
+
+**The sizing is inherited, not chosen.** `build_cell()` only *adds* two access
+devices to the published `sram_cell_6t_122` core, so these widths were picked
+for a single-port 6T. A cell ratio of 1.00 is already aggressive against the
+1.5–2.0 usually recommended for a 6T read, and because both ports land on the
+same storage nodes, asserting `WLA` and `WLB` together puts two access devices
+against one pull-down and halves it to 0.50.
+
+That matters here specifically because the macro contract below declares
+same-address read/read **legal**, and a row half-selected on both ports sees
+the same bias. Whether 0.50 is survivable is a measurement, not an argument —
+so it was measured.
+
+## Measured stability
+
+`tests/run_8t_stability_check.sh` (ctest `asap7_8t_stability_check`) measures
+the bitcell alone, with no periphery, so a failure points at the cell. Static
+noise margin comes from a DC butterfly reduced to its largest inscribed square;
+write margin is the bitline voltage at which a quasi-static ramp flips the
+latch, so the margin is VDD minus that.
+
+| Corner | VDD / T | Hold SNM | Read SNM, 1 port | **Read SNM, both ports** | Write margin |
+| --- | --- | --- | --- | --- | --- |
+| SS | 0.63 V / 125 °C | 260.2 mV | 128.7 mV | **101.1 mV** | 0.426 V (68% of VDD) |
+| TT | 0.70 V / 25 °C | 307.5 mV | 148.7 mV | **116.3 mV** | 0.465 V (66% of VDD) |
+| FF | 0.77 V / −40 °C | 346.3 mV | 161.6 mV | **119.9 mV** | 0.494 V (64% of VDD) |
+
+Port A and port B write trips are bit-identical at every corner, which is the
+2RW symmetry claim stated as a measurement rather than asserted.
+
+**Concurrent dual-port read costs about a fifth of the read margin, not half.**
+The ratio is 0.79 / 0.78 / 0.74 at SS / TT / FF — notably stable across
+corners, so it is a property of the topology rather than of one operating
+point. The static cell-ratio argument above predicts 0.50 because it compares
+access against pull-down current at a single operating point; SNM integrates
+the whole transfer curve, and the pull-down's drive rises as its V<sub>ds</sub>
+does. The raw disturbed low level shows the same sublinearity: adding the
+second access device lifts it from 17.0% to 24.7% of VDD at TT, a factor of
+1.45 rather than 2.
+
+**Verdict on the contract: supportable as written.** 101 mV at the worst corner
+is a real positive margin, and the write path is comfortable everywhere. The
+`contention_condition` restriction below stands on its own logic — a
+same-address write really is undefined — and nothing in these numbers argues
+for narrowing the read/read case.
+
+**What this does not establish.** These are nominal corner values: the centre
+of a distribution whose width is unmeasured. SRAM stability is a mismatch
+property, and `docs/characterization_plan.md` puts Monte Carlo out of scope, so
+there is no Vmin or yield claim here and none should be read into the table.
+The 88 mV floor the gate enforces is a regression guard, not a spec. A cell
+ratio of 1.00 leaves less headroom against mismatch than a conventional 1.5–2.0
+would, and that remains the open risk — quantifying it needs the statistical
+work that is deliberately not in this plan.
+
+Two measurement notes worth keeping, because both were silent failures:
+
+- Xyce rejects `.temp` as an unrecognised dot line, so a deck using it runs at
+  the default 27 °C whatever its corner label says. Temperature is not a small
+  effect — dual-port read SNM moves 129 → 91 mV from −40 to 125 °C on the TT
+  card alone. Use `.OPTIONS DEVICE TEMP=`.
+- The ASAP7 card declares `version = 107`, a parameter Xyce ignores, so the
+  `level` is the only thing selecting the BSIM-CMG equations. Level 107 matches
+  the extraction; at level 110 `nmos_sram` I<sub>on</sub> shifts 7.2%.
 
 Port B uses M4/M5 so its routes cross the dense published M2/M3 core without
 electrical contact. The cell retains the official core's 108 nm east/west

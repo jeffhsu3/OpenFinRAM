@@ -142,6 +142,23 @@ if(BUILD_TESTING)
         SKIP_RETURN_CODE 77
     )
 
+    # Cell-level stability for the true-dual-port 8T: write margin per port,
+    # and read static noise margin with one port versus both ports selected.
+    # The macro contract declares concurrent same-address read/read legal and
+    # the cell's strength ratios are inherited from the single-port 6T, so
+    # this is the measurement that contract rests on.  Bitcell only, no
+    # periphery, so a failure points at the cell.  Skips without Xyce.
+    add_test(
+        NAME asap7_8t_stability_check
+        COMMAND ${CMAKE_COMMAND} -E env
+            IOPRECH_SPICE_DUMPER=$<TARGET_FILE:dump_8t_ioprech_spice>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_8t_stability_check.sh
+    )
+    set_tests_properties(asap7_8t_stability_check PROPERTIES
+        TIMEOUT 1200
+        SKIP_RETURN_CODE 77
+    )
+
     # Academic-style sramcol_xN / array_xNxM hierarchy for parameterized 8T
     # wordlines, with the same builder covering non-standard 6T sizes.
     add_test(

@@ -26,3 +26,39 @@ require_xyce() {
         exit 77
     fi
 }
+
+# Assert a Xyce .measure result falls inside an inclusive window, and echo it
+# so a passing run reads as a table rather than as silence.
+#
+#   check_measure <measure-file> <NAME> <min> <max> [units]
+#
+# <measure-file> is whatever Xyce wrote: .mt0 for transient measures, .ms0 for
+# DC ones.  It also accepts any "NAME = value" file, which is what the
+# post-processors emit, so a derived quantity is bounded the same way a raw
+# measure is.  Names are matched exactly and Xyce upcases them, so pass the
+# uppercase form.  [units] defaults to V and is only a display label.
+# The float comparison runs in awk because bash cannot do it.
+#
+# run_8t_ioprech_spice_check.sh predates this and carries its own identical
+# copy, which shadows this one when that script runs.  That copy can go
+# whenever someone is editing that file anyway; it is left alone here so this
+# addition cannot perturb a passing gate.
+check_measure() {
+    local measures="$1"
+    local name="$2"
+    local minimum="$3"
+    local maximum="$4"
+    local units="${5:-V}"
+    local value
+    value="$(awk -v key="$name" '$1 == key { print $3 }' "$measures")"
+    if [ -z "$value" ]; then
+        echo "FAIL: $name was not measured in $measures" >&2
+        exit 1
+    fi
+    if ! awk -v value="$value" -v lo="$minimum" -v hi="$maximum" \
+        'BEGIN { exit !(value >= lo && value <= hi) }'; then
+        echo "FAIL: $name=$value, expected [$minimum, $maximum]" >&2
+        exit 1
+    fi
+    printf '  %-18s %s %s\n' "$name" "$value" "$units"
+}

@@ -35,8 +35,11 @@ show the timing is NOT constant (what a FakeRAM `.lib` cannot capture). Modes:
 ASAP7 devices are BSIM-CMG (FinFET). **ngspice (v45) has no BSIM-CMG** — it
 runs a planar stand-in (harness exercised, numbers NOT ASAP7). For real numbers
 use **Xyce** (`--simulator xyce --real-device --models tech/models/hspice/7nm_TT.pm`).
-The harness auto-adapts the card: HSPICE `level 72` → Xyce BSIM-CMG `level 110`,
+The harness auto-adapts the card: HSPICE `level 72` → Xyce BSIM-CMG `level 107`,
 and emits `NFIN` (BSIM-CMG rejects `W`). `SS`/`FF` `.pm` give the other corners.
+107 rather than 110 because the card declares `version = 107` and Xyce selects
+the BSIM-CMG equations by level — see the note in
+`characterize_read.py::prep_models`.
 
 ```
 uv run python scripts/characterize_read.py --mode clkq --simulator xyce \
