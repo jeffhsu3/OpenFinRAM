@@ -9,7 +9,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-if ! python3 -c "import klayout.db" 2>/dev/null; then
+if ! python3 -c "import sys; sys.path.insert(0, 'scripts'); from def_to_gds import _load_klayout_db; _load_klayout_db()" 2>/dev/null; then
     echo "SKIP: klayout Python bindings not available"
     exit 77
 fi
@@ -29,7 +29,9 @@ python3 scripts/def_to_gds.py \
 
 python3 - "$OUT/ctrl_decode_smoke.gds" <<'EOF' || exit 1
 import sys
-import klayout.db as kdb
+sys.path.insert(0, "scripts")
+from def_to_gds import _load_klayout_db
+kdb = _load_klayout_db()
 
 layout = kdb.Layout()
 layout.read(sys.argv[1])
@@ -38,9 +40,10 @@ assert top is not None, "top cell missing from streamed GDS"
 instances = sum(1 for _ in top.each_inst())
 assert layout.cells() > 1, "standard-cell GDS substitution failed"
 assert instances >= 2, f"expected >=2 placed instances, found {instances}"
-# Routed/pin geometry must exist on the ASAP7 metal layers.
-m4 = layout.layer(40, 0)
-m5 = layout.layer(50, 0)
+# This fixture has DEF pin rectangles, not routed wires. Streamout retains
+# their pin purpose (251); real standard-cell conductors are drawing (0).
+m4 = layout.layer(40, 251)
+m5 = layout.layer(50, 251)
 assert not top.begin_shapes_rec(m4).at_end(), "no M4 geometry in output"
 assert not top.begin_shapes_rec(m5).at_end(), "no M5 geometry in output"
 print(f"PASS: cells={layout.cells()} instances={instances} bbox={top.dbbox()}")

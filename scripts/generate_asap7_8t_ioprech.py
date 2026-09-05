@@ -197,16 +197,21 @@ def add_m4_to_m2_route(
         shapes.append((layer, box))
 
     if side == "left":
-        add((0.0, external_y - 0.012, max(riser_x + 0.014, 0.096),
+        add((0.0, external_y - 0.012, max(riser_x + 0.020, 0.096),
              external_y + 0.012), M4)
     else:
-        add((min(riser_x - 0.014, WRAPPER_WIDTH - 0.096),
+        add((min(riser_x - 0.020, WRAPPER_WIDTH - 0.096),
              external_y - 0.012, WRAPPER_WIDTH,
              external_y + 0.012), M4)
     add((min(riser_x, target_x) - 0.014, target_y - 0.009,
          max(riser_x, target_x) + 0.014, target_y + 0.009), M2)
     add((riser_x - 0.009, min(external_y, target_y) - 0.014,
          riser_x + 0.009, max(external_y, target_y) + 0.014), M3)
+    # The vertical M3 riser remains the same 18 nm width as V2.  At V3, add a
+    # 28 x 24 nm horizontal landing so V3 has 5 nm M3 endcaps while retaining
+    # the via's exact 24 nm width perpendicular to that local M3 segment.
+    add((riser_x - 0.014, external_y - 0.012,
+         riser_x + 0.014, external_y + 0.012), M3)
     add((riser_x - 0.009, target_y - 0.009,
          riser_x + 0.009, target_y + 0.009), V2)
     add((riser_x - 0.009, external_y - 0.012,
@@ -344,11 +349,15 @@ def build_wrapper(
         source_name = entry["source_name"]
         label = entry["label"]
         route_index = riser_orders[side][source_name]
+        # Port B needs 11 nm M4 endcaps around its 18 nm-wide V3.  Keep its
+        # outer riser center 20 nm from the boundary so the edge-facing
+        # endcap is not clipped; port A has no V3/M4 transition.
+        edge_offset = 0.018 if port == "A" else 0.020
         if side == "left":
-            riser_x = 0.018 + route_index * RISER_PITCH
+            riser_x = edge_offset + route_index * RISER_PITCH
             pin_x = 0.006
         else:
-            riser_x = WRAPPER_WIDTH - 0.018 - route_index * RISER_PITCH
+            riser_x = WRAPPER_WIDTH - edge_offset - route_index * RISER_PITCH
             pin_x = WRAPPER_WIDTH - 0.006
         external_y = entry["external_y"]
         target_x = entry["target_x"]

@@ -4,7 +4,7 @@
 The port-A and port-B hard wrappers cannot be overlaid: both contain a full
 copy of the differential IO core.  This generator places them side by side
 and joins both to the same pair of 8T arrays.  Port B passes across the A core
-on M4 (the A wrapper has no M4); port A rises from M2 to M5 in a dedicated
+on M4 (the A wrapper has no M4); port A rises from M2 to M6 in a dedicated
 inter-wrapper gap, crosses the B core, and drops back to M2 in a right gap.
 
 The resulting ``colgrp_x{2N}x4_sram_8t`` cells match the logical
@@ -32,7 +32,7 @@ M1, V1, M2, V2, M3, V3, M4, V4, M5, V5, M6, V6, M7 = (
     19, 21, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70
 )
 MUX_ROWS = 4
-GAP_WIDTH = 0.108
+GAP_WIDTH = 0.144
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
 
 
@@ -111,50 +111,79 @@ def add_route_shape(
     routes.setdefault(net, []).append((layer, box))
 
 
-METAL_SEQUENCE = (M1, M2, M3, M4, M5, M6, M7)
-VIA_FOR_PAIR = {
-    (M1, M2): V1,
-    (M2, M3): V2,
-    (M3, M4): V3,
-    (M4, M5): V4,
-    (M5, M6): V5,
-    (M6, M7): V6,
-}
-
-
-def add_via_stack(
+def add_m2_to_m6_stack(
     cell: gdstk.Cell,
     routes: dict[str, list[tuple[int, tuple[float, float, float, float]]]],
     net: str,
-    x: float,
-    y: float,
-    bottom: int,
-    top: int,
-) -> None:
-    """Add centered metal pads/vias for one contiguous routing-layer stack."""
-    first = METAL_SEQUENCE.index(bottom)
-    last = METAL_SEQUENCE.index(top)
-    if first >= last:
-        raise RuntimeError(f"invalid via stack M{bottom}->M{top}")
-    metals = METAL_SEQUENCE[first:last + 1]
-    for layer in metals:
-        if layer in (M2, M3):
-            half = 0.009
-        else:
-            half = 0.014 if layer < M6 else 0.018
-        add_route_shape(cell, routes, net, layer,
-                        (x - half, y - half, x + half, y + half))
-    for lower, upper in zip(metals, metals[1:]):
-        via = VIA_FOR_PAIR[(lower, upper)]
-        add_route_shape(cell, routes, net, via,
-                        (x - 0.009, y - 0.009, x + 0.009, y + 0.009))
+    bottom: tuple[float, float],
+    x_direction: int,
+    y_direction: int,
+    x_step: float = 0.080,
+) -> tuple[float, float]:
+    """Build a direction-legal ASAP7 M2-to-M6 staircase.
+
+    M4/M6 are horizontal-only and M5 is vertical-only in the public rules.
+    Staggering the transitions lets V2 use an 18 nm vertical M3 landing while
+    V3 uses a 24 nm horizontal M3 landing, and avoids bends on M4--M6.
+    """
+    if x_direction not in (-1, 1) or y_direction not in (-1, 1):
+        raise RuntimeError("via-stack directions must be -1 or 1")
+
+    x2, y2 = bottom
+    x3, y3 = x2, y2 + y_direction * 0.050
+    x4, y4 = x3 + x_direction * x_step, y3
+    x5, y5 = x4, y4 + y_direction * 0.050
+
+    # V2: 18 x 18 nm.  M2 supplies horizontal endcaps and M3 leaves the via
+    # on a vertical 18 nm track, as required by V2.M3.AUX.2.
+    add_route_shape(cell, routes, net, M2,
+                    (x2 - 0.014, y2 - 0.009, x2 + 0.014, y2 + 0.009))
+    add_route_shape(cell, routes, net, V2,
+                    (x2 - 0.009, y2 - 0.009, x2 + 0.009, y2 + 0.009))
+    add_route_shape(
+        cell, routes, net, M3,
+        (x2 - 0.009, min(y2, y3) - 0.014,
+         x2 + 0.009, max(y2, y3) + 0.014),
+    )
+
+    # V3: 18 x 24 nm.  The local M3 bar gives 5 nm horizontal endcaps;
+    # the straight 24 nm M4 segment gives 11 nm horizontal endcaps.
+    add_route_shape(cell, routes, net, M3,
+                    (x3 - 0.014, y3 - 0.012, x3 + 0.014, y3 + 0.012))
+    add_route_shape(cell, routes, net, V3,
+                    (x3 - 0.009, y3 - 0.012, x3 + 0.009, y3 + 0.012))
+    add_route_shape(
+        cell, routes, net, M4,
+        (min(x3 - 0.020, x4 - 0.023), y3 - 0.012,
+         max(x3 + 0.020, x4 + 0.023), y3 + 0.012),
+    )
+
+    # V4 is 24 x 24 nm between horizontal M4 and vertical M5.  V5 is
+    # 24 x 32 nm between vertical M5 and horizontal M6.  The latter follows
+    # V5.M6.AUX.2 in the DRM (32 nm perpendicular to horizontal M6); the
+    # public ORFS KLayout deck currently checks M6's vertical edges instead.
+    add_route_shape(cell, routes, net, V4,
+                    (x4 - 0.012, y4 - 0.012, x4 + 0.012, y4 + 0.012))
+    add_route_shape(
+        cell, routes, net, M5,
+        (x4 - 0.012, min(y4 - 0.023, y5 - 0.027),
+         x4 + 0.012, max(y4 + 0.023, y5 + 0.027)),
+    )
+    add_route_shape(cell, routes, net, V5,
+                    (x5 - 0.012, y5 - 0.016, x5 + 0.012, y5 + 0.016))
+    add_route_shape(cell, routes, net, M6,
+                    (x5 - 0.023, y5 - 0.016, x5 + 0.023, y5 + 0.016))
+    return x5, y5
 
 
 def wrapper_control_name(name: str) -> str | None:
     scalar = {
         "WRENA_A": "wrena_A",
         "WRENAN_A": "wrenan_A",
+        "WRENA_B": "wrena_B",
+        "WRENAN_B": "wrenan_B",
         "D_A": "DA",
+        "D_B": "DB",
         "Q_A": "QA",
         "OEB_OUT_A": "oeb_out_A",
         "OE_OUT_A": "oe_out_A",
@@ -180,6 +209,8 @@ def colgrp_control_name(name: str) -> str:
     replacements = {
         "wrena_A": "wrenaA",
         "wrenan_A": "wrenanA",
+        "wrena_B": "wrenaB",
+        "wrenan_B": "wrenanB",
         "oeb_out_A": "oeb_outA",
         "oe_out_A": "oe_outA",
         "oeb_out_B": "oeb_outB",
@@ -202,8 +233,8 @@ def validate_route_spacing(
 ) -> None:
     spacing = {
         V1: 0.018, M2: 0.018, V2: 0.018, M3: 0.018,
-        V3: 0.018, M4: 0.024, V4: 0.018, M5: 0.024,
-        V5: 0.018, M6: 0.024, V6: 0.018, M7: 0.024,
+        V3: 0.018, M4: 0.024, V4: 0.033, M5: 0.024,
+        V5: 0.033, M6: 0.032, V6: 0.045, M7: 0.032,
     }
     names = list(routes)
     for index, name in enumerate(names):
@@ -226,31 +257,8 @@ def validate_route_spacing(
                     if not okay:
                         raise RuntimeError(
                             f"route spacing violation on layer {layer}: "
-                            f"{name} vs {other_name}"
+                            f"{name} {a} vs {other_name} {b}"
                         )
-
-
-def add_manhattan(
-    cell: gdstk.Cell,
-    routes: dict[str, list[tuple[int, tuple[float, float, float, float]]]],
-    net: str,
-    layer: int,
-    start: tuple[float, float],
-    end: tuple[float, float],
-    width: float,
-) -> None:
-    """Route start to end with horizontal-then-vertical rectangles."""
-    half = width / 2
-    x0, y0 = start
-    x1, y1 = end
-    add_route_shape(
-        cell, routes, net, layer,
-        (min(x0, x1) - half, y0 - half, max(x0, x1) + half, y0 + half),
-    )
-    add_route_shape(
-        cell, routes, net, layer,
-        (x1 - half, min(y0, y1) - half, x1 + half, max(y0, y1) + half),
-    )
 
 
 def build_combined_io(
@@ -277,8 +285,8 @@ def build_combined_io(
     b_x = center_x0 + GAP_WIDTH
     right_x0 = b_x + wrapper_width
     total_width = right_x0 + GAP_WIDTH
-    lift_x = center_x0 + GAP_WIDTH / 2
-    drop_x = right_x0 + GAP_WIDTH / 2
+    lift_x = center_x0 + 0.026
+    drop_x = right_x0 + GAP_WIDTH - 0.026
 
     cell = library.new_cell("iocolgrp_sram_8t")
     cell.add(gdstk.Reference(wrapper_a, origin=(a_x - ax0, -ay0)))
@@ -302,7 +310,7 @@ def build_combined_io(
                             (0.0, y - 0.012, b_x + 0.018, y + 0.012))
             cell.add(clone_label(label, net, (0.006, y), M4))
 
-    # Right array interface: B reaches its adjacent core on M4.  A lifts to M5
+    # Right array interface: B reaches its adjacent core on M4.  A lifts to M6
     # in the central gap, crosses the B core, then drops in the right gap.
     for prefix in ("BLB", "BLBN"):
         for index, label in indexed_labels(wrapper_b, f"{prefix}_B").items():
@@ -312,17 +320,32 @@ def build_combined_io(
                             (right_x0 - 0.018, y - 0.012,
                              total_width, y + 0.012))
             cell.add(clone_label(label, net, (total_width - 0.006, y), M4))
+    ordered_a_right_y = sorted(
+        float(item.origin[1]) - ay0
+        for item_prefix in ("BLB", "BLBN")
+        for item in indexed_labels(wrapper_a, f"{item_prefix}_A").values()
+    )
     for prefix in ("BLB", "BLBN"):
         for index, label in indexed_labels(wrapper_a, f"{prefix}_A").items():
             y = float(label.origin[1]) - ay0
             net = f"{prefix}_A[{index}]"
+            # Close true/complement tracks use alternating vertical M5 lanes.
+            # Their 48 nm center separation leaves the required 24 nm gap
+            # between 24 nm M5 wires while both staircases rise northward.
+            route_rank = ordered_a_right_y.index(y)
+            x_step = 0.080 if route_rank % 2 == 0 else 0.032
             add_route_shape(cell, routes, net, M2,
                             (center_x0 - 0.018, y - 0.009,
                              lift_x + 0.014, y + 0.009))
-            add_via_stack(cell, routes, net, lift_x, y, M2, M5)
-            add_route_shape(cell, routes, net, M5,
-                            (lift_x, y - 0.012, drop_x, y + 0.012))
-            add_via_stack(cell, routes, net, drop_x, y, M2, M5)
+            lift_top = add_m2_to_m6_stack(
+                cell, routes, net, (lift_x, y), 1, 1, x_step
+            )
+            drop_top = add_m2_to_m6_stack(
+                cell, routes, net, (drop_x, y), -1, 1, x_step
+            )
+            add_route_shape(cell, routes, net, M6,
+                            (lift_top[0], lift_top[1] - 0.016,
+                             drop_top[0], lift_top[1] + 0.016))
             add_route_shape(cell, routes, net, M2,
                             (drop_x - 0.014, y - 0.009,
                              total_width, y + 0.009))
@@ -338,8 +361,15 @@ def build_combined_io(
                      float(sae.origin[1]) - ay0)
         sap_point = (x_offset + float(saprechn.origin[0]) - ax0,
                      float(saprechn.origin[1]) - ay0)
-        add_manhattan(cell, routes, f"sae_{port}", M3,
-                      sae_point, sap_point, 0.016)
+        if abs(sae_point[1] - sap_point[1]) > 1e-9:
+            raise RuntimeError(f"port {port} sense controls are not row-aligned")
+        add_route_shape(
+            cell, routes, f"sae_{port}", M3,
+            (min(sae_point[0], sap_point[0]) - 0.008,
+             sae_point[1] - 0.009,
+             max(sae_point[0], sap_point[0]) + 0.008,
+             sae_point[1] + 0.009),
+        )
 
         for label in wrapper.labels:
             renamed = wrapper_control_name(label.text)
@@ -349,10 +379,9 @@ def build_combined_io(
                      float(label.origin[1]) - ay0)
             cell.add(clone_label(label, renamed, point))
 
-    # Port B is read-only in the present 1RW+1R macro.  Tie WRENA_B and D_B to
-    # VSS on M6, and WRENAN_B to VDD on M7.  The higher layers are unoccupied
-    # by both wrappers, while each stack lands on an existing M3 control pin or
-    # M1 supply pin.
+    # Export one direct label per supply from the existing wrapper rails.  The
+    # macro-level PG network connects both wrapper instances; no functional IO
+    # pin is consumed as a local supply tie in the true 2RW interface.
     vss_source = max(
         (label for label in wrapper_b.labels
          if label.text == "VSS" and label.layer == M1),
@@ -366,21 +395,8 @@ def build_combined_io(
                  float(vss_source.origin[1]) - by0)
     vdd_point = (b_x + float(vdd_source.origin[0]) - bx0,
                  float(vdd_source.origin[1]) - by0)
-    add_via_stack(cell, routes, "VSS", *vss_point, M1, M6)
-    for name in ("WRENA_B", "D_B"):
-        label = direct_label(wrapper_b, name)
-        point = (b_x + float(label.origin[0]) - bx0,
-                 float(label.origin[1]) - by0)
-        add_via_stack(cell, routes, "VSS", *point, M3, M6)
-        add_manhattan(cell, routes, "VSS", M6, vss_point, point, 0.024)
-    wrenan = direct_label(wrapper_b, "WRENAN_B")
-    wrenan_point = (b_x + float(wrenan.origin[0]) - bx0,
-                    float(wrenan.origin[1]) - by0)
-    add_via_stack(cell, routes, "VDD", *vdd_point, M1, M7)
-    add_via_stack(cell, routes, "VDD", *wrenan_point, M3, M7)
-    add_manhattan(cell, routes, "VDD", M7, vdd_point, wrenan_point, 0.024)
-    cell.add(clone_label(vss_source, "VSS", vss_point, M6))
-    cell.add(clone_label(vdd_source, "VDD", vdd_point, M7))
+    cell.add(clone_label(vss_source, "VSS", vss_point, M1))
+    cell.add(clone_label(vdd_source, "VDD", vdd_point, M1))
 
     validate_route_spacing(routes)
     rect(cell, (0.0, 0.0, total_width, wrapper_height), BOUNDARY)
@@ -595,7 +611,8 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
             raise RuntimeError(f"iocolgrp_sram_8t: {prefix} is on wrong layer")
     io_names = {label.text for label in io.labels}
     required_io = {
-        "wrena_A", "wrenan_A", "DA", "QA", "QB",
+        "wrena_A", "wrenan_A", "wrena_B", "wrenan_B",
+        "DA", "QA", "DB", "QB",
         "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B",
         "blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B",
         "sae_A", "sae_B", "VDD", "VSS",
@@ -611,13 +628,19 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
         )
     if io_names.intersection({"WRENA_B", "WRENAN_B", "D_B", "SAPRECHN_A", "SAPRECHN_B"}):
         raise RuntimeError("iocolgrp_sram_8t: internal-only wrapper pins leaked")
-    for layer in (M5, V4, V3, V2, M2):
+    for layer in (M6, V5, M5, V4, M4, V3, M3, V2, M2):
         if not any(poly.layer == layer for poly in io.polygons):
             raise RuntimeError(f"iocolgrp_sram_8t: missing port-A crossover layer {layer}")
-    if not any(poly.layer == M6 for poly in io.polygons):
-        raise RuntimeError("iocolgrp_sram_8t: missing port-B VSS tie")
-    if not any(poly.layer == M7 for poly in io.polygons):
-        raise RuntimeError("iocolgrp_sram_8t: missing port-B VDD tie")
+    if any(poly.layer in (V6, M7) for poly in io.polygons):
+        raise RuntimeError("iocolgrp_sram_8t: crossover unexpectedly exceeds M6")
+    m1_geometry = io.get_polygons(layer=M1, datatype=0)
+    for supply in ("VDD", "VSS"):
+        label = direct_label(io, supply)
+        if label.layer != M1:
+            raise RuntimeError(f"iocolgrp_sram_8t: {supply} is not on a wrapper M1 rail")
+        x, y = map(float, label.origin)
+        if not gdstk.inside([(x, y)], m1_geometry)[0]:
+            raise RuntimeError(f"iocolgrp_sram_8t: {supply} label misses wrapper M1")
 
     cap_array = cells["col_cap_x4_sram_8t"]
     if len(cap_array.references) != MUX_ROWS:
@@ -655,7 +678,8 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
             if any(label.layer != layer for label in labels.values()):
                 raise RuntimeError(f"{colgrp.name}: {prefix} is on wrong layer")
         required_colgrp = {
-            "DA", "QA", "QB", "wrenaA", "wrenanA",
+            "DA", "QA", "DB", "QB",
+            "wrenaA", "wrenanA", "wrenaB", "wrenanB",
             "oeb_outA", "oe_outA", "oeb_outB", "oe_outB",
             "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB",
             "sae_A", "sae_B", "VDD", "VSS",

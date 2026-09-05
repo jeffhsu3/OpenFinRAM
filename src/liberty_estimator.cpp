@@ -99,13 +99,15 @@ bool validate_lef_interface(const MainCliOptions& options,
         }
     } else {
         required.insert(required.end(),
-                        {"rst_n", "ce_n_A", "ce_n_B", "we_n_A", "oe_n_A", "oe_n_B"});
+                        {"rst_n", "ce_n_A", "ce_n_B", "we_n_A", "we_n_B",
+                         "oe_n_A", "oe_n_B"});
         for (int bit = 0; bit < addr_width; ++bit) {
             required.push_back("A_A[" + std::to_string(bit) + "]");
             required.push_back("A_B[" + std::to_string(bit) + "]");
         }
         for (unsigned bit = 0; bit < options.num_data_bits; ++bit) {
             required.push_back("D_A[" + std::to_string(bit) + "]");
+            required.push_back("D_B[" + std::to_string(bit) + "]");
             required.push_back("Q_A[" + std::to_string(bit) + "]");
             required.push_back("Q_B[" + std::to_string(bit) + "]");
         }
@@ -255,6 +257,25 @@ std::string liberty_identifier_token(std::string s) {
     return s;
 }
 
+// Liberty has no memory-group attribute for port-collision behavior.  The
+// cell-level contention_condition is the standard machine-readable way to
+// describe an electrically forbidden input combination.  Spell out address
+// equality per bit rather than relying on vector operators, which are not
+// interpreted consistently by Liberty readers outside a bus function.
+std::string dual_port_contention_condition(int address_width) {
+    std::ostringstream condition;
+    condition
+        << "(!ce_n_A) * (!ce_n_B)"
+        << " * (((!we_n_A) * oe_n_A) + (we_n_A * (!oe_n_A)))"
+        << " * (((!we_n_B) * oe_n_B) + (we_n_B * (!oe_n_B)))"
+        << " * ((!we_n_A) + (!we_n_B))";
+    for (int bit = 0; bit < address_width; ++bit) {
+        condition << " * ((A_A[" << bit << "] * A_B[" << bit
+                  << "]) + ((!A_A[" << bit << "]) * (!A_B[" << bit << "])))";
+    }
+    return condition.str();
+}
+
 std::string build_estimated_liberty(const MainCliOptions& options,
                                     const MacroSize& size,
                                     const CharacterizationData* data,
@@ -289,9 +310,13 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     const std::string port_comment =
         options.single_port
             ? "ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled."
-            : "ESTIMATED EARLY-PPA DUAL-PORT MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline per port; power is not modeled. 8T bitcell, port A read+write, port B read-only.";
+            : "ESTIMATED EARLY-PPA DUAL-PORT MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline per port; power is not modeled. True-dual-port 8T bitcell; ports A and B both support read and write. Same-address concurrent A/B accesses are illegal when either port writes; same-address read/read is supported.";
     if (data && !data->comment.empty()) {
-        out << "  comment : \"" << liberty_quote(data->comment) << "\";\n";
+        out << "  comment : \"" << liberty_quote(data->comment);
+        if (!options.single_port) {
+            out << " Same-address concurrent A/B accesses are illegal when either port writes; same-address read/read is supported.";
+        }
+        out << "\";\n";
     } else {
         out << "  comment : \"" << port_comment << "\";\n";
     }
@@ -397,6 +422,10 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  cell (" << cell_name << ") {\n";
     out << "    area : " << num(size.width * size.height) << ";\n";
     out << "    interface_timing : true;\n";
+    if (!options.single_port) {
+        out << "    contention_condition : \""
+            << dual_port_contention_condition(addr_width) << "\";\n";
+    }
     out << "    cell_leakage_power : "
         << num(scalar_or(data, data ? data->cell_leakage_power : 0.0, 0.0)) << ";\n";
     out << "    memory () {\n";
@@ -434,9 +463,16 @@ std::string build_estimated_liberty(const MainCliOptions& options,
                        ? num(pj * 1000.0 / cyc)   // pJ/ns = mW -> uW
                        : std::string("0");
         };
-        const std::pair<const char*, double> ops[2] = {
-            {"\"we_n\"", data->power.read_access_pj},
-            {"\"!we_n\"", data->power.write_access_pj}};
+        std::vector<std::pair<std::string, double>> ops;
+        if (options.single_port) {
+            ops = {{"\"we_n\"", data->power.read_access_pj},
+                   {"\"!we_n\"", data->power.write_access_pj}};
+        } else {
+            ops = {{"\"we_n_A\"", data->power.read_access_pj},
+                   {"\"!we_n_A\"", data->power.write_access_pj},
+                   {"\"we_n_B\"", data->power.read_access_pj},
+                   {"\"!we_n_B\"", data->power.write_access_pj}};
+        }
         for (const auto& op : ops) {
             out << "      internal_power () {\n";
             out << "        when : " << op.first << ";\n";
@@ -464,12 +500,14 @@ std::string build_estimated_liberty(const MainCliOptions& options,
         emit_input_pin(out, "ce_n_A", constraint_template, data);
         emit_input_pin(out, "ce_n_B", constraint_template, data);
         emit_input_pin(out, "we_n_A", constraint_template, data);
+        emit_input_pin(out, "we_n_B", constraint_template, data);
         emit_input_pin(out, "oe_n_A", constraint_template, data);
         emit_input_pin(out, "oe_n_B", constraint_template, data);
-        // Dual-port addresses: A_A (read/write) and A_B (read-only)
+        // Both dual-port addresses select independent read/write accesses.
         emit_input_bus(out, "A_A", address_type, constraint_template, "", data);
         emit_input_bus(out, "A_B", address_type, constraint_template, "", data);
         emit_input_bus(out, "D_A", data_type, constraint_template, "A_A", data);
+        emit_input_bus(out, "D_B", data_type, constraint_template, "A_B", data);
     }
 
     // Helper to emit Q-bus timing block (shared logic for SP Q and DP Q_A/Q_B)

@@ -92,12 +92,11 @@ for its wordlines and port-B bitlines.
 `scripts/generate_asap7_wordline_arrays.py --tap-pitch N` interleaves a tap
 after every N 8T bitcells, producing `sramcol_x<W>_tapN_sram_8t` and
 `array_x<W>x<M>_tapN_sram_8t` beside the untapped cells. The pitch must divide
-the wordline count. The default is 0 (no taps), so the tracked
-`sram_wordline_arrays.gds` and the `array_x<W>x4_sram_8t` contract that
-`src/layout_generator.cpp` looks up are unchanged; turning taps on by default
-also needs `sram_8t_iocolumn.gds` regenerated, since the array grows by one
-cell pitch per tap. Only the 8T rows take taps: the published 6T tap does not
-pass bitlines through.
+the wordline count. The standalone generator defaults to 0 (no taps), preserving
+the tracked untapped library. The macro compiler instead generates tapped
+arrays on demand with pitch `gcd(wordlines, 16)` and rebuilds their IO columns
+at the resulting width. Only the 8T rows take these taps: the published 6T tap
+does not pass bitlines through.
 
 ## Port-specific IO/precharge wrappers
 
@@ -113,24 +112,34 @@ two-sided channel-routed adapter to the 0.594 um 8T row pitch:
 | Wrapper | Array bitline layer | Core landing | Function |
 | --- | --- | --- | --- |
 | `ioprech_sram_8t_a` | M2 | M2 through M3 pitch-shift risers | Port-A read/write IO |
-| `ioprech_sram_8t_b` | M4 | M4/V3/M3/V2 to M2 | Port-B IO; write pins retained for standalone verification |
+| `ioprech_sram_8t_b` | M4 | M4/V3/M3/V2 to M2 | Port-B read/write IO |
 
-The current dual-port macro interface is 1RW+1R, so the generated composite
-SPICE ties the port-B write data low and its write driver inactive. Keeping the
-physical B wrapper symmetric avoids an unverified custom read-only derivative
-and leaves a path to a future 2RW interface. The wrapper contracts also keep
-`SAE` and `SAPRECHN` distinct; the current composite maps both to its existing
-per-port `sae_A`/`sae_B` phase signal until the controller exposes a separate
-sense-precharge phase.
+The macro interface is true dual-port (2RW). Port B has its own `we_n_B`,
+`D_B`, `wrena_B`, and `wrenan_B` path through the controller, generated SPICE,
+physical IO column, and Liberty interface; no B write input is tied to a
+supply. The wrapper contracts keep `SAE` and `SAPRECHN` distinct, while the
+current composite maps both to its existing per-port `sae_A`/`sae_B` phase
+signal until the controller exposes a separate sense-precharge phase. The
+controller generates each phase through its protected `SAE_BUF` chain of
+physical `BUFx2_ASAP7_75t_R` cells; the obsolete replica-bitline-derived SPICE
+buffer chain is not part of this implementation.
+
+Both ports may operate in the same cycle, including accesses to different
+addresses and same-address read/read. A simultaneous write/write or read/write
+to the same address is an **illegal operating condition**: no priority or
+arbitration is provided, and the stored/read value is undefined. The generated
+Liberty marks the exact control-and-address combination with the cell-level
+`contention_condition` attribute and repeats the restriction in its comment.
+Integrators must prevent that condition before the macro boundary.
 
 The physical `iocolgrp_sram_8t` implements that composite contract. It places
-the A and B wrappers side by side with one bitcell-width routing gap at each
-outside edge and between the cores. Port B passes across the A wrapper on M4;
-the A wrapper contains no M4 geometry. Port A rises from M2 to M5 in the
-central gap, crosses the B wrapper on its otherwise-unused M5 plane, and drops
-to M2 in the right gap. The B-port `WRENA` and write-data pins are tied to VSS,
-`WRENAN` is tied to VDD, and each wrapper's `SAE`/`SAPRECHN` pair is shorted as
-required by the 1RW+1R composite.
+the A and B wrappers side by side with 0.144 um routing gaps at each outside
+edge and between the cores. Port B passes across the A wrapper on M4; the A
+wrapper contains no M4 geometry. Port A rises from M2 to M6 in the central
+gap, crosses the B wrapper on M6 using M5 vertical transitions, and drops to
+M2 in the right gap. Both ports export their write-enable and write-data pins,
+and each wrapper's `SAE`/`SAPRECHN` pair is shorted to the corresponding
+per-port sense phase.
 
 ## Physical interface
 
@@ -195,6 +204,7 @@ From the repository root:
   --verify tech/gds/sram_8t_iocolumn.gds
 ctest --test-dir build -R asap7_8t_bitcell_check --output-on-failure
 ctest --test-dir build -R asap7_8t_ioprech_check --output-on-failure
+ctest --test-dir build -R asap7_8t_ioprech_spice_check --output-on-failure
 ctest --test-dir build -R asap7_wordline_array_check --output-on-failure
 ctest --test-dir build -R asap7_8t_iocolumn_check --output-on-failure
 ```
@@ -214,18 +224,79 @@ checks the forced dummy state, zero transistor channels in every cap cell,
 independent pass-through pins, identical process-frame fingerprints, and
 compatible boundary/grid geometry for mirrored abutment.
 
+When Xyce is installed, `asap7_8t_ioprech_spice_check` runs the emitted ASAP7
+transistor netlists at the TT corner. In addition to standalone precharge,
+read, and write checks, its shared-cell bench connects both composite IO ports
+to two real `sram_cell_8t` instances. It performs concurrent writes and reads
+to different addresses, then same-address read/read for both stored data
+polarities. It intentionally never drives the forbidden same-address case in
+which either port writes; that condition is rejected by the macro contract
+rather than assigned a simulated result.
+
 This verification is not a substitute for foundry signoff. Calibre is not
 available in the open-source test environment, and the public ASAP7 Calibre
 decks distributed with the PDK are encrypted. Run the official ASAP7 DRC/LVS
 deck before treating this cell as tapeout-qualified.
 
-## Current scope
+## Physical macro compiler
 
-The physical foundation now includes the bitcell, array boundaries,
-parameterized active wordline arrays, both port-specific IO/precharge wrappers,
-and routed IO columns that join both ports to the same capped arrays. It does
-not yet provide the dual-port replica/tap cells or final macro-level placement
-and power integration. The macro layout flow therefore continues to reject
-dual-port layout generation rather than silently substituting the 6T array.
-Before rejecting that final stage, it loads `sram_8t_iocolumn.gds` and checks
-that the requested half-array wordline count and four-row mux cell are present.
+The open-source 2RW path now uses `scripts/compile_asap7_2rw.py` for macro
+placement and routing, separate from the academic 6T assembler. It generates
+tapped half-arrays, the column/row/corner cap family, and both IO wrappers at
+the requested wordline count. Column tiles are placed in routing channels;
+banks share the external data buses and receive separate controller selects.
+The controller floorplan uses measured 8T tile geometry. Both write-enable
+polarities and both write-data buses are routed without tie-offs.
+
+The assembler extracts metal/via connectivity from the actual hard-cell GDS.
+Each disconnected supply component gets its own terminal, so the router must
+connect all array, IO, tap, and controller supply islands. IO/power pin access
+uses the highest metal in each connected component. Controller signal access
+follows the designated pin layer, including its connected landing wire but
+not higher internal routing. Other metal is an obstruction. After OpenROAD
+routing and KLayout streamout, a second conductor
+graph verifies every terminal, all external pins, and isolation of internal
+unnamed interconnect. Nonzero routing DRC reports, opens, shorts, and missing
+reports prevent final GDS publication. Controller routing DRC and electrical
+constraints are also checked; reset fanout introduced by hold repair is split
+into bounded branches.
+
+Example (16 words × 4 bits, 64 storage cells, true 2RW):
+
+```sh
+cmake --build build -j2
+build/OpenFinRAM --openroad --num-wls 2 --num-data-bits 4 --num-banks 1 --skip-characterization
+```
+
+Outputs are in `results/sram_x4x4x1_<timestamp>/`: GDS, LEF, structural SPICE,
+estimated Liberty, and `.physical.json` with verification status and report
+paths. Capacity is `2 * num_wls * 4 * num_banks` words; `num_data_bits` is
+the width of each port. The mux height is currently fixed at four. Wordline
+count and data width must be even and at least two; banks must be a power of
+two. Arrays are generated on demand rather than limited to tracked GDS sizes.
+
+`scripts/mapped_verilog_to_spice.py` parses the routed controller through
+Yosys and orders every instance using the actual CDL formal pins, including
+expanded one-bit buses and supply connections. Unknown cells/pins fail instead
+of producing an empty controller stub. The delivered SPICE deck includes the
+standard-cell definitions; transistor model cards belong in the testbench.
+Passive array caps/taps do not add dummy storage transistors to the netlist.
+
+```sh
+ctest --test-dir build -R asap7_2rw_physical_check --output-on-failure
+ctest --test-dir build -R asap7_2rw_macro_check --output-on-failure
+.venv/bin/python tests/tools/check_2rw_macro.py results/sram_x4x4x1_<timestamp>
+```
+
+The fast test exercises connectivity failures, cap/tap geometry at 2/4/18
+wordlines, port/bank mapping, and CDL pin ordering. The integration test runs
+the compiler and compares GDS storage-cell count, all LEF/SPICE ports, Liberty
+2RW interfaces, controller instances, and SPICE hierarchy arities.
+
+This is a conservative routable floorplan, not a density-optimized or
+tapeout-qualified memory compiler. OpenROAD routing DRC is not the encrypted
+ASAP7 device-level signoff deck, and the metal graph is not transistor LVS.
+Full-macro extracted simulation, PVT/Monte Carlo characterization, power-grid
+IR/EM analysis, and timing with extracted macro interconnect remain separate
+qualification work. Liberty remains explicitly estimated. The same-address
+collision restrictions above still apply; no hardware arbiter is inserted.

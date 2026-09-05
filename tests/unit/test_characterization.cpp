@@ -51,7 +51,8 @@ std::string mock_lef(bool single_port) {
             pin("Q[" + std::to_string(bit) + "]");
         }
     } else {
-        for (const char* name : {"rst_n", "ce_n_A", "ce_n_B", "we_n_A", "oe_n_A", "oe_n_B"}) {
+        for (const char* name : {"rst_n", "ce_n_A", "ce_n_B", "we_n_A", "we_n_B",
+                                 "oe_n_A", "oe_n_B"}) {
             pin(name);
         }
         for (int bit = 0; bit < 4; ++bit) {
@@ -60,6 +61,7 @@ std::string mock_lef(bool single_port) {
         }
         for (int bit = 0; bit < 4; ++bit) {
             pin("D_A[" + std::to_string(bit) + "]");
+            pin("D_B[" + std::to_string(bit) + "]");
             pin("Q_A[" + std::to_string(bit) + "]");
             pin("Q_B[" + std::to_string(bit) + "]");
         }
@@ -183,7 +185,7 @@ TEST(LibertyEstimator, CommentQuotesAndBackslashesAreEscaped) {
               std::string::npos) << lib.substr(0, 400);
 }
 
-TEST(LibertyEstimator, DualPortUsesPortAWriteAddressAndAsyncResetChecks) {
+TEST(LibertyEstimator, DualPortUsesBothWriteAddressesAndAsyncResetChecks) {
     MainCliOptions opts;
     opts.single_port = false;
     opts.num_wls = 2;
@@ -200,8 +202,23 @@ TEST(LibertyEstimator, DualPortUsesPortAWriteAddressAndAsyncResetChecks) {
     EXPECT_NE(lib.find("bus (A_A)"), std::string::npos);
     EXPECT_NE(lib.find("bus (A_B)"), std::string::npos);
     EXPECT_NE(lib.find("bus (D_A)"), std::string::npos);
+    EXPECT_NE(lib.find("bus (D_B)"), std::string::npos);
     EXPECT_NE(lib.find("address : A_A;"), std::string::npos);
+    EXPECT_NE(lib.find("address : A_B;"), std::string::npos);
+    EXPECT_NE(lib.find("pin (we_n_B)"), std::string::npos);
     EXPECT_EQ(lib.find("address : A;"), std::string::npos);
+    EXPECT_NE(lib.find("Same-address concurrent A/B accesses are illegal when either port writes"),
+              std::string::npos);
+    EXPECT_NE(lib.find("contention_condition : \""), std::string::npos);
+    EXPECT_NE(lib.find("(!ce_n_A) * (!ce_n_B)"), std::string::npos);
+    EXPECT_NE(lib.find("((!we_n_A) + (!we_n_B))"), std::string::npos);
+    for (int bit = 0; bit < 4; ++bit) {
+        const std::string equal_bit =
+            "((A_A[" + std::to_string(bit) + "] * A_B[" +
+            std::to_string(bit) + "]) + ((!A_A[" + std::to_string(bit) +
+            "]) * (!A_B[" + std::to_string(bit) + "])))";
+        EXPECT_NE(lib.find(equal_bit), std::string::npos) << equal_bit;
+    }
 
     const std::size_t reset_begin = lib.find("pin (rst_n)");
     const std::size_t reset_end = lib.find("pin (ce_n_A)", reset_begin);

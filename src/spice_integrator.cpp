@@ -231,10 +231,14 @@ std::string SpiceIntegrator::generate_subckt_header() const {
         }
         oss << "\n+";
 
-        oss << " ce_n_B oe_n_B"
+        oss << " ce_n_B we_n_B oe_n_B"
             << "\n+";
         for (uint64_t i = 0; i < get_addr_width(cli_options_); ++i) {
             oss << " A_B[" << i << "]";
+        }
+        oss << "\n+";
+        for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
+            oss << " D_B[" << i << "]";
         }
         oss << "\n+";
         for (uint64_t i = 0; i < cli_options_.num_data_bits; ++i) {
@@ -353,6 +357,11 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             oss << "\n+";
 
             for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+                oss << " D_B[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            }
+            oss << "\n+";
+
+            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
                 oss << " Q_B[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
             }
             oss << "\n+";
@@ -366,7 +375,7 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             };
         } else {
             ctrl_sigs = {
-                "wrena_A", "wrenan_A",
+                "wrena_A", "wrenan_A", "wrena_B", "wrenan_B",
                 "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B",
                 "blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B",
                 "sae_A", "sae_B"
@@ -683,6 +692,12 @@ bool SpiceIntegrator::integrate_sram() {
     if (!replace_chars_for_sis(flattened_output_path, sis_ready_output_path)) {
         LOGE << "  ✗ Error: Character replacement for SIS failed";
         return false;
+    }
+
+    // Deliver a self-contained structural deck, not references into tmp/.
+    // Device model cards remain supplied by the simulation testbench.
+    if (!cli_options_.single_port && (cli_options_.use_openroad || cli_options_.openroad_only)) {
+        if (!copy_file(flattened_output_path, output_file_path)) return false;
     }
     
     return true;

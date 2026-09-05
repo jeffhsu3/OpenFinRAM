@@ -148,9 +148,8 @@ std::string YosysTclGenerator::generate_script(
     } else {
         oss << "hilomap -singleton -hicell TIEHIx1_ASAP7_75t_R H -locell TIELOx1_ASAP7_75t_R L\n";
         oss << "opt\n";
-        // Both ports register a full address.  Port A has a two-bit state and
-        // port B has a one-bit read state.
-        const int expected_dp_dffs = 2 * addr_width + 3;
+        // Both ports register a full address and a two-bit read/write state.
+        const int expected_dp_dffs = 2 * addr_width + 4;
         oss << "\n# Structural signoff for DP physical network\n";
         oss << "check -assert\n";
         oss << "select -assert-count " << expected_dp_dffs

@@ -144,9 +144,9 @@ bool YosysManager::generate_timing_constraints() const {
             << " [get_ports -quiet {ce_n we_n oe_n A* sdel*}]\n";
     } else {
         sdc << "set_input_delay -clock clk -max " << kIoDelayNs
-            << " [get_ports -quiet {ce_n_A ce_n_B we_n_A oe_n_A oe_n_B A_A* A_B* rst_n}]\n";
+            << " [get_ports -quiet {ce_n_A ce_n_B we_n_A we_n_B oe_n_A oe_n_B A_A* A_B* rst_n}]\n";
         sdc << "set_input_delay -clock clk -min " << kInputMinDelayNs
-            << " [get_ports -quiet {ce_n_A ce_n_B we_n_A oe_n_A oe_n_B A_A* A_B* rst_n}]\n";
+            << " [get_ports -quiet {ce_n_A ce_n_B we_n_A we_n_B oe_n_A oe_n_B A_A* A_B* rst_n}]\n";
     }
     sdc << "set_output_delay -clock clk -max " << kIoDelayNs
         << " [all_outputs]\n";
@@ -327,7 +327,7 @@ bool YosysManager::verify_periphery_structure() {
         const std::size_t expected_bufx2 =
             static_cast<std::size_t>(2 * (cli_options_.num_wl_buf + cli_options_.num_sae_buf));
         const std::size_t expected_dffs =
-            static_cast<std::size_t>(2 * get_addr_width(cli_options_) + 3);
+            static_cast<std::size_t>(2 * get_addr_width(cli_options_) + 4);
         const std::size_t named_delay_count =
             count_occurrences(text, "physical_dp_delay_");
 

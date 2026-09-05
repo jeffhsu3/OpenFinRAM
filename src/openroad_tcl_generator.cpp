@@ -300,6 +300,26 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     file << "estimate_parasitics -placement\n";
     file << "repair_timing -setup -max_utilization 90 -max_buffer_percent 20\n";
     file << "repair_timing -hold -max_utilization 90 -max_buffer_percent 20\n";
+    if (!single_port) {
+        // Hold repair can introduce shared buffers exceeding the controller's
+        // fanout constraint. Repair those new nets before final placement.
+        file << "repair_design -max_utilization 90 -slew_margin 10 -cap_margin 10 -verbose\n";
+        file << R"(# Bound reset fanout left on shared hold-repair buffers.
+set dp_reset_nets [dict create]
+foreach pin [get_pins -hierarchical -quiet */RESETN] {
+    set net [get_nets -of_objects $pin]
+    dict lappend dp_reset_nets [get_full_name $net] $pin
+}
+set dp_reset_branch 0
+dict for {net pins} $dp_reset_nets {
+    if {[llength $pins] <= 10} { continue }
+    for {set i 0} {$i < [llength $pins]} {incr i 8} {
+        insert_buffer -buffer_cell BUFx2_ASAP7_75t_R -load_pins [lrange $pins $i [expr {$i+7}]] -buffer_name dp_reset_branch_$dp_reset_branch
+        incr dp_reset_branch
+    }
+}
+)";
+    }
     file << "detailed_placement -incremental\n";
     file << "check_placement -verbose -report_file_name placement_post_cts.rpt\n\n";
 
@@ -308,6 +328,9 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     file << "filler_placement \"FILLER_ASAP7_75t_R FILLERxp5_ASAP7_75t_R\"\n";
     file << "global_route\n";
     file << "detailed_route -output_drc detailed_route_drc.rpt\n\n";
+    if (!single_port) {
+        file << "if {![file exists detailed_route_drc.rpt] || [file size detailed_route_drc.rpt] != 0} { error \"PERIPHERY_DRC: routing violations remain\" }\n";
+    }
 
     // Post-route-equivalent STA uses routed global parasitics plus the explicit
     // ASAP7 RC model.  This flow has no extraction SPEF yet, so reports say so
@@ -506,93 +529,28 @@ bool OpenRoadTclGenerator::run_v2lvs(const std::string& work_dir,
                    const std::string& verilog_file,
                    const std::string& spice_file,
                    const std::string& cdl_file) const {
-    std::string cdl = cdl_file;
-    if (cdl.empty()) {
-        std::string tech_cdl = join_path(get_executable_directory(), "tech/cdl/asap7sc7p5t_28_R.cdl");
-        if (file_exists(tech_cdl)) cdl = tech_cdl;
-        else cdl = "/home/s1111534/asap7/asap7sc7p5t_28/CDL/LVS/asap7sc7p5t_28_R.cdl";
+    auto quote = [](const std::string& value) {
+        std::string escaped = "'";
+        for (char c : value) escaped += c == '\'' ? "'\\''" : std::string(1, c);
+        return escaped + "'";
+    };
+    const std::string cdl = cdl_file.empty()
+        ? join_path(get_current_dir_name(), "tech/cdl/asap7sc7p5t_28_R.cdl") : cdl_file;
+    if (!file_exists(cdl)) {
+        LOGE << "Mapped controller conversion requires CDL: " << cdl;
+        return false;
     }
-    struct stat st; if (stat(work_dir.c_str(), &st)!=0) { LOGE << "work_dir missing"; return false; }
-    // Check if v2lvs binary exists before attempting
-    int has_v2lvs = system("which v2lvs > /dev/null 2>&1");
-    if (has_v2lvs != 0) {
-        LOGW << "v2lvs not found in PATH, generating minimal SPICE stub for bring-up";
-        std::string v_path = join_path(work_dir, verilog_file);
-        std::string sp_path = join_path(work_dir, spice_file);
-        // Minimal stub: parse Verilog module header for port list
-        std::ifstream vin(v_path);
-        std::string line, module_line;
-        bool in_module = false;
-        std::string ports_raw;
-        while (std::getline(vin, line)) {
-            if (line.find("module ctrl_decode") != std::string::npos) { in_module = true; module_line = line; }
-            if (in_module) {
-                ports_raw += line + " ";
-                if (line.find(");") != std::string::npos) break;
-            }
-        }
-        vin.close();
-        // Extract ports between ( and );
-        std::string port_str;
-        size_t lp = ports_raw.find('(');
-        size_t rp = ports_raw.rfind(')');
-        if (lp != std::string::npos && rp != std::string::npos && rp > lp) port_str = ports_raw.substr(lp+1, rp-lp-1);
-        // Clean newlines, split by comma
-        std::vector<std::string> ports;
-        std::string cur;
-        for (char c : port_str) {
-            if (c == ',') { if (!cur.empty()) { // trim
-                    size_t s = cur.find_first_not_of(" \t\n\r"); size_t e = cur.find_last_not_of(" \t\n\r");
-                    if (s != std::string::npos) ports.push_back(cur.substr(s, e-s+1));
-                    cur.clear(); } }
-            else cur += c;
-        }
-        if (!cur.empty()) { size_t s = cur.find_first_not_of(" \t\n\r"); size_t e = cur.find_last_not_of(" \t\n\r"); if (s!=std::string::npos) ports.push_back(cur.substr(s, e-s+1)); }
-        // Ensure VDD VSS present
-        bool has_vdd=false, has_vss=false;
-        for (auto &p:ports) { if (p=="VDD") has_vdd=true; if (p=="VSS") has_vss=true; }
-        if (!has_vdd) ports.push_back("VDD");
-        if (!has_vss) ports.push_back("VSS");
-        std::ofstream fout(sp_path);
-        fout << "* Minimal SPICE stub generated from " << verilog_file << " (v2lvs not available)\n";
-        fout << ".SUBCKT ctrl_decode";
-        for (auto &p:ports) fout << " " << p;
-        fout << "\n";
-        // Add placeholder instances to avoid empty subckt (WLOG)
-        fout << "* placeholder for LVS bring-up - real transistors in GDS\n";
-        fout << ".ENDS\n";
-        fout.close();
-        LOGI << "Generated stub SPICE: " << sp_path << " ports=" << ports.size();
-        return true;
+    const std::string converter = join_path(get_current_dir_name(), "scripts/mapped_verilog_to_spice.py");
+    const std::string command = "python3 " + quote(converter)
+        + " --verilog " + quote(join_path(work_dir, verilog_file))
+        + " --cdl " + quote(cdl)
+        + " --output " + quote(join_path(work_dir, spice_file))
+        + " > " + quote(join_path(work_dir, "verilog_to_spice.log")) + " 2>&1";
+    if (std::system(command.c_str()) != 0) {
+        LOGE << "Mapped controller SPICE conversion failed; see " << work_dir << "/verilog_to_spice.log";
+        return false;
     }
-    std::ostringstream cmd;
-    cmd << "bash -c 'cd \"" << work_dir << "\" && v2lvs -v " << verilog_file << " -o " << spice_file << " -s \"" << cdl << "\"' > v2lvs.log 2>&1";
-    LOGI << "Running v2lvs (OpenROAD path): " << cmd.str();
-    int rc = system(cmd.str().c_str());
-    if (rc != 0) {
-        LOGW << "v2lvs failed rc=" << rc << ", falling back to stub SPICE";
-        // Fallback same as above if v2lvs failed at runtime
-        std::string v_path = join_path(work_dir, verilog_file);
-        std::string sp_path = join_path(work_dir, spice_file);
-        if (file_exists(sp_path) && read_file(sp_path).size()>2) return true;
-        // generate minimal stub
-        std::ifstream vin(v_path);
-        std::string line, ports_raw; bool in_module=false;
-        while (std::getline(vin, line)) {
-            if (line.find("module ctrl_decode") != std::string::npos) in_module=true;
-            if (in_module) { ports_raw+=line+" "; if(line.find(");")!=std::string::npos) break; }
-        }
-        vin.close();
-        std::string port_str; size_t lp=ports_raw.find('('); size_t rp=ports_raw.rfind(')');
-        if(lp!=std::string::npos && rp!=std::string::npos) port_str=ports_raw.substr(lp+1,rp-lp-1);
-        std::vector<std::string> ports; std::string cur;
-        for(char c:port_str){ if(c==','){ if(!cur.empty()){ size_t s=cur.find_first_not_of(" \t\n\r"); size_t e=cur.find_last_not_of(" \t\n\r"); if(s!=std::string::npos) ports.push_back(cur.substr(s,e-s+1)); cur.clear();}} else cur+=c; }
-        if(!cur.empty()){ size_t s=cur.find_first_not_of(" \t\n\r"); size_t e=cur.find_last_not_of(" \t\n\r"); if(s!=std::string::npos) ports.push_back(cur.substr(s,e-s+1));}
-        bool has_vdd=false,has_vss=false; for(auto&p:ports){ if(p=="VDD") has_vdd=true; if(p=="VSS") has_vss=true; }
-        if(!has_vdd) ports.push_back("VDD"); if(!has_vss) ports.push_back("VSS");
-        std::ofstream fout(sp_path); fout<<"* Fallback SPICE stub (v2lvs failed)\n.SUBCKT ctrl_decode"; for(auto&p:ports) fout<<" "<<p; fout<<"\n.ENDS\n"; fout.close();
-        return true;
-    }
+    LOGI << "Converted routed controller to structural SPICE with CDL pin ordering";
     return true;
 }
 

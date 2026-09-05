@@ -129,8 +129,8 @@ TEST(YosysTclGeneratorTest, DualPortChecksAndNamesExactPhysicalStructure) {
     const std::string script = gen.generate_script(
         /*rtl_path=*/std::string(REPO_ROOT) + "/tech/verilog_dp",
         /*syn_path=*/"tmp/syn_dp_fixed",
-        /*param_str=*/"ADDR_WIDTH=6,NUM_WL=8,NUM_BANK=2,COLUMN_MUX=4,WL_BUF=3,SAE_BUF=2",
-        /*addr_width=*/6,
+        /*param_str=*/"ADDR_WIDTH=7,NUM_WL=8,NUM_BANK=2,COLUMN_MUX=4,WL_BUF=3,SAE_BUF=2",
+        /*addr_width=*/7,
         /*num_wls=*/8,
         /*num_banks=*/2,
         /*column_mux=*/4,
@@ -144,8 +144,8 @@ TEST(YosysTclGeneratorTest, DualPortChecksAndNamesExactPhysicalStructure) {
 
     EXPECT_NE(script.find("-set WL_BUF 3 -set SAE_BUF 2 ctrl_decode"),
               std::string::npos);
-    EXPECT_NE(script.find("select -assert-count 15 t:*DFF*ASAP7_75t_R"),
-              std::string::npos);  // 2 * addr_width + 3 state bits
+    EXPECT_NE(script.find("select -assert-count 18 t:*DFF*ASAP7_75t_R"),
+              std::string::npos);  // 2 * addr_width + 4 state bits
     EXPECT_NE(script.find("select -assert-count 10 t:BUFx2_ASAP7_75t_R "
                           "a:physical_dp_delay %i"),
               std::string::npos);  // 2 * (WL_BUF + SAE_BUF)
@@ -255,6 +255,9 @@ TEST(OpenRoadTclGeneratorTest, DualPortProtectsDelayCellsAndRejectsNegativeHold)
               std::string::npos);
     EXPECT_NE(script.find("if {$hold_slack < -0.001}"), std::string::npos);
     EXPECT_EQ(script.find("if {$hold_slack < -0.010}"), std::string::npos);
+    const auto hold = script.find("repair_timing -hold");
+    EXPECT_NE(hold, std::string::npos);
+    EXPECT_NE(script.find("repair_design -max_utilization 90", hold), std::string::npos);
 }
 
 }  // namespace OpenFinRAM

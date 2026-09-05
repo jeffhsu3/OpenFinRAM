@@ -158,12 +158,12 @@ std::string SpiceGenerator::generate_colgrp() {
     append_indexed_tokens(instances, "WLB[", config_.num_wls, "]");
     instances << "BLBN[0] BLBN[1] BLBN[2] BLBN[3] BLB[0] BLB[1] BLB[2] BLB[3] VDD VSS array_sram_6t122\n";
     instances << "X2 ";
-    append_tokens(instances, {"wrenan", "wrena", "SAE", "SAPRECHN", "oeb_out", "oe_out", "D", "Q"});
-    instances << "bltn[0] bltn[1] bltn[2]\n";
-    instances << "+ bltn[3] blt[0] blt[1] blt[2] blt[3] blbn[0] blbn[1] blbn[2] blbn[3] blb[0]\n";
-    instances << "+ blb[1] blb[2] blb[3] BLPRECHTN BLPRECHBN yseltn[0] yseltn[1] yseltn[2] yseltn[3] yselt[0]\n";
+    append_tokens(instances, {"wrenan", "wrena", "sae", "saprechn", "oeb_out", "oe_out", "D", "Q"});
+    instances << "BLTN[0] BLTN[1] BLTN[2]\n";
+    instances << "+ BLTN[3] BLT[0] BLT[1] BLT[2] BLT[3] BLBN[0] BLBN[1] BLBN[2] BLBN[3] BLB[0]\n";
+    instances << "+ BLB[1] BLB[2] BLB[3] blprechtn blprechbn yseltn[0] yseltn[1] yseltn[2] yseltn[3] yselt[0]\n";
     instances << "+ yselt[1] yselt[2] yselt[3] yselbn[0] yselbn[1] yselbn[2] yselbn[3] yselb[0] yselb[1] yselb[2]\n";
-    instances << "+ yselb[3] vdd vss iocolgrp_sram_6t122_v2\n";
+    instances << "+ yselb[3] VDD VSS iocolgrp_sram_6t122_v2\n";
     
     return create_subckt("colgrp_sram_6t122", ports, instances.str());
 }
@@ -262,7 +262,8 @@ std::string SpiceGenerator::generate_cell_row_8t() {
         instances << "X" << i << " WLA[" << i << "] WLB[" << i << "] BLA BLAN BLB BLBN VDD VSS sram_cell_8t\n";
     }
 
-    instances << "X" << config_.num_wls + 1 << " BLA BLAN BLB BLBN VDD VSS dummy_cell_8t\n";
+    // The generated 8T array terminates in device-free column caps and
+    // well/substrate taps. There is no active dummy bitcell in this row.
 
     return create_subckt("sram_cell_row_8t", ports, instances.str());
 }
@@ -298,10 +299,10 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     append_indexed_ports(ports, "WLTB[", config_.num_wls, "]");
     append_indexed_ports(ports, "WLBA[", config_.num_wls, "]");
     append_indexed_ports(ports, "WLBB[", config_.num_wls, "]");
-    append_ports(ports, {"DA", "QA", "QB"});
+    append_ports(ports, {"DA", "QA", "DB", "QB"});
 
     const std::vector<std::string> ctrl_port_names = {
-        "wrenaA", "wrenanA",
+        "wrenaA", "wrenanA", "wrenaB", "wrenanB",
         "oeb_outA", "oe_outA", "oeb_outB", "oe_outB",
         "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB"
     };
@@ -336,8 +337,8 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     append_indexed_tokens(instances, "BLBN_B[", 4, "]");
     instances << " VDD VSS array_sram_8t\n";
 
-    instances << "X2 wrenaA wrenanA oeb_outA oe_outA ";
-    instances << "DA QA oeb_outB oe_outB QB ";
+    instances << "X2 wrenaA wrenanA wrenaB wrenanB ";
+    instances << "oeb_outA oe_outA DA QA oeb_outB oe_outB DB QB ";
     append_indexed_tokens(instances, "BLT_A[", 4, "]");
     append_indexed_tokens(instances, "BLTN_A[", 4, "]");
     append_indexed_tokens(instances, "BLB_A[", 4, "]");
@@ -372,10 +373,11 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
 
     append_indexed_ports(ports, "DA[", config_.num_data_bits / 2, "]");
     append_indexed_ports(ports, "QA[", config_.num_data_bits / 2, "]");
+    append_indexed_ports(ports, "DB[", config_.num_data_bits / 2, "]");
     append_indexed_ports(ports, "QB[", config_.num_data_bits / 2, "]");
 
     const std::vector<std::string> ctrl_port_names = {
-        "wrenaA", "wrenanA",
+        "wrenaA", "wrenanA", "wrenaB", "wrenanB",
         "oeb_outA", "oe_outA", "oeb_outB", "oe_outB", 
         "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB",
         "sae_A", "sae_B"
@@ -405,8 +407,10 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
             append_indexed_tokens(instances, "WLBA[", config_.num_wls, "]", mux * config_.num_wls);
             append_indexed_tokens(instances, "WLBB[", config_.num_wls, "]", mux * config_.num_wls);
 
-            instances << "DA[" << bit << "] QA[" << bit << "] QB[" << bit << "] ";
+            instances << "DA[" << bit << "] QA[" << bit << "] "
+                      << "DB[" << bit << "] QB[" << bit << "] ";
             instances << "wrenaA[" << mux << "] wrenanA[" << mux
+                      << "] wrenaB[" << mux << "] wrenanB[" << mux
                       << "] oeb_outA[" << mux << "] oe_outA[" << mux << "] oeb_outB[" << mux << "] oe_outB[" << mux 
                       << "] blprechtnA[" << mux << "] blprechbnA[" << mux << "] blprechtnB[" << mux << "] blprechbnB[" << mux
                       << "] ";
@@ -464,7 +468,6 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
 
         content << sep << SpiceTemplates::get_cell_8t() << "\n\n";
         content << sep << SpiceTemplates::get_dummy_cell_8t() << "\n\n";
-        content << sep << SpiceTemplates::get_replica_cell_8t() << "\n\n";
 
         // The 8T port wrappers reuse the characterized 6T differential IO
         // core, including its four-way precharge/mux front end.
@@ -474,15 +477,13 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
 
         content << sep << SpiceTemplates::get_write_driver() << "\n\n";
         content << sep << SpiceTemplates::get_sense_amp() << "\n\n";
-        content << sep << SpiceTemplates::get_skewed_inv() << "\n\n";
         // content << sep << SpiceTemplates::get_or2() << "\n\n";
-        content << sep << SpiceTemplates::get_buf() << "\n\n";
         content << sep << SpiceTemplates::get_io_nand() << "\n\n";
         content << sep << SpiceTemplates::get_tbuf() << "\n\n";
         content << sep << SpiceTemplates::get_iocolgrp() << "\n\n";
         content << sep << SpiceTemplates::get_ioprech_8t_a() << "\n\n";
         content << sep << SpiceTemplates::get_ioprech_8t_b() << "\n\n";
-        content << sep << SpiceTemplates::get_iocolgrp_8t(20) << "\n\n";
+        content << sep << SpiceTemplates::get_iocolgrp_8t() << "\n\n";
 
         content << sep << generate_cell_row_8t() << "\n";
         content << sep << generate_array_8t() << "\n";
@@ -491,6 +492,10 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
     }
     
     return content.str();
+}
+
+std::string SpiceGenerator::generate_spice_content() {
+    return generate_spice_content(config_.single_port);
 }
 
 bool SpiceGenerator::generate() {
@@ -511,7 +516,7 @@ bool SpiceGenerator::generate() {
     }
 
     std::string output_path = join_path(get_current_dir_name(), "tmp/sram_colgrp_" + get_run_timestamp() + ".sp");
-    std::string content = generate_spice_content(config_.single_port);
+    std::string content = generate_spice_content();
     
     std::ofstream outfile(output_path);
     if (!outfile.is_open()) {

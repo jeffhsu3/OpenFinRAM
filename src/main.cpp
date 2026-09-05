@@ -100,6 +100,8 @@ int main(int argc, char **argv) {
     SpiceIntegrator integrator(cli_options);
     if (!integrator.integrate_sram()) {
         LOGW << "SRAM integration failed, skipping.";
+        if (!cli_options.single_port && (cli_options.use_openroad || cli_options.openroad_only))
+            return 1;
     }
 
     // Run siliconsmart characterization
@@ -166,6 +168,8 @@ int main(int argc, char **argv) {
                 &liberty_error,
                 char_ptr)) {
             LOGW << "Estimated Liberty export failed: " << liberty_error;
+            if (!cli_options.single_port && (cli_options.use_openroad || cli_options.openroad_only))
+                return 1;
         }
     }
 }

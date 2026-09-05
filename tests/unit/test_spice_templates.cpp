@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cctype>
 #include <fstream>
 #include <iterator>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "spice_templates.hpp"
+#include "spice_generator.hpp"
 
 namespace {
 
@@ -74,6 +76,31 @@ size_t instance_node_count(const std::string& text, const std::string& name) {
     return 0;
 }
 
+std::vector<std::string> subckt_body(const std::string& text,
+                                     const std::string& name);
+
+size_t subckt_instance_node_count(const std::string& text,
+                                  const std::string& subckt,
+                                  const std::string& instance) {
+    const auto body = subckt_body(text, subckt);
+    for (const auto& statement : body) {
+        const auto fields = tokens(statement);
+        if (!fields.empty() && fields.front() == instance) {
+            return fields.size() - 2;
+        }
+    }
+    ADD_FAILURE() << "missing instance " << instance << " in " << subckt;
+    return 0;
+}
+
+size_t named_subckt_port_count(const std::string& text, const std::string& name) {
+    const auto body = subckt_body(text, name);
+    if (body.empty()) {
+        return 0;
+    }
+    return tokens(body.front()).size() - 2;
+}
+
 std::string upper(std::string text) {
     for (char& character : text) {
         character = static_cast<char>(
@@ -114,6 +141,91 @@ std::vector<std::string> subckt_body(const std::string& text,
     }
     ADD_FAILURE() << "missing .SUBCKT " << name;
     return {};
+}
+
+std::map<std::string, std::string> instance_bindings(
+    const std::string& parent, const std::string& instance,
+    const std::string& child) {
+    const auto child_statements = logical_statements(child);
+    if (child_statements.empty()) {
+        ADD_FAILURE() << "empty child subcircuit";
+        return {};
+    }
+    const auto formal = tokens(child_statements.front());
+    for (const auto& statement : logical_statements(parent)) {
+        const auto actual = tokens(statement);
+        if (actual.empty() || actual.front() != instance) {
+            continue;
+        }
+        if (formal.size() != actual.size()) {
+            ADD_FAILURE() << instance << " has " << actual.size() - 2
+                          << " actual nodes for " << formal.size() - 2
+                          << " formal ports";
+            return {};
+        }
+        std::map<std::string, std::string> bindings;
+        for (size_t index = 2; index < formal.size(); ++index) {
+            bindings.emplace(formal[index], actual[index - 1]);
+        }
+        return bindings;
+    }
+    ADD_FAILURE() << "missing instance " << instance;
+    return {};
+}
+
+// Although SPICE identifiers are case-insensitive, downstream netlist tools
+// are not universally so.  Report two spellings of the same logical node
+// within any generated subcircuit before that ambiguity can become a split
+// net in a case-sensitive consumer.
+std::vector<std::string> case_aliased_nets(const std::string& text) {
+    std::set<std::string> collisions;
+    std::map<std::string, std::string> spelling;
+    std::string current;
+    auto record = [&](const std::string& node) {
+        const std::string key = upper(node);
+        const auto found = spelling.find(key);
+        if (found == spelling.end()) {
+            spelling.emplace(key, node);
+        } else if (found->second != node) {
+            collisions.insert(current + ": " + found->second + " / " + node);
+        }
+    };
+
+    for (const auto& statement : logical_statements(text)) {
+        const auto fields = tokens(statement);
+        if (fields.empty()) {
+            continue;
+        }
+        if (upper(fields.front()) == ".SUBCKT") {
+            current = fields.size() > 1 ? fields[1] : "<unnamed>";
+            spelling.clear();
+            for (size_t index = 2; index < fields.size(); ++index) {
+                record(fields[index]);
+            }
+            continue;
+        }
+        if (upper(fields.front()) == ".ENDS") {
+            current.clear();
+            spelling.clear();
+            continue;
+        }
+        if (current.empty()) {
+            continue;
+        }
+
+        const char kind = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(fields.front().front())));
+        if (kind == 'M') {
+            for (size_t node = 1; node <= 4 && node < fields.size(); ++node) {
+                record(fields[node]);
+            }
+        } else if (kind == 'X') {
+            for (size_t node = 1; node + 1 < fields.size(); ++node) {
+                record(fields[node]);
+            }
+        }
+    }
+    return {collisions.begin(), collisions.end()};
 }
 
 // A net used by exactly one device terminal and absent from the port list is
@@ -175,14 +287,17 @@ TEST(SpiceTemplates8T, PortWrappersPreserveIndependentControls) {
     EXPECT_EQ(count_occurrences(port_b, "iocolgrp_sram_6t122_v2"), 1U);
 }
 
-TEST(SpiceTemplates8T, CombinedIoUsesPortWrappersAndDisablesPortBWrite) {
+TEST(SpiceTemplates8T, CombinedIoUsesPortWrappersAndSupportsBothWritePorts) {
     const std::string combined = OpenFinRAM::SpiceTemplates::get_iocolgrp_8t();
 
     EXPECT_EQ(count_occurrences(combined, "ioprech_sram_8t_a"), 1U);
     EXPECT_EQ(count_occurrences(combined, "ioprech_sram_8t_b"), 1U);
     EXPECT_NE(combined.find(
-        "XIO_B vdd vss sae_B sae_B oeb_out_B oe_out_B vss QB"),
+        "XIO_B wrenan_B wrena_B sae_B sae_B oeb_out_B oe_out_B DB QB"),
         std::string::npos);
+    EXPECT_NE(combined.find("wrena_A wrenan_A wrena_B wrenan_B"),
+              std::string::npos);
+    EXPECT_EQ(combined.find("XIO_B vdd vss"), std::string::npos);
     EXPECT_EQ(combined.find("XSA_A"), std::string::npos);
     EXPECT_EQ(combined.find("XWRMUX_T"), std::string::npos);
 }
@@ -197,6 +312,101 @@ TEST(SpiceTemplates8T, WrapperAndCompositeInstanceAritiesMatch) {
     EXPECT_EQ(instance_node_count(port_b, "XIO_B"), subckt_port_count(core));
     EXPECT_EQ(instance_node_count(combined, "XIO_A"), subckt_port_count(port_a));
     EXPECT_EQ(instance_node_count(combined, "XIO_B"), subckt_port_count(port_b));
+}
+
+TEST(SpiceTemplates8T, WriteEnableBindingsFollowWrapperFormalOrder) {
+    const std::string port_a = OpenFinRAM::SpiceTemplates::get_ioprech_8t_a();
+    const std::string port_b = OpenFinRAM::SpiceTemplates::get_ioprech_8t_b();
+    const std::string combined = OpenFinRAM::SpiceTemplates::get_iocolgrp_8t();
+
+    const auto a = instance_bindings(combined, "XIO_A", port_a);
+    const auto b = instance_bindings(combined, "XIO_B", port_b);
+    ASSERT_EQ(a.count("WRENAN_A"), 1U);
+    ASSERT_EQ(a.count("WRENA_A"), 1U);
+    ASSERT_EQ(b.count("WRENAN_B"), 1U);
+    ASSERT_EQ(b.count("WRENA_B"), 1U);
+    EXPECT_EQ(a.at("WRENAN_A"), "wrenan_A");
+    EXPECT_EQ(a.at("WRENA_A"), "wrena_A");
+    EXPECT_EQ(b.at("WRENAN_B"), "wrenan_B");
+    EXPECT_EQ(b.at("WRENA_B"), "wrena_B");
+}
+
+TEST(SpiceTemplates8T, GeneratedDeckOmitsRetiredReplicaSaeScaffolding) {
+    MainCliOptions config;
+    config.single_port = false;
+    config.num_wls = 2;
+    config.num_data_bits = 4;
+    config.num_banks = 1;
+    const std::string generated =
+        OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+
+    EXPECT_EQ(generated.find("buf_sram"), std::string::npos);
+    EXPECT_EQ(generated.find("skewed_inv_sram"), std::string::npos);
+    EXPECT_EQ(generated.find("replica_cell_8t"), std::string::npos);
+    EXPECT_EQ(generated.find("sram_prech_ymux_8t_v1"), std::string::npos);
+    EXPECT_EQ(generated.find("sram_prech_ymux_8t_v2"), std::string::npos);
+    EXPECT_EQ(generated.find("wrasst_prech_ymux_x8_sram_8t"), std::string::npos);
+}
+
+TEST(SpiceTemplates, GeneratedDecksHaveNoCaseAliasedNets) {
+    MainCliOptions config;
+    config.num_wls = 2;
+    config.num_data_bits = 4;
+    config.num_banks = 1;
+
+    config.single_port = true;
+    const auto single = case_aliased_nets(
+        OpenFinRAM::SpiceGenerator(config).generate_spice_content());
+    for (const auto& collision : single) {
+        ADD_FAILURE() << "single-port " << collision;
+    }
+
+    config.single_port = false;
+    const auto dual = case_aliased_nets(
+        OpenFinRAM::SpiceGenerator(config).generate_spice_content());
+    for (const auto& collision : dual) {
+        ADD_FAILURE() << "dual-port " << collision;
+    }
+}
+
+TEST(SpiceTemplates8T, GeneratedMacroHierarchyCarriesBothWritePorts) {
+    MainCliOptions config;
+    config.single_port = false;
+    config.num_wls = 2;
+    config.num_data_bits = 4;
+    config.num_banks = 1;
+    OpenFinRAM::SpiceGenerator generator(config);
+    const std::string generated = generator.generate_spice_content();
+
+    const auto colgrp = subckt_body(generated, "colgrp_sram_8t");
+    const auto stacked = subckt_body(generated, "stacked_colgrp_x4x2x1");
+    ASSERT_FALSE(colgrp.empty());
+    ASSERT_FALSE(stacked.empty());
+    const auto colgrp_header = tokens(colgrp.front());
+    const auto stacked_header = tokens(stacked.front());
+    for (const std::string& pin : {"DB", "wrenaB", "wrenanB"}) {
+        EXPECT_NE(std::find(colgrp_header.begin(), colgrp_header.end(), pin),
+                  colgrp_header.end()) << pin;
+    }
+    for (const std::string& pin : {"DB[0]", "DB[1]", "wrenaB[0]", "wrenanB[0]"}) {
+        EXPECT_NE(std::find(stacked_header.begin(), stacked_header.end(), pin),
+                  stacked_header.end()) << pin;
+    }
+    EXPECT_EQ(subckt_instance_node_count(generated, "colgrp_sram_8t", "X2"),
+              named_subckt_port_count(generated, "iocolgrp_sram_8t"));
+    EXPECT_EQ(subckt_instance_node_count(generated, "stacked_colgrp_x4x2x1", "X0_0"),
+              named_subckt_port_count(generated, "colgrp_sram_8t"));
+
+    const auto row = subckt_body(generated, "sram_cell_row_8t");
+    size_t active_cells = 0;
+    for (const auto& statement : row) {
+        const auto fields = tokens(statement);
+        ASSERT_FALSE(fields.empty());
+        if (fields.front().front() != 'X') continue;
+        EXPECT_EQ(fields.back(), "sram_cell_8t");
+        ++active_cells;
+    }
+    EXPECT_EQ(active_cells, 2U);  // Physical end caps/taps have no dummy devices.
 }
 
 TEST(SpiceTemplates8T, TrackedWrapperNetlistMatchesTheTemplateContract) {
@@ -236,7 +446,6 @@ TEST(SpiceTemplates8T, BitcellFamilyHasNoFloatingNets) {
     const std::vector<std::pair<std::string, std::string>> cells = {
         {OpenFinRAM::SpiceTemplates::get_cell_8t(), "sram_cell_8t"},
         {OpenFinRAM::SpiceTemplates::get_dummy_cell_8t(), "dummy_cell_8t"},
-        {OpenFinRAM::SpiceTemplates::get_replica_cell_8t(), "replica_cell_8t"},
     };
     for (const auto& entry : cells) {
         const auto dangling = dangling_nets(entry.first, entry.second);
@@ -247,17 +456,4 @@ TEST(SpiceTemplates8T, BitcellFamilyHasNoFloatingNets) {
         EXPECT_TRUE(dangling.empty())
             << entry.second << " has floating nets: " << joined;
     }
-}
-
-TEST(SpiceTemplates8T, ReplicaDrivesOnlyItsTrueBitlines) {
-    const std::string replica = OpenFinRAM::SpiceTemplates::get_replica_cell_8t();
-    const auto body = subckt_body(replica, "replica_cell_8t");
-    ASSERT_FALSE(body.empty());
-
-    // The unused complement side sits at the forced QB level rather than on an
-    // undeclared RBLAN/RBLBN node, so it carries no current and cannot float.
-    EXPECT_EQ(replica.find("RBLAN"), std::string::npos);
-    EXPECT_EQ(replica.find("RBLBN"), std::string::npos);
-    EXPECT_EQ(count_occurrences(replica, "RBLA"), 2U);  // port list + M4
-    EXPECT_EQ(count_occurrences(replica, "RBLB"), 2U);  // port list + M6
 }

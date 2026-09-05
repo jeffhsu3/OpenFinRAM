@@ -13,6 +13,7 @@ public:
     explicit SpiceGenerator(const MainCliOptions& config);
 
     bool generate();
+    std::string generate_spice_content();
 
 private:
     MainCliOptions config_;

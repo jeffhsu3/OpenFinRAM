@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cfloat>
 #include <fstream>
+#include <cstdlib>
+#include <sstream>
 
 #include "plog/Log.h"
 
@@ -3512,8 +3514,58 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
     return true;
 }
 
+bool LayoutGenerator::create_dual_port_macro() {
+    if (cli_options_.num_rows_per_mux != 4) {
+        LOGE << "The 2RW physical IO currently supports a four-row column mux";
+        return false;
+    }
+    const std::string root = get_current_dir_name();
+    const std::string timestamp = get_run_timestamp();
+    const bool openroad = cli_options_.use_openroad || cli_options_.openroad_only;
+    const std::string controller = join_path(root, "tmp/" +
+        std::string(openroad ? "openroad_" : "innovus_") + timestamp + "/ctrl_decode.gds");
+    if (!file_exists(controller)) {
+        LOGE << "2RW macro assembly requires the routed controller GDS: " << controller;
+        return false;
+    }
+    const std::string name = "sram_x" + std::to_string(2 * cli_options_.num_wls)
+        + "x" + std::to_string(cli_options_.num_data_bits)
+        + "x" + std::to_string(cli_options_.num_banks);
+    const std::string work = join_path(root, "tmp/macro_2rw_" + timestamp);
+    const std::string output = join_path(root, "results/" + name + "_" + timestamp + "/" + name + ".gds");
+    const std::string local_python = join_path(root, ".venv/bin/python");
+    const std::string python = file_exists(local_python) ? local_python : "python3";
+    std::string router = cli_options_.openroad_path.empty() ? "openroad" : cli_options_.openroad_path;
+    if (directory_exists(router)) router = join_path(router, "build/src/openroad");
+    auto quote = [](const std::string& value) {
+        std::string escaped = "'";
+        for (char c : value) escaped += c == '\'' ? "'\\''" : std::string(1, c);
+        return escaped + "'";
+    };
+    std::ostringstream command;
+    command << quote(python) << " " << quote(join_path(root, "scripts/compile_asap7_2rw.py"))
+        << " --wordlines " << cli_options_.num_wls
+        << " --bits " << cli_options_.num_data_bits
+        << " --banks " << cli_options_.num_banks
+        << " --controller " << quote(controller)
+        << " --work " << quote(work)
+        << " --output " << quote(output)
+        << " --openroad " << quote(router);
+    LOGI << "Assembling and routing 2RW macro; reports: " << work;
+    if (std::system(command.str().c_str()) != 0) {
+        LOGE << "2RW macro assembly or physical connectivity verification failed";
+        return false;
+    }
+    return file_exists(output);
+}
+
 bool LayoutGenerator::gen_layout() {
     LOGD << "Generating layout...";
+
+    // The 8T path generates the requested tapped geometry on demand and uses
+    // physical pin abstracts for macro routing. It does not enter the 6T
+    // assembler, whose pitches, fillers, and PG coordinates are unrelated.
+    if (!cli_options_.single_port) return create_dual_port_macro();
 
     if (!load_sram_gds()) {
         LOGE << "Failed to load SRAM GDS!";
@@ -3521,14 +3573,6 @@ bool LayoutGenerator::gen_layout() {
     }
     if (!extract_required_cells()) {
         LOGE << "Failed to extract required cells!";
-        return false;
-    }
-    if (!cli_options_.single_port) {
-        // The configured 8T active array and routed IO column were loaded and
-        // validated above.  The top-level assembler still assumes academic
-        // 6T tap/replica and power geometry, so keep final macro generation
-        // fail-closed until those placement rules have 8T implementations.
-        LOGE << "Dual-port IO-column preflight passed, but final macro layout still requires 8T replica/tap cells and power integration";
         return false;
     }
     if (!create_sram_column()) {

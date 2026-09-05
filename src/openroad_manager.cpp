@@ -3,10 +3,13 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <numeric>
 #include <sys/stat.h>
 #include "plog/Log.h"
 #include "openroad_tcl_generator.hpp"
 #include "utils.hpp"
+#include "cell_utils.hpp"
+#include "layermap.hpp"
 
 OpenRoadManager::OpenRoadManager(const MainCliOptions& cli_options)
     : cli_options_(cli_options) {}
@@ -52,10 +55,31 @@ bool OpenRoadManager::run_openroad_flow() {
     if (cli_options_.single_port) {
         sram_width = (cli_options_.bitcell_width * 2 + 2.376 + cli_options_.bitcell_width * ((cli_options_.num_wls + 3) * 2)) * cli_options_.num_banks - cli_options_.bitcell_width;
     } else {
-        // 8T dual-port: bitcell wider than 6T; keep conservative estimate
-        // until measured 8T GDS width is available.
-        LOGW << "Dual-port (8T) sram_width uses estimated placeholder 15.0; measure 8T GDS for refined width";
-        sram_width = 15.0;
+        OpenFinRAM::LayerMap map;
+        map.init_asap7_layermap();
+        gdstk::ErrorCode error = gdstk::ErrorCode::NoError;
+        auto lib = gdstk::read_gds(join_path(get_current_dir_name(),
+            "tech/gds/sram_8t_iocolumn.gds").c_str(), 0, 1e-2, nullptr, &error);
+        auto* io = lib.get_cell("iocolgrp_sram_8t");
+        auto* bitcell = lib.get_cell("sram_cell_8t");
+        if (error != gdstk::ErrorCode::NoError || !io || !bitcell) {
+            LOGE << "Cannot measure the 8T IO/bitcell geometry for controller placement";
+            lib.free_all();
+            return false;
+        }
+        auto io_size = OpenFinRAM::get_cell_size_from_boundary(io, map);
+        auto bit_size = OpenFinRAM::get_cell_size_from_boundary(bitcell, map);
+        if (!io_size.valid || !bit_size.valid) {
+            LOGE << "8T IO/bitcell has no valid placement boundary";
+            lib.free_all();
+            return false;
+        }
+        // Same tap policy as compile_asap7_2rw.py; +1 is the outside cap.
+        const unsigned tap_pitch = std::gcd(cli_options_.num_wls, 16u);
+        const unsigned slots = cli_options_.num_wls + cli_options_.num_wls / tap_pitch;
+        sram_width = (io_size.width + 2 * (slots + 1) * bit_size.width)
+                     * cli_options_.num_banks;
+        lib.free_all();
     }
     double col_width = (sram_width + cli_options_.bitcell_width) / cli_options_.num_banks;
     // Prefer CWD tech (repo root) for tech_root; OpenROAD flow may be run from repo root

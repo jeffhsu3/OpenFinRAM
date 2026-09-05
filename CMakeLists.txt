@@ -87,6 +87,12 @@ if(BUILD_TESTING)
     set_tests_properties(decode_check PROPERTIES TIMEOUT 600)
 
     add_test(
+        NAME decode_dp_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_decode_dp_check.sh
+    )
+    set_tests_properties(decode_dp_check PROPERTIES TIMEOUT 600)
+
+    add_test(
         NAME equiv_check
         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_equiv_check.sh
     )
@@ -121,6 +127,21 @@ if(BUILD_TESTING)
         SKIP_RETURN_CODE 77
     )
 
+    # Device-level regression at the ASAP7 TT corner.  Exercises both port
+    # interfaces through precharge, opposite-polarity reads/writes, concurrent
+    # different-address access, and same-address read/read through shared 8T
+    # cells.  Skips when Xyce is unavailable.
+    add_test(
+        NAME asap7_8t_ioprech_spice_check
+        COMMAND ${CMAKE_COMMAND} -E env
+            IOPRECH_SPICE_DUMPER=$<TARGET_FILE:dump_8t_ioprech_spice>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_8t_ioprech_spice_check.sh
+    )
+    set_tests_properties(asap7_8t_ioprech_spice_check PROPERTIES
+        TIMEOUT 600
+        SKIP_RETURN_CODE 77
+    )
+
     # Academic-style sramcol_xN / array_xNxM hierarchy for parameterized 8T
     # wordlines, with the same builder covering non-standard 6T sizes.
     add_test(
@@ -141,6 +162,22 @@ if(BUILD_TESTING)
     set_tests_properties(asap7_8t_iocolumn_check PROPERTIES
         TIMEOUT 300
         SKIP_RETURN_CODE 77
+    )
+
+    add_test(
+        NAME asap7_2rw_physical_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_2rw_physical_check.sh
+    )
+    set_tests_properties(asap7_2rw_physical_check PROPERTIES
+        TIMEOUT 300 SKIP_RETURN_CODE 77
+    )
+    add_test(
+        NAME asap7_2rw_macro_check
+        COMMAND ${CMAKE_COMMAND} -E env OPENFINRAM_BIN=$<TARGET_FILE:OpenFinRAM>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_2rw_macro_check.sh
+    )
+    set_tests_properties(asap7_2rw_macro_check PROPERTIES
+        TIMEOUT 1200 SKIP_RETURN_CODE 77 LABELS integration RUN_SERIAL TRUE
     )
 
     # P0 characterization-JSON gate: a JSON carrying the estimated constants
