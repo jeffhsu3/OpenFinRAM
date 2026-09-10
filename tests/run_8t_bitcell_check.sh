@@ -47,4 +47,6 @@ if ! cmp -s "$generated_tap" "$committed_tap"; then
     exit 1
 fi
 
+"$python_bin" "$repo_root/tests/tools/test_8t_edges.py"
+
 echo "PASS: ASAP7 8T bitcell/edge/tap topology, tiling, rules, and artifacts"

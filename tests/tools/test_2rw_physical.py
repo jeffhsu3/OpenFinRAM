@@ -82,6 +82,30 @@ class PhysicalMacroTests(unittest.TestCase):
         self.assertEqual(graph.at(19, (0.03, 0.03)), graph.at(20, (0.03, 0.03)))
         self.assertNotEqual(graph.at(19, (0.03, 0.03)), graph.at(30, (0.03, 0.03)))
 
+    def test_mapped_spice_preserves_single_bit_vectors_and_supply_ports(self):
+        design = {
+            "modules": {
+                "ctrl_decode": {
+                    "ports": {
+                        "A": {"bits": [2]},
+                        "Y": {"bits": [3]},
+                        "VDD": {"bits": [4]},
+                        "VSS": {"bits": [5]},
+                    },
+                    "netnames": {"A": {"attributes": {"single_bit_vector": "1"}}},
+                    "cells": {
+                        "inst": {
+                            "type": "gate",
+                            "connections": {"A": [2], "Y": [3], "VDD": [4], "VSS": [5]},
+                        }
+                    },
+                }
+            }
+        }
+        spice = convert(design, ".SUBCKT gate A VDD VSS Y\n.ENDS gate\n")
+        self.assertIn(".SUBCKT ctrl_decode A[0] Y VDD VSS\n", spice)
+        self.assertIn("X0 A[0] VDD VSS Y gate", spice)
+
     def test_topology_verifier_rejects_opens_and_shorts(self):
         with tempfile.TemporaryDirectory() as scratch:
             path = Path(scratch) / "test.gds"

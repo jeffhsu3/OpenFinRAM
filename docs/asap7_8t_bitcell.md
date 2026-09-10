@@ -59,12 +59,34 @@ The edge library follows the roles of OpenRAM's public `openram_dp_cell_dummy`,
 | `dummy_cell_8t` | Forced 8T core, both wordlines off | Inactive terminal bitcell |
 | `sram_cell_8t_col_cap` | No devices; BLA/BLAN/BLB/BLBN and supply rails | Left/right column cap |
 | `sram_cell_8t_row_cap` | No devices; WLA/WLB and ground routes | Top/bottom row cap |
-| `sram_cell_8t_corner` | No devices; grounded terminating routes | Array corner cap |
+| `sram_cell_8t_corner`, `_lr`, `_v2`, `_v2_lr` | No devices; grounded terminating routes | Four explicit array corners |
+| `dummy_vertical_8t`, `_lr`, `_v2`, `_v2_lr` | No devices; WLA/WLB and ground routes | Oriented end-row tiles |
+| `dummy_vertical_array_X<N>_8t` and its orientation variants | N vertical dummy tiles | Parameterized array end row |
+| `dummy_topbot_8t_v1`, `_v2`, and their `_lr` variants | No devices; bitline and supply rails | Alternating mux-row side caps |
+| `FILLER_BLANK_8t` | FIN/poly only | 0.054 µm × 0.594 µm blank tile |
+| `FILLER_cgedge_8t` | Eight blank tiles | 0.108 µm × 2.376 µm outer column-group filler |
 
-All four cells have the same 0.108 µm × 0.594 µm boundary and the same
-FIN/GATE/GCUT/WELL/select frame as the bitcell. The canonical row/column/corner
-cells are mirrored at placement time for the opposite sides and other three
-corners. The cap-cell SPICE subcircuits are intentionally empty, as in OpenRAM;
+The core dummy and cap masters have a 0.108 µm × 0.594 µm boundary and the
+bitcell's FIN/GATE/GCUT/WELL/select frame in the corresponding orientation.
+`build_edge_library` derives the four corners from one canonical cell and
+materializes each variant's polygons and pins. `_lr` reverses X and `_v2`
+reverses Y about the **placement boundary**, retaining its original coordinates;
+geometry overhangs do not determine the mirror center. Side caps use `v1` for
+the canonical row and `v2` for the Y-reversed row. Placement selects these
+masters with translations, including the right half-array, so asymmetric
+select/well bands do not rely on mirrored parent references.
+
+`--edge-rows N[,N...]` generates the equivalent of `dummy_vertical_array_X64`
+for arbitrary positive address row counts (default: 64). As in the academic
+hierarchy, these address rows run across X at the 0.108 µm pitch. The macro
+compiler calls `build_dummy_vertical_array` at the requested wordline count,
+inserting a grounded corner at each tap slot and preserving bitcell mirror
+parity across taps. It generates all four end orientations directly. Both the
+standalone IO-column generator and compiler place explicit side caps and
+`FILLER_cgedge_8t`; the compiler closes their top/bottom ends with corners and
+blank tiles. The outer fillers add 0.216 µm to each column group's width.
+
+The cap-cell SPICE subcircuits are intentionally empty, as in OpenRAM;
 their GDS conductors provide physical continuity without adding transistors.
 The matching netlists are in `tech/spice/sram_cell_8t_edges.sp`.
 
@@ -86,8 +108,9 @@ Unlike the published 6T tap, which terminates its column, `tapcell_sram_8t`
 hands every bitline and supply rail straight through at the bitcell's own
 coordinates, so it can be inserted anywhere in a row rather than only at the
 end. Each tie climbs LISD -> V0 -> M1 -> V1 to a supply rail of its own net;
-the tap does not reach M3 or above, because the 8T bitcell already uses M3/M4/M5
-for its wordlines and port-B bitlines.
+the tap itself does not reach M3 or above, because the 8T bitcell already uses
+M3/M4/M5 for its wordlines and port-B bitlines. The strap variant below does
+climb, using the one place those layers are free.
 
 `scripts/generate_asap7_wordline_arrays.py --tap-pitch N` interleaves a tap
 after every N 8T bitcells, producing `sramcol_x<W>_tapN_sram_8t` and
@@ -97,6 +120,36 @@ the tracked untapped library. The macro compiler instead generates tapped
 arrays on demand with pitch `gcd(wordlines, 16)` and rebuilds their IO columns
 at the resulting width. Only the 8T rows take these taps: the published 6T tap
 does not pass bitlines through.
+
+## Power straps
+
+`tech/gds/sram_cell_8t_tap.gds` also holds `strapcell_sram_8t`: the tap plus a
+supply climb out of the M2 rails. The tap column is the only x position in the
+array where M3 and M5 are unused, so the climb has to happen there. Without it
+nothing carries supply between mux rows -- the M2 rails run east/west, and rows
+abut north/south with no vertical path.
+
+Each supply takes a staggered M2 -> M3 -> M4 -> M5 staircase, following the same
+direction rules the IO column encodes (M4 horizontal-only, M5 vertical-only),
+and lands on a full-height M5 spine. Rows abut at the cell boundary exactly as
+the WLA/WLB trunks do, so the spines join into a continuous vertical supply rail
+down the tap column. M3 is pinned to the cell centre because neighbouring
+bitcells overhang M3 by 9 nm into both slot edges. Row mirroring is useful here:
+the VDD rail is self-symmetric about the cell centre, but the two VSS rails swap,
+so alternate rows tie the spine to alternate VSS rails and both end up connected.
+
+The cell stops at M5 on purpose. Horizontal M6 tying the tap columns together
+crosses bitcells, which have no M6 of their own, so that mesh belongs to the
+array assembler rather than to a 0.108 um cell; the spines are exposed as
+`vdd!`/`vss!` pins for it to land on.
+
+`--strap-pitch N` upgrades every Nth tap to a strap, producing
+`sramcol_x<W>_tap<P>_strap<N>_sram_8t` and the matching arrays. It requires
+`--tap-pitch` and defaults to 0, so the tracked artifacts are unchanged.
+
+The strap has not been through a real DRC deck: `asap7_drc.drc` is a stub, so
+the new metal is verified only against `verify_strap_topology` and the keep-outs
+derived from the bitcell.
 
 ## Port-specific IO/precharge wrappers
 
@@ -123,6 +176,11 @@ signal until the controller exposes a separate sense-precharge phase. The
 controller generates each phase through its protected `SAE_BUF` chain of
 physical `BUFx2_ASAP7_75t_R` cells; the obsolete replica-bitline-derived SPICE
 buffer chain is not part of this implementation.
+
+The controller uses a shared hierarchical row predecoder per port and explicit
+wordline enable/driver stages per bank and half. See the
+[parameterized decoder design](asap7_8t_decoder.md) for its RTL, load/drive
+parameters, and standalone layout generator at the 8T array pin coordinates.
 
 Both ports may operate in the same cycle, including accesses to different
 addresses and same-address read/read. A simultaneous write/write or read/write
@@ -196,42 +254,92 @@ so it was measured.
 `tests/run_8t_stability_check.sh` (ctest `asap7_8t_stability_check`) measures
 the bitcell alone, with no periphery, so a failure points at the cell. Static
 noise margin comes from a DC butterfly reduced to its largest inscribed square;
-write margin is the bitline voltage at which a quasi-static ramp flips the
-latch, so the margin is VDD minus that.
+the reported SNM is the smaller of the two lobe margins (both stored states).
+The four biases are hold, read A only, read B only, and simultaneous read A+B.
+All four bitlines are clamped to VDD, measuring static precharged-bitline
+loading rather than a finite-capacitance bitline transient. The cell is
+derived from the compiler's SPICE templates, exposing Q/QB without changing
+any transistor connections or sizes.
 
-| Corner | VDD / T | Hold SNM | Read SNM, 1 port | **Read SNM, both ports** | Write margin |
+Each bias/corner runs at 5 mV and 2.5 mV sweep steps; their margins must agree
+within 1 mV. The finer sweep supplies the reported SNM. The extractor evaluates
+the exact diagonal-separation extrema of the piecewise-linear curves, so only
+the DC sweep interpolation remains approximate. It rejects incomplete,
+non-finite, missing-point, or materially nonmonotonic sweeps. Separate checks
+require nominal Q/QB VTC symmetry and A/B read-margin agreement within 0.1 mV.
+
+The existing write test records the bitline voltage at which a slow ramp flips
+the latch. A higher trip voltage is easier to write; VDD minus that voltage is
+the **required bitline drop**, not an SNM or a larger-is-better write margin.
+This transient trip measurement is not a DC write-SNM extraction.
+
+| Corner | VDD / T | Hold SNM | Read SNM, A or B | **Read SNM, both ports** | Required write BL drop |
 | --- | --- | --- | --- | --- | --- |
-| SS | 0.63 V / 125 °C | 260.2 mV | 128.7 mV | **101.1 mV** | 0.426 V (68% of VDD) |
-| TT | 0.70 V / 25 °C | 307.5 mV | 148.7 mV | **116.3 mV** | 0.465 V (66% of VDD) |
-| FF | 0.77 V / −40 °C | 346.3 mV | 161.6 mV | **119.9 mV** | 0.494 V (64% of VDD) |
+| SS | 0.63 V / 125 °C | 260.3 mV | 128.8 mV | **101.1 mV** | 0.426 V (68% of VDD) |
+| TT | 0.70 V / 25 °C | 307.6 mV | 148.7 mV | **116.4 mV** | 0.465 V (66% of VDD) |
+| FF | 0.77 V / −40 °C | 346.4 mV | 161.6 mV | **119.9 mV** | 0.494 V (64% of VDD) |
 
-Port A and port B write trips are bit-identical at every corner, which is the
-2RW symmetry claim stated as a measurement rather than asserted.
+Port A and port B write trips and single-port read SNM agree to the printed
+precision at every corner. The maximum change between the 5 mV and 2.5 mV
+sweeps is 0.131 mV (TT hold), below the 1 mV convergence guard.
 
-**Concurrent dual-port read costs about a fifth of the read margin, not half.**
-The ratio is 0.79 / 0.78 / 0.74 at SS / TT / FF — notably stable across
-corners, so it is a property of the topology rather than of one operating
-point. The static cell-ratio argument above predicts 0.50 because it compares
-access against pull-down current at a single operating point; SNM integrates
-the whole transfer curve, and the pull-down's drive rises as its V<sub>ds</sub>
-does. The raw disturbed low level shows the same sublinearity: adding the
+**Concurrent dual-port read reduces nominal read SNM by 21–26% here.**
+The ratio is 0.79 / 0.78 / 0.74 at SS / TT / FF for this sizing and these
+sampled corners, not a universal topology guarantee. Halving the effective
+cell ratio does not halve SNM: the latter depends on the nonlinear transfer
+curves, not just a device-strength ratio. The disturbed low level also shows
+sublinear change: adding the
 second access device lifts it from 17.0% to 24.7% of VDD at TT, a factor of
 1.45 rather than 2.
 
-**Verdict on the contract: supportable as written.** 101 mV at the worst corner
-is a real positive margin, and the write path is comfortable everywhere. The
-`contention_condition` restriction below stands on its own logic — a
-same-address write really is undefined — and nothing in these numbers argues
-for narrowing the read/read case.
+These nominal simulations show positive simultaneous-read SNM at the three
+tested corners, with about 101 mV at the weakest sampled corner. That is useful
+evidence for the read/read contract, not macro stability signoff. The
+`contention_condition` restriction on same-address access with either port
+writing remains unchanged.
 
 **What this does not establish.** These are nominal corner values: the centre
 of a distribution whose width is unmeasured. SRAM stability is a mismatch
 property, and `docs/characterization_plan.md` puts Monte Carlo out of scope, so
 there is no Vmin or yield claim here and none should be read into the table.
+SS/low-VDD/hot, TT/nominal/room, and FF/high-VDD/cold are three combined PVT
+points, not an exhaustive independent process/voltage/temperature sweep.
+Layout-extracted parasitics, finite-bitline dynamics, supply noise, and
+statistical device mismatch are not covered by these bitcell-only DC tests.
 The 88 mV floor the gate enforces is a regression guard, not a spec. A cell
 ratio of 1.00 leaves less headroom against mismatch than a conventional 1.5–2.0
 would, and that remains the open risk — quantifying it needs the statistical
 work that is deliberately not in this plan.
+
+### Running the stability tests
+
+```sh
+cmake --build build --target dump_8t_ioprech_spice -j4
+ctest --test-dir build -R 'asap7_8t_(snm_analysis|stability)_check' --output-on-failure
+```
+
+`asap7_8t_snm_analysis_check` runs the standard-library Python geometry/parser
+unit tests without Xyce, including known symmetric/asymmetric lobes, the
+smaller-lobe rule, degenerate curves, and malformed simulation output.
+The simulation gate skips (exit 77) if Xyce is unavailable or its MPI runtime
+cannot initialize; a skip is not an electrical pass. Set `XYCE` to select a
+different executable.
+
+To retain decks, model cards, simulator logs, raw sweeps, per-sweep JSON/SVG
+butterflies, and a combined `summary.csv`:
+
+```sh
+IOPRECH_SPICE_DUMPER="$PWD/build/tests/dump_8t_ioprech_spice" \
+SNM_RESULTS_DIR="$PWD/results/8t_stability" \
+bash tests/run_8t_stability_check.sh
+```
+
+Each invocation creates a unique `snm-*` subdirectory and prints its path;
+artifacts survive both success and failure. CSV bias names are `hold`,
+`read1` (A only), `readb` (B only), and `read2` (A+B). Without
+`SNM_RESULTS_DIR`, temporary outputs are removed on exit. Regression windows
+and the 88 mV simultaneous-read floor live in `tests/run_8t_stability_check.sh`.
+Investigate a margin change before updating them; they are not specifications.
 
 Two measurement notes worth keeping, because both were silent failures:
 
@@ -314,7 +422,11 @@ regenerates the GDS and requires a byte-for-byte match with both checked-in
 artifacts. For the edge library it additionally
 checks the forced dummy state, zero transistor channels in every cap cell,
 independent pass-through pins, identical process-frame fingerprints, and
-compatible boundary/grid geometry for mirrored abutment.
+compatible boundary/grid geometry for mirrored abutment. Edge-frame regressions
+exercise asymmetric well/select bands, counts 1/3/18/64/129, tap slot parity,
+GDS round trips, and rejection of a corrupted corner mirror. They also check
+that the compiler uses all four corner/end-row orientations without mirrored
+parent references.
 
 When Xyce is installed, `asap7_8t_ioprech_spice_check` runs the emitted ASAP7
 transistor netlists at the TT corner. In addition to standalone precharge,

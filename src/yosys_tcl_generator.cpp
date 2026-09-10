@@ -81,6 +81,9 @@ std::string YosysTclGenerator::generate_script(
         }
     }
     oss << "read_verilog -sv " << join_path(rtl_path, "delay_cell.v") << "\n";
+    if (!single_port) {
+        oss << "read_verilog -sv " << join_path(rtl_path, "row_decoder.v") << "\n";
+    }
     oss << "read_verilog -sv " << join_path(rtl_path, "sram_control.v") << "\n";
     if (single_port) {
         oss << "chparam -set ADDR_WIDTH " << addr_width
@@ -152,6 +155,10 @@ std::string YosysTclGenerator::generate_script(
         const int expected_dp_dffs = 2 * addr_width + 4;
         oss << "\n# Structural signoff for DP physical network\n";
         oss << "check -assert\n";
+        oss << "select -assert-count " << (4 * num_wls * num_banks)
+            << " t:BUFx4_ASAP7_75t_R a:physical_wl_driver %i\n";
+        oss << "select -assert-count " << (4 * num_wls * num_banks)
+            << " t:AND2x2_ASAP7_75t_R a:physical_wl_gate %i\n";
         oss << "select -assert-count " << expected_dp_dffs
             << " t:*DFF*ASAP7_75t_R\n";
         const unsigned expected_bufx2 = 2 * (num_wl_buf + num_sae_buf);

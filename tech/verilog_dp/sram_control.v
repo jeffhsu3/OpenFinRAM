@@ -63,7 +63,6 @@ module ctrl_decode #(
     localparam ADDR_USED_BITS = SLICE_BIT_IDX + SLICE_BITS;
 
     localparam [COLUMN_MUX-1:0] ONEHOT_BASE = {{(COLUMN_MUX - 1){1'b0}}, 1'b1};
-    localparam [NUM_WL-1:0] WL_ONEHOT_BASE = {{(NUM_WL - 1){1'b0}}, 1'b1};
 
     wire [ROW_BITS-1:0]   row_sel_d_A = A_A[ROW_BITS-1:0];
     wire [Y_BITS-1:0]     col_sel_d_A = A_A[BANK_BIT_IDX-1:ROW_BITS];
@@ -127,6 +126,27 @@ module ctrl_decode #(
     wire wl_read_fire_A  = wl_any_fire_A && read_req_A;
 
     wire wl_read_fire_B  = wl_any_fire_B && read_req_B;
+
+    // Predecode once per port and share across all bank/half enables.
+    wire [NUM_WL-1:0] row_decode_A, row_decode_B;
+    sram_row_decode #(.NUM_WL(NUM_WL)) u_row_decode_A
+        (.A(row_sel_r_A), .SEL(row_decode_A));
+    sram_row_decode #(.NUM_WL(NUM_WL)) u_row_decode_B
+        (.A(row_sel_r_B), .SEL(row_decode_B));
+    for (genvar bank = 0; bank < NUM_BANK; bank = bank + 1) begin : g_wordlines
+        wire enable_A = rst_n && (read_req_A || write_req_A) && wl_any_fire_A
+                        && (slice_sel_r_A == bank);
+        wire enable_B = rst_n && (read_req_B || write_req_B) && wl_any_fire_B
+                        && (slice_sel_r_B == bank);
+        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_top_A
+            (.SEL(row_decode_A), .EN(enable_A && bank_sel_r_A), .WL(wlt_A[bank]));
+        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_bottom_A
+            (.SEL(row_decode_A), .EN(enable_A && !bank_sel_r_A), .WL(wlb_A[bank]));
+        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_top_B
+            (.SEL(row_decode_B), .EN(enable_B && bank_sel_r_B), .WL(wlt_B[bank]));
+        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_bottom_B
+            (.SEL(row_decode_B), .EN(enable_B && !bank_sel_r_B), .WL(wlb_B[bank]));
+    end
 
     // SAE is asserted after wl_read_fire with an additional SAE_BUF delay
     wire sae_raw_A;
@@ -197,15 +217,11 @@ module ctrl_decode #(
     end
 
     always_comb begin
-        wlt_A       = '0;
-        wlb_A       = '0;
         blprechtn_A = '0;
         blprechbn_A = '0;
         oeb_out_A   = '1;
         sae_A       = '0;
 
-        wlt_B       = '0;
-        wlb_B       = '0;
         blprechtn_B = '0;
         blprechbn_B = '0;
         oeb_out_B   = '1;
@@ -236,13 +252,6 @@ module ctrl_decode #(
                 blprechbn_A[slice_sel_r_A] = prech_off_A;
             end
 
-            if (wl_any_fire_A) begin
-                if (bank_sel_r_A)
-                    wlt_A[slice_sel_r_A] = WL_ONEHOT_BASE << row_sel_r_A;
-                else
-                    wlb_A[slice_sel_r_A] = WL_ONEHOT_BASE << row_sel_r_A;
-            end
-
             if (bank_sel_r_A) begin
                 yselt_A[slice_sel_r_A]  = ONEHOT_BASE << col_sel_r_A;
                 yseltn_A[slice_sel_r_A] = ~yselt_A[slice_sel_r_A];
@@ -269,13 +278,6 @@ module ctrl_decode #(
             end else begin
                 blprechtn_B[slice_sel_r_B] = 1'b0;
                 blprechbn_B[slice_sel_r_B] = prech_off_B;
-            end
-
-            if (wl_any_fire_B) begin
-                if (bank_sel_r_B)
-                    wlt_B[slice_sel_r_B] = WL_ONEHOT_BASE << row_sel_r_B;
-                else
-                    wlb_B[slice_sel_r_B] = WL_ONEHOT_BASE << row_sel_r_B;
             end
 
             if (bank_sel_r_B) begin

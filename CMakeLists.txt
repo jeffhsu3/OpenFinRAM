@@ -93,6 +93,18 @@ if(BUILD_TESTING)
     set_tests_properties(decode_dp_check PROPERTIES TIMEOUT 600)
 
     add_test(
+        NAME asap7_8t_decoder_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_decoder_check.sh
+    )
+    set_tests_properties(asap7_8t_decoder_check PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+
+    add_test(
+        NAME asap7_8t_decoder_physical_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_decoder_physical_check.sh
+    )
+    set_tests_properties(asap7_8t_decoder_physical_check PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+
+    add_test(
         NAME equiv_check
         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_equiv_check.sh
     )
@@ -142,12 +154,19 @@ if(BUILD_TESTING)
         SKIP_RETURN_CODE 77
     )
 
-    # Cell-level stability for the true-dual-port 8T: write margin per port,
-    # and read static noise margin with one port versus both ports selected.
+    # Geometry/parser checks run even on machines without a SPICE simulator.
+    add_test(
+        NAME asap7_8t_snm_analysis_check
+        COMMAND python3 ${CMAKE_SOURCE_DIR}/tests/tools/test_snm_from_sweep.py
+    )
+    set_tests_properties(asap7_8t_snm_analysis_check PROPERTIES TIMEOUT 30)
+
+    # Cell-level stability for the true-dual-port 8T: write trip per port,
+    # hold/read-A/read-B/read-both SNM and DC sweep convergence at SS/TT/FF.
     # The macro contract declares concurrent same-address read/read legal and
     # the cell's strength ratios are inherited from the single-port 6T, so
-    # this is the measurement that contract rests on.  Bitcell only, no
-    # periphery, so a failure points at the cell.  Skips without Xyce.
+    # this guards nominal cell margins, not mismatch yield. Bitcell only, no
+    # periphery, so a failure points at the cell. Skips without Xyce.
     add_test(
         NAME asap7_8t_stability_check
         COMMAND ${CMAKE_COMMAND} -E env

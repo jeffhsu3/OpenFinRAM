@@ -272,6 +272,13 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         file << "if {$dp_delay_count == 0} { error \"PERIPHERY_STRUCTURE: no named DP delay cells\" }\n";
         file << "foreach cell $dp_delay_cells { if {[get_property $cell ref_name] ne \"BUFx2_ASAP7_75t_R\"} { error \"PERIPHERY_STRUCTURE: DP delay cell is not BUFx2\" } }\n";
         file << "set_dont_touch $dp_delay_cells\n\n";
+        file << "set dp_wl_drivers [get_cells -hierarchical -quiet {g_wordlines*.u_driver}]\n";
+        file << "set dp_wl_gates [get_cells -hierarchical -quiet {g_wordlines*.u_enable}]\n";
+        file << "if {[llength $dp_wl_drivers] != " << (4 * num_wlt * num_mux)
+             << " || [llength $dp_wl_gates] != " << (4 * num_wlt * num_mux)
+             << "} { error \"PERIPHERY_STRUCTURE: DP wordline enable/driver stages missing\" }\n";
+        file << "set_dont_touch $dp_wl_drivers\n";
+        file << "set_dont_touch $dp_wl_gates\n";
         // Several DP controls are clock-derived top-level outputs.  Give every
         // output a real driver stage before placement so hold repair has a
         // resizable data-path cell instead of an unbuffered clock-to-port arc.

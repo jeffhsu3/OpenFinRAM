@@ -26,3 +26,36 @@ M7 VDD VSS BLBN VSS nmos_sram L=2e-08 W=5.4e-08 nfin=2
 
 .SUBCKT sram_cell_8t_corner VDD VSS
 .ENDS sram_cell_8t_corner
+
+* Explicit physical orientations: _lr reverses X, _v2 reverses Y.
+* Geometry and pins are materialized about the 8T placement boundary.
+.SUBCKT sram_cell_8t_corner_lr VDD VSS
+.ENDS sram_cell_8t_corner_lr
+.SUBCKT sram_cell_8t_corner_v2 VDD VSS
+.ENDS sram_cell_8t_corner_v2
+.SUBCKT sram_cell_8t_corner_v2_lr VDD VSS
+.ENDS sram_cell_8t_corner_v2_lr
+
+.SUBCKT dummy_vertical_8t WLA WLB VSS
+.ENDS dummy_vertical_8t
+.SUBCKT dummy_vertical_8t_lr WLA WLB VSS
+.ENDS dummy_vertical_8t_lr
+.SUBCKT dummy_vertical_8t_v2 WLA WLB VSS
+.ENDS dummy_vertical_8t_v2
+.SUBCKT dummy_vertical_8t_v2_lr WLA WLB VSS
+.ENDS dummy_vertical_8t_v2_lr
+
+.SUBCKT dummy_topbot_8t_v1 BLA BLAN BLB BLBN VDD VSS
+.ENDS dummy_topbot_8t_v1
+.SUBCKT dummy_topbot_8t_v1_lr BLA BLAN BLB BLBN VDD VSS
+.ENDS dummy_topbot_8t_v1_lr
+.SUBCKT dummy_topbot_8t_v2 BLA BLAN BLB BLBN VDD VSS
+.ENDS dummy_topbot_8t_v2
+.SUBCKT dummy_topbot_8t_v2_lr BLA BLAN BLB BLBN VDD VSS
+.ENDS dummy_topbot_8t_v2_lr
+
+* Blank fillers contain only FIN/poly and the placement boundary.
+.SUBCKT FILLER_BLANK_8t
+.ENDS FILLER_BLANK_8t
+.SUBCKT FILLER_cgedge_8t
+.ENDS FILLER_cgedge_8t

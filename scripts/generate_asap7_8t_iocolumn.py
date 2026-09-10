@@ -24,6 +24,7 @@ import sys
 from pathlib import Path
 
 import gdstk
+from generate_asap7_8t_bitcell import topbot_name
 
 
 BOUNDARY = 100
@@ -403,16 +404,23 @@ def build_combined_io(
     return cell
 
 
-def build_cap_array(library: gdstk.Library, cap: gdstk.Cell) -> gdstk.Cell:
+def build_cap_array(library: gdstk.Library, edges: dict[str, gdstk.Cell],
+                    mirror_x: bool = False) -> gdstk.Cell:
+    cap = edges[topbot_name()]
+    filler = edges["FILLER_cgedge_8t"]
     x0, y0, x1, y1 = boundary_box(cap)
     width, height = x1 - x0, y1 - y0
-    cell = library.new_cell("col_cap_x4_sram_8t")
+    fx0, fy0, fx1, fy1 = boundary_box(filler)
+    filler_width = fx1 - fx0
+    if abs(fy1 - fy0 - MUX_ROWS * height) > 1e-7:
+        raise RuntimeError("8T column-group filler height does not match caps")
+    cell = library.new_cell("col_cap_x4_sram_8t" + ("_lr" if mirror_x else ""))
+    cell.add(gdstk.Reference(filler, origin=((width if mirror_x else 0) - fx0, -fy0)))
     for row in range(MUX_ROWS):
-        reflected = row % 2 == 1
-        origin = (-x0, (row + 1) * height + y0 if reflected
-                  else row * height - y0)
-        cell.add(gdstk.Reference(cap, origin=origin, x_reflection=reflected))
-    rect(cell, (0.0, 0.0, width, MUX_ROWS * height), BOUNDARY)
+        master = edges[topbot_name(mirror_x, bool(row % 2))]
+        origin = ((0 if mirror_x else filler_width) - x0, row * height - y0)
+        cell.add(gdstk.Reference(master, origin=origin))
+    rect(cell, (0.0, 0.0, width + filler_width, MUX_ROWS * height), BOUNDARY)
     return cell
 
 
@@ -426,6 +434,7 @@ def build_colgrp(
     combined_io: gdstk.Cell,
     cap_array: gdstk.Cell,
     wordlines: int,
+    cap_array_lr: gdstk.Cell,
 ) -> gdstk.Cell:
     arx0, ary0, arx1, ary1 = boundary_box(array)
     iox0, ioy0, iox1, ioy1 = boundary_box(combined_io)
@@ -435,6 +444,8 @@ def build_colgrp(
     cap_width, cap_height = cpx1 - cpx0, cpy1 - cpy0
     if abs(array_height - io_height) > 1e-6 or abs(cap_height - io_height) > 1e-6:
         raise RuntimeError("8T array, IO, and edge-cap heights do not match")
+    if boundary_box(cap_array_lr) != boundary_box(cap_array):
+        raise RuntimeError("8T left/right edge boundaries do not match")
 
     left_array_x = cap_width
     io_x = left_array_x + array_width
@@ -454,10 +465,8 @@ def build_colgrp(
         x_reflection=True,
     ))
     cell.add(gdstk.Reference(
-        cap_array,
-        origin=(total_width + cpx0, -cpy0),
-        rotation=math.pi,
-        x_reflection=True,
+        cap_array_lr,
+        origin=(right_cap_x - cpx0, -cpy0),
     ))
 
     wordline_map = {
@@ -536,16 +545,17 @@ def build_library(
         raise RuntimeError("8T source GDS units/precision do not match")
     wrapper_a = wrappers.get("ioprech_sram_8t_a")
     wrapper_b = wrappers.get("ioprech_sram_8t_b")
-    cap = edges.get("sram_cell_8t_col_cap")
+    edge_names = {topbot_name(mx, my) for mx in (False, True) for my in (False, True)}
+    edge_names.update({"FILLER_BLANK_8t", "FILLER_cgedge_8t"})
     bitcell = arrays.get("sram_cell_8t")
-    if None in (wrapper_a, wrapper_b, cap, bitcell):
+    if None in (wrapper_a, wrapper_b, bitcell) or not edge_names <= edges.keys():
         raise RuntimeError("8T source GDS is missing a required hard cell")
 
     unit, precision = units.pop()
     library = gdstk.Library(
         "openfinram_asap7_8t_iocolumn", unit=unit, precision=precision
     )
-    library.add(bitcell, cap, wrapper_a, wrapper_b)
+    library.add(bitcell, wrapper_a, wrapper_b, *(edges[name] for name in sorted(edge_names)))
     selected_arrays: dict[int, gdstk.Cell] = {}
     for count in wordline_counts:
         row_name = f"sramcol_x{count}_sram_8t"
@@ -559,10 +569,11 @@ def build_library(
         selected_arrays[count] = arrays[array_name]
 
     combined_io = build_combined_io(library, wrapper_a, wrapper_b)
-    cap_array = build_cap_array(library, cap)
+    cap_array = build_cap_array(library, edges)
+    cap_array_lr = build_cap_array(library, edges, mirror_x=True)
     for count in wordline_counts:
         build_colgrp(
-            library, selected_arrays[count], combined_io, cap_array, count
+            library, selected_arrays[count], combined_io, cap_array, count, cap_array_lr
         )
     return library
 
@@ -575,10 +586,11 @@ def assert_close(actual: float, expected: float, message: str) -> None:
 def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
     library, cells = load_cells(path)
     expected = {
-        "sram_cell_8t", "sram_cell_8t_col_cap",
+        "sram_cell_8t", "FILLER_BLANK_8t", "FILLER_cgedge_8t",
         "ioprech_sram_8t_a", "ioprech_sram_8t_b",
-        "iocolgrp_sram_8t", "col_cap_x4_sram_8t",
+        "iocolgrp_sram_8t", "col_cap_x4_sram_8t", "col_cap_x4_sram_8t_lr",
     }
+    expected.update(topbot_name(mx, my) for mx in (False, True) for my in (False, True))
     for count in wordline_counts:
         expected.update({
             f"sramcol_x{count}_sram_8t",
@@ -643,8 +655,13 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
             raise RuntimeError(f"iocolgrp_sram_8t: {supply} label misses wrapper M1")
 
     cap_array = cells["col_cap_x4_sram_8t"]
-    if len(cap_array.references) != MUX_ROWS:
-        raise RuntimeError("col_cap_x4_sram_8t: expected four cap references")
+    for mx in (False, True):
+        cap = cells["col_cap_x4_sram_8t" + ("_lr" if mx else "")]
+        expected_caps = ["FILLER_cgedge_8t"] + [topbot_name(mx, bool(row % 2)) for row in range(MUX_ROWS)]
+        if [ref.cell_name for ref in cap.references] != expected_caps:
+            raise RuntimeError(f"{cap.name}: expected filler and four oriented cap masters")
+        if any(ref.rotation or ref.x_reflection for ref in cap.references):
+            raise RuntimeError(f"{cap.name}: edge masters must only be translated")
     for count in wordline_counts:
         array = cells[f"array_x{count}x4_sram_8t"]
         colgrp = cells[colgrp_name(count)]
@@ -665,7 +682,7 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
         expected_refs = [
             "col_cap_x4_sram_8t", f"array_x{count}x4_sram_8t",
             "iocolgrp_sram_8t", f"array_x{count}x4_sram_8t",
-            "col_cap_x4_sram_8t",
+            "col_cap_x4_sram_8t_lr",
         ]
         if [reference.cell_name for reference in colgrp.references] != expected_refs:
             raise RuntimeError(f"{colgrp.name}: wrong placement hierarchy")

@@ -13,3 +13,15 @@ endmodule
 module BUFx2_ASAP7_75t_R (input A, output Y);
     assign Y = A;
 endmodule
+
+module BUFx8_ASAP7_75t_R (input A, output Y);
+    assign Y = A;
+endmodule
+
+module AND2x2_ASAP7_75t_R (input A, B, output Y);
+    assign Y = A & B;
+endmodule
+
+module AND3x1_ASAP7_75t_R (input A, B, C, output Y);
+    assign Y = A & B & C;
+endmodule

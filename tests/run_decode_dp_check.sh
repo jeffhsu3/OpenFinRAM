@@ -3,7 +3,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-SRC="tests/prim_models.v tests/tb_ctrl_decode_dp.sv tech/verilog_dp/sram_control.v tech/verilog_dp/delay_cell.v"
+SRC="tests/prim_models.v tests/tb_ctrl_decode_dp.sv tech/verilog_dp/sram_control.v tech/verilog_dp/delay_cell.v tech/verilog_dp/row_decoder.v"
 CONFIGS=("2 1 2" "8 2 4" "16 4 4")
 
 work="$(mktemp -d)"

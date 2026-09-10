@@ -20,6 +20,7 @@ import gdstk
 from asap7_connectivity import MetalGraph, METALS
 import generate_asap7_wordline_arrays as arrays
 import generate_asap7_8t_iocolumn as columns
+import generate_asap7_8t_bitcell as edge_cells
 
 REPO = Path(__file__).resolve().parents[1]
 LAYER_NAMES = dict(zip(METALS, (f"M{i}" for i in range(1, 10))))
@@ -204,69 +205,44 @@ def build_leaf(wordlines, tap_pitch):
     io = columns.build_combined_io(
         lib, wrappers["ioprech_sram_8t_a"], wrappers["ioprech_sram_8t_b"]
     )
-    caps = columns.build_cap_array(lib, edges["sram_cell_8t_col_cap"])
+    caps = columns.build_cap_array(lib, edges)
+    caps_lr = columns.build_cap_array(lib, edges, mirror_x=True)
     array = cells[f"array_x{wordlines}x4_tap{tap_pitch}_sram_8t"]
-    leaf = columns.build_colgrp(lib, array, io, caps, wordlines)
-    # Terminate each half-array's process frame with the generated row/corner
-    # family. Preserve alternating-X orientation, including slots inserted for
-    # taps. No 6T filler pitch or hand-drawn transistor geometry is used.
+    leaf = columns.build_colgrp(lib, array, io, caps, wordlines, caps_lr)
     capped = lib.new_cell("capped_" + leaf.name)
     capped.add(gdstk.Reference(leaf))
     for label in leaf.labels:
         capped.add(columns.clone_label(label, label.text, tuple(label.origin)))
-    row = cells[f"sramcol_x{wordlines}_tap{tap_pitch}_sram_8t"]
     width = columns.boundary_box(leaf)[2]
     bx0, by0, bx1, by1 = columns.boundary_box(cells["sram_cell_8t"])
     slot_width, pitch = bx1 - bx0, by1 - by0
-    rowcap, corner = edges["sram_cell_8t_row_cap"], edges["sram_cell_8t_corner"]
-    # Build left end rows then mirror them to the right half-array.
+    cap_width = columns.boundary_box(caps)[2]
+    array_width = columns.boundary_box(array)[2]
+    blank = edges["FILLER_BLANK_8t"]
+    fx0, fy0, fx1, fy1 = columns.boundary_box(blank)
+    half_width = fx1 - fx0
     ends = lib.new_cell("dp_array_end_rows")
-    for ref in row.references:
-        cap = rowcap if ref.cell.name == "sram_cell_8t" else corner
-        x0, y0, x1, y1 = columns.boundary_box(cap)
-        # The row's bitcell references already encode the X mirror. Its
-        # origin.y normalizes the canonical cell's nonzero lower boundary.
-        mirror_x = bool(ref.rotation)
-        slot = min(
-            float(p[0])
-            for p in gdstk.Reference(
-                ref.cell,
-                origin=ref.origin,
-                rotation=ref.rotation,
-                x_reflection=ref.x_reflection,
+    # Each end explicitly selects the corresponding master orientation. A
+    # mirrored parent reference would also reverse asymmetric process bands.
+    for right in (False, True):
+        array_x = width - cap_width - array_width if right else cap_width
+        corner_x = width - cap_width if right else cap_width - slot_width
+        filler_x = width - slot_width if right else 0
+        for bottom in (False, True):
+            y = -pitch if bottom else 4 * pitch
+            row = edge_cells.build_dummy_vertical_array(
+                lib, edges, wordlines, tap_pitch, mirror_x=right, mirror_y=bottom
             )
-            .get_polygons(layer=100, datatype=0)[0]
-            .points
-        )
-        for bottom in (True, False):
-            # Bottom end faces the row through an X-axis reflection; top
-            # active mux row is already mirrored, so its end is unreflected.
-            mx, my = mirror_x, bottom
-            origin = (
-                slot_width + slot + (x1 if mx else -x0),
-                y0 if my else 4 * pitch - y0,
-            )
-            ends.add(
-                gdstk.Reference(
-                    cap,
-                    origin=origin,
-                    rotation=math.pi if mx else 0,
-                    x_reflection=mx != my,
-                )
-            )
-    x0, y0, x1, y1 = columns.boundary_box(corner)
-    for bottom in (True, False):
-        ends.add(
-            gdstk.Reference(
-                corner,
-                origin=(-x0, y0 if bottom else 4 * pitch - y0),
-                x_reflection=bottom,
-            )
-        )
+            ends.add(gdstk.Reference(row, origin=(array_x, y)))
+            corner = edges[edge_cells.oriented_name("sram_cell_8t_corner", right, bottom)]
+            ends.add(gdstk.Reference(corner, origin=(corner_x - bx0, y - by0)))
+            for col in range(2):
+                ends.add(gdstk.Reference(
+                    blank, origin=(filler_x + col * half_width - fx0,
+                                   y + fy1 if bottom else y - fy0),
+                    x_reflection=bottom,
+                ))
     capped.add(gdstk.Reference(ends))
-    capped.add(
-        gdstk.Reference(ends, origin=(width, 0), rotation=math.pi, x_reflection=True)
-    )
     columns.rect(capped, (0, -pitch, width, 5 * pitch), 100)
     return capped
 

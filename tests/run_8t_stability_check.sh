@@ -13,9 +13,8 @@
 # Scope: this is nominal corner stability, not a Vmin or a yield number.
 # SRAM margin is a distribution and the mean is only half the story;
 # docs/characterization_plan.md puts the Monte Carlo half out of scope.  What
-# this does settle is the *relative* question -- how much margin concurrent
-# dual-port access costs against single-port -- which is a ratio of two
-# measurements on one cell and is insensitive to that caveat.
+# this measures is the nominal penalty of concurrent versus single-port
+# reads. Neither the absolute margin nor that ratio establishes mismatch yield.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -33,8 +32,17 @@ if [[ -x "$repo_root/.venv/bin/python" ]]; then
     python_bin="$repo_root/.venv/bin/python"
 fi
 
-scratch="$(mktemp -d)"
-trap 'rm -rf "$scratch"' EXIT
+if [[ -n "${SNM_RESULTS_DIR:-}" ]]; then
+    mkdir -p "$SNM_RESULTS_DIR"
+    scratch="$(mktemp -d "${SNM_RESULTS_DIR%/}/snm-XXXXXXXX")"
+    scratch="$(cd "$scratch" && pwd)"
+    echo "Stability artifacts: $scratch (retained on success or failure)"
+else
+    scratch="$(mktemp -d)"
+    trap 'rm -rf "$scratch"' EXIT
+fi
+printf 'corner,vdd_v,temp_c,bias,snm_mv,lobe_a_mv,lobe_b_mv,coarse_snm_mv,convergence_delta_mv\n' \
+    > "$scratch/summary.csv"
 
 # The bitcell netlist comes from the generator's own templates, so the cell
 # measured here cannot drift from the cell that ships.  W= is stripped because
@@ -120,8 +128,8 @@ run_deck() {
     local vdd_edit="s/^\.param VDDVAL=.*/.param VDDVAL=${corner_vdd}/"
     {
         printf '* OpenFinRAM ASAP7 8T %s regression.\n' "$tag"
-        printf '.include %s\n' "$corner_model"
-        printf '.include %s\n' "$scratch/probe.sp"
+        printf '.include "%s"\n' "$corner_model"
+        printf '.include "%s"\n' "$scratch/probe.sp"
         # Xyce rejects `.temp` outright ("Unrecognized dot line will be
         # ignored"), so a deck using it runs silently at the default 27 C and
         # every corner number is really just a VDD and model-card sweep.
@@ -150,13 +158,31 @@ run_snm() {
     local tag="$1"
     local wla="$2"
     local wlb="$3"
-    local prn prefix
-    prn="$(run_deck snm "$tag" prn \
-        "s/^\.param WLAV=.*/.param WLAV=${wla}/; s/^\.param WLBV=.*/.param WLBV=${wlb}/")"
+    local prn prefix resolution step result coarse fine delta
     prefix="$(printf '%s' "${tag##*_}" | tr '[:lower:]' '[:upper:]')_"
-    "$python_bin" "$repo_root/tests/tools/snm_from_sweep.py" \
-        --prefix "$prefix" "$prn" > "$scratch/${tag}.snm"
-    printf '%s\n' "$scratch/${tag}.snm"
+    for resolution in coarse fine; do
+        step=0.005
+        [[ "$resolution" == fine ]] && step=0.0025
+        prn="$(run_deck snm "${tag}_${resolution}" prn \
+            "s/^\.param WLAV=.*/.param WLAV=${wla}/; s/^\.param WLBV=.*/.param WLBV=${wlb}/; s/^\.param SWEEPSTEP=.*/.param SWEEPSTEP=${step}/")" || return 1
+        result="$scratch/${tag}_${resolution}.snm"
+        "$python_bin" "$repo_root/tests/tools/snm_from_sweep.py" \
+            --prefix "$prefix" --vdd "$corner_vdd" --step "$step" \
+            --json "${prn}.json" --svg "${prn}.svg" "$prn" > "$result" || return 1
+    done
+    coarse="$(value_of "$scratch/${tag}_coarse.snm" "${prefix}SNM_MV")"
+    fine="$(value_of "$result" "${prefix}SNM_MV")"
+    delta="$(awk -v a="$coarse" -v b="$fine" 'BEGIN { d=a-b; print d<0 ? -d : d }')"
+    if ! awk -v d="$delta" 'BEGIN { exit !(d <= 1.0) }'; then
+        echo "FAIL: $tag SNM sweep convergence: 5 mV=$coarse, 2.5 mV=$fine mV (limit 1 mV)" >&2
+        return 1
+    fi
+    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+        "$corner" "$corner_vdd" "$corner_temp" "${tag##*_}" "$fine" \
+        "$(value_of "$result" "${prefix}SNM_LOBE_A_MV")" \
+        "$(value_of "$result" "${prefix}SNM_LOBE_B_MV")" "$coarse" "$delta" \
+        >> "$scratch/summary.csv"
+    printf '%s\n' "$result"
 }
 
 value_of() { awk -v key="$2" '$1 == key { print $3 }' "$1"; }
@@ -194,10 +220,8 @@ for corner in SS TT FF; do
     check_measure "$wm" QBN_FINAL "$(awk -v v="$corner_vdd" 'BEGIN{print v-0.12}')" \
                                   "$(awk -v v="$corner_vdd" 'BEGIN{print v+0.02}')"
 
-    # Trip point, as a bitline voltage.  Write margin is VDD minus this, so a
-    # LOW trip is a WIDE margin.  Comfortable at every corner (62-68% of VDD),
-    # which is what a pull-up ratio of 0.5 buys: the 2-fin access device
-    # easily overpowers the 1-fin pull-up.
+    # Trip point as a bitline voltage: a HIGHER trip is easier to write.
+    # VDD minus trip is the required bitline drop, not a noise margin.
     check_measure "$wm" WM_A_TRIP "${WM_TRIP_LO[$corner]}" "${WM_TRIP_HI[$corner]}"
     check_measure "$wm" WM_B_TRIP "${WM_TRIP_LO[$corner]}" "${WM_TRIP_HI[$corner]}"
 
@@ -212,7 +236,7 @@ for corner in SS TT FF; do
         exit 1
     fi
     awk -v v="$corner_vdd" -v t="$wm_a" \
-        'BEGIN { printf "  %-18s %.4f V (%.0f%% of VDD)\n", "write margin", v - t, 100 * (v - t) / v }'
+        'BEGIN { printf "  %-18s %.4f V (%.0f%% of VDD)\n", "write BL drop", v - t, 100 * (v - t) / v }'
 
     # --- static noise margin ----------------------------------------------
     hold="$(run_snm "${corner}_hold" 0.0 0.0)"
@@ -220,6 +244,15 @@ for corner in SS TT FF; do
 
     read1="$(run_snm "${corner}_read1" "$corner_vdd" 0.0)"
     check_measure "$read1" READ1_SNM_MV "${READ1_LO[$corner]}" "${READ1_HI[$corner]}" mV
+
+    readb="$(run_snm "${corner}_readb" 0.0 "$corner_vdd")"
+    check_measure "$readb" READB_SNM_MV "${READ1_LO[$corner]}" "${READ1_HI[$corner]}" mV
+    if ! awk -v a="$(value_of "$read1" READ1_SNM_MV)" \
+        -v b="$(value_of "$readb" READB_SNM_MV)" \
+        'BEGIN { d=a-b; if (d<0) d=-d; exit !(d <= 0.1) }'; then
+        echo "FAIL: ${corner} port A/B read SNM differs by more than 0.1 mV" >&2
+        exit 1
+    fi
 
     # Both ports selected: the configuration the macro contract declares legal
     # for same-address read/read, and the one every cell in a row
@@ -233,9 +266,8 @@ for corner in SS TT FF; do
     READ1_AT[$corner]="$read1_mv"
     READ2_AT[$corner]="$read2_mv"
 
-    # Ordering within a corner is physics, not a tuned bound: opening an
-    # access device can only degrade stability, and opening a second can only
-    # degrade it further.  A violation means a deck is mis-biased.
+    # Expected ordering for this sizing and precharged-bitline bias. This is
+    # a nominal regression expectation, not a guarantee for arbitrary cells.
     if ! awk -v h="$hold_mv" -v r1="$read1_mv" -v r2="$read2_mv" \
         'BEGIN { exit !(h > r1 && r1 > r2) }'; then
         echo "FAIL: ${corner} SNM must fall as ports are selected, got" \
@@ -277,8 +309,7 @@ done
 if ! awk -v w="$worst" -v floor="$READ2_WORST_FLOOR_MV" \
     'BEGIN { exit !(w >= floor) }'; then
     echo "FAIL: worst-corner dual-port read SNM ${worst} mV is below the" \
-         "${READ2_WORST_FLOOR_MV} mV floor; the same-address read/read" \
-         "contract in docs/asap7_8t_bitcell.md is not supportable as written" >&2
+         "${READ2_WORST_FLOOR_MV} mV nominal regression floor" >&2
     exit 1
 fi
 printf '  %-18s %s mV (floor %s mV)\n' "worst-corner RSNM_2P" "$worst" \

@@ -144,6 +144,11 @@ TEST(YosysTclGeneratorTest, DualPortChecksAndNamesExactPhysicalStructure) {
 
     EXPECT_NE(script.find("-set WL_BUF 3 -set SAE_BUF 2 ctrl_decode"),
               std::string::npos);
+    EXPECT_NE(script.find("/row_decoder.v"), std::string::npos);
+    EXPECT_NE(script.find("select -assert-count 64 t:BUFx4_ASAP7_75t_R "
+                          "a:physical_wl_driver %i"), std::string::npos);
+    EXPECT_NE(script.find("select -assert-count 64 t:AND2x2_ASAP7_75t_R "
+                          "a:physical_wl_gate %i"), std::string::npos);
     EXPECT_NE(script.find("select -assert-count 18 t:*DFF*ASAP7_75t_R"),
               std::string::npos);  // 2 * addr_width + 4 state bits
     EXPECT_NE(script.find("select -assert-count 10 t:BUFx2_ASAP7_75t_R "

@@ -13,6 +13,24 @@ import subprocess
 import tempfile
 
 
+def port_nodes(module):
+    """Expand ports, including one-bit vectors preserved as Yosys attributes."""
+    for name, info in module["ports"].items():
+        bits = info["bits"]
+        attributes = module.get("netnames", {}).get(name, {}).get("attributes", {})
+        vector = (
+            len(bits) > 1
+            or "offset" in info
+            or "upto" in info
+            or bool(int(attributes.get("single_bit_vector", "0"), 2))
+        )
+        for i, bit in enumerate(bits):
+            index = info.get("offset", 0) + (
+                len(bits) - 1 - i if info.get("upto") else i
+            )
+            yield (f"{name}[{index}]" if vector else name), bit
+
+
 def convert(design, cdl, top="ctrl_decode"):
     signatures = {}
     logical = re.sub(r"\n\s*\+", " ", cdl)
@@ -25,19 +43,12 @@ def convert(design, cdl, top="ctrl_decode"):
         raise RuntimeError("empty controller netlist")
     names = {"0": "VSS", "1": "VDD"}
     ports, aliases = [], []
-    for name, info in module["ports"].items():
-        bits = info["bits"]
-        vector = len(bits) > 1 or "offset" in info or "upto" in info
-        for i, bit in enumerate(bits):
-            index = info.get("offset", 0) + (
-                len(bits) - 1 - i if info.get("upto") else i
-            )
-            port = f"{name}[{index}]" if vector else name
-            ports.append(port)
-            if bit in names and names[bit] != port:
-                aliases.append((port, names[bit]))
-            else:
-                names[bit] = port
+    for port, bit in port_nodes(module):
+        ports.append(port)
+        if bit in names and names[bit] != port:
+            aliases.append((port, names[bit]))
+        else:
+            names[bit] = port
 
     def node(bit):
         if bit not in names:
@@ -48,7 +59,8 @@ def convert(design, cdl, top="ctrl_decode"):
 
     lines = [
         "* Routed mapped controller; Yosys structural parse, CDL pin order.",
-        f".SUBCKT {top} " + " ".join(ports + ["VDD", "VSS"]),
+        f".SUBCKT {top} "
+        + " ".join(ports + [pin for pin in ("VDD", "VSS") if pin not in ports]),
     ]
     for i, (a, b) in enumerate(aliases):
         lines.append(f"Valias{i} {a} {b} 0")

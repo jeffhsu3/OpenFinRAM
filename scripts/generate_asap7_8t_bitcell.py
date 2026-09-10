@@ -18,10 +18,8 @@ Pin mapping from the OpenRAM reference is:
    |    |    |    |    |    |
   WLA  BLA  BLAN  WLB  BLB  BLBN
 
-The second generated GDS contains the forced-state dummy plus electrically
-empty row, column, and corner cap cells used at array boundaries.  IO-column,
-replica, and compiler integration remain separate work; the macro layout flow
-must continue to fail closed in dual-port mode until those cells exist.
+The second generated GDS contains the forced-state dummy, explicit oriented
+edge masters, parameterized dummy rows, and blank fillers at the 8T pitch.
 """
 
 from __future__ import annotations
@@ -38,12 +36,32 @@ import gdstk
 
 CELL_NAME = "sram_cell_8t"
 SOURCE_CELL = "sram_cell_6t_122"
-EDGE_CELL_NAMES = (
+CORE_EDGE_CELL_NAMES = (
     "dummy_cell_8t",
     "sram_cell_8t_col_cap",
     "sram_cell_8t_row_cap",
     "sram_cell_8t_corner",
 )
+ORIENTATIONS = ((False, False), (True, False), (False, True), (True, True))
+
+
+def oriented_name(base: str, mirror_x: bool = False, mirror_y: bool = False) -> str:
+    """_lr reverses X; _v2 reverses Y, both about the placement boundary."""
+    return base + ("_v2" if mirror_y else "") + ("_lr" if mirror_x else "")
+
+
+def topbot_name(mirror_x: bool = False, mirror_y: bool = False) -> str:
+    return f"dummy_topbot_8t_v{2 if mirror_y else 1}" + ("_lr" if mirror_x else "")
+
+
+EDGE_CELL_NAMES = tuple(dict.fromkeys(
+    CORE_EDGE_CELL_NAMES
+    + tuple(oriented_name(base, mx, my)
+            for base in ("dummy_vertical_8t", "sram_cell_8t_corner")
+            for mx, my in ORIENTATIONS)
+    + tuple(topbot_name(mx, my) for mx, my in ORIENTATIONS)
+    + ("FILLER_BLANK_8t", "FILLER_cgedge_8t")
+))
 TAP_CELL_NAME = "tapcell_sram_8t"
 STRAP_CELL_NAME = "strapcell_sram_8t"
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
@@ -137,10 +155,6 @@ STRAP_CLIMB_X = 0.054
 STRAP_SPINE_X = {"vss!": 0.027, "vdd!": 0.081}
 STRAP_STEP_Y = 0.050
 STRAP_M5_HALF = 0.012
-GATE_A = (0.017, -0.181, 0.037, 0.439)
-GATE_B = (0.071, -0.169, 0.091, 0.451)
-WLA_M3 = (0.045, -0.162, 0.063, 0.432)
-WLB_M5 = (0.048, -0.162, 0.072, 0.432)
 GATE_A = (0.017, -0.181, 0.037, 0.439)
 GATE_B = (0.071, -0.169, 0.091, 0.451)
 WLA_M3 = (0.045, -0.162, 0.063, 0.432)
@@ -556,9 +570,12 @@ def copy_labels(
 
 
 def build_edge_library(
-    bitcell: gdstk.Cell, unit: float = 1e-6, precision: float = 2.5e-10
+    bitcell: gdstk.Cell, unit: float = 1e-6, precision: float = 2.5e-10,
+    row_counts: tuple[int, ...] = (64,),
 ) -> gdstk.Library:
-    """Build the OpenRAM-style dummy, row/column caps, and corner cap."""
+    """Build edge masters and dummy arrays at the bitcell's placement pitch."""
+    if not row_counts or any(type(count) is not int or count < 1 for count in row_counts):
+        raise ValueError("edge row counts must be positive integers")
     lib = gdstk.Library(
         "openfinram_asap7_8t_edges", unit=unit, precision=precision
     )
@@ -609,7 +626,8 @@ def build_edge_library(
     copy_labels(bitcell, row_cap, {"vss!"})
 
     # Corner cap carries both sets of terminating routes, all grounded, but no
-    # ACTIVE.  Mirroring this canonical cell covers all four array corners.
+    # ACTIVE. Bake each orientation into a separate master: placement must
+    # select the matching process-band orientation, not mirror a reference.
     corner = lib.new_cell("sram_cell_8t_corner")
     add_process_frame(bitcell, corner)
     add_full_rails(bitcell, corner)
@@ -627,7 +645,111 @@ def build_edge_library(
         gdstk.Label("vss!", (0.060, -0.150), layer=M5,
                      texttype=PIN_TEXTTYPE),
     )
+    for mx, my in ORIENTATIONS:
+        if mx or my:
+            lib.add(oriented_cell(corner, oriented_name(corner.name, mx, my), mx, my))
+        lib.add(oriented_cell(row_cap, oriented_name("dummy_vertical_8t", mx, my), mx, my))
+        lib.add(oriented_cell(col_cap, topbot_name(mx, my), mx, my))
+
+    # Like FILLER_BLANK_6t122, the blank is a half-width FIN/poly tile with
+    # no well, select, ACTIVE, or conductors. Use the extended 8T grids.
+    x0, y0, x1, y1 = edge_boundary(bitcell)
+    half = (x1 - x0) / 2
+    blank = lib.new_cell("FILLER_BLANK_8t")
+    for poly in bitcell.polygons:
+        if poly.layer == FIN:
+            _, fy0, _, fy1 = bbox(poly)
+            rect(blank, (0, fy0, half, fy1), FIN)
+        elif poly.layer == GATE and bbox(poly)[2] <= x0 + half:
+            blank.add(poly.copy().translate(-x0, 0))
+    rect(blank, (0, y0, half, y1), BOUNDARY)
+    filler = lib.new_cell("FILLER_cgedge_8t")
+    for row in range(4):
+        for col in range(2):
+            filler.add(gdstk.Reference(
+                blank, origin=(col * half, (row + 1) * (y1 - y0) + y0
+                               if row % 2 else row * (y1 - y0) - y0),
+                x_reflection=bool(row % 2),
+            ))
+    rect(filler, (0, 0, 2 * half, 4 * (y1 - y0)), BOUNDARY)
+    cells = {cell.name: cell for cell in lib.cells}
+    for count in sorted(set(row_counts)):
+        for mx, my in ORIENTATIONS:
+            build_dummy_vertical_array(lib, cells, count, mirror_x=mx, mirror_y=my)
     return lib
+
+
+def edge_boundary(cell: gdstk.Cell) -> tuple[float, float, float, float]:
+    boxes = [bbox(p) for p in cell.polygons if p.layer == BOUNDARY and p.datatype == 0]
+    if len(boxes) != 1:
+        raise ValueError(f"{cell.name}: expected one direct BOUNDARY")
+    return boxes[0]
+
+
+def oriented_cell(source: gdstk.Cell, name: str, mirror_x: bool = False,
+                  mirror_y: bool = False) -> gdstk.Cell:
+    """Materialize all polygons and pins, retaining the canonical BOUNDARY.
+
+    Reflect around the boundary center, never the geometry bounding box:
+    process overhangs and select/well bands need not be symmetric.
+    """
+    x0, y0, x1, y1 = edge_boundary(source)
+    cell = gdstk.Cell(name)
+    for poly in source.get_polygons():
+        points = poly.points.copy()
+        if mirror_x:
+            points[:, 0] = x0 + x1 - points[:, 0]
+        if mirror_y:
+            points[:, 1] = y0 + y1 - points[:, 1]
+        cell.add(gdstk.Polygon(points, layer=poly.layer, datatype=poly.datatype))
+    for label in source.get_labels():
+        copied = clone_label(label)
+        x, y = map(float, label.origin)
+        copied.origin = (x0 + x1 - x if mirror_x else x,
+                         y0 + y1 - y if mirror_y else y)
+        cell.add(copied)
+    return cell
+
+
+def dummy_array_name(rows: int, tap_pitch: int = 0, mirror_x: bool = False,
+                     mirror_y: bool = False) -> str:
+    tap = f"_tap{tap_pitch}" if tap_pitch else ""
+    return oriented_name(f"dummy_vertical_array_X{rows}{tap}_8t", mirror_x, mirror_y)
+
+
+def build_dummy_vertical_array(
+    library: gdstk.Library, cells: dict[str, gdstk.Cell], rows: int,
+    tap_pitch: int = 0, *, mirror_x: bool = False, mirror_y: bool = False,
+) -> gdstk.Cell:
+    """Tile one end row, like dummy_vertical_array_X64, for any address count.
+
+    Addresses run along X in the academic hierarchy. Taps occupy extra slots
+    and take grounded corners; they do not advance the bitcell mirror parity.
+    All references translate explicit masters, including the opposite ends.
+    """
+    if type(rows) is not int or rows < 1:
+        raise ValueError("edge row count must be a positive integer")
+    if type(tap_pitch) is not int or tap_pitch < 0 or (tap_pitch and rows % tap_pitch):
+        raise ValueError("edge tap pitch must be zero or a positive divisor of rows")
+    x0, y0, x1, y1 = edge_boundary(cells["dummy_vertical_8t"])
+    width, height = x1 - x0, y1 - y0
+    slots = rows + (rows // tap_pitch if tap_pitch else 0)
+    cell = library.new_cell(dummy_array_name(rows, tap_pitch, mirror_x, mirror_y))
+    slot = 0
+
+    def place(base: str, flipped: bool) -> None:
+        name = oriented_name(base, flipped != mirror_x, mirror_y)
+        physical_slot = slots - 1 - slot if mirror_x else slot
+        cell.add(gdstk.Reference(cells[name], origin=(physical_slot * width - x0, -y0)))
+
+    for index in range(rows):
+        place("dummy_vertical_8t", bool(index % 2))
+        slot += 1
+        if tap_pitch and (index + 1) % tap_pitch == 0:
+            place("sram_cell_8t_corner", False)
+            slot += 1
+    rect(cell, (0, 0, slots * width, height), BOUNDARY)
+    return cell
 
 
 def supply_rails(bitcell: gdstk.Cell) -> dict[str, list[tuple[float, float]]]:
@@ -1208,7 +1330,8 @@ def verify_tap_topology(cell: gdstk.Cell, bitcell: gdstk.Cell) -> None:
 
     # A tap sits mid-row, so it must hand every bitline and supply straight
     # through at exactly the bitcell's coordinates.
-    rail_predicate = lambda poly: is_full_m2_rail(poly) or is_bitline_m4_rail(poly)
+    def rail_predicate(poly):
+        return is_full_m2_rail(poly) or is_bitline_m4_rail(poly)
     _assert(
         filtered_polygon_fingerprint(cell, rail_predicate)
         == filtered_polygon_fingerprint(bitcell, rail_predicate),
@@ -1398,27 +1521,32 @@ def verify_tap_gds(path: Path, bitcell_path: Path) -> dict[str, str]:
     return {name: polygon_fingerprint(cells[name]) for name in sorted(expected)}
 
 
-def verify_edge_gds(path: Path) -> dict[str, str]:
+def verify_edge_gds(path: Path, row_counts: tuple[int, ...] = (64,)) -> dict[str, str]:
     lib = gdstk.read_gds(str(path))
     cells = {cell.name: cell for cell in lib.cells}
-    _assert(set(cells) == set(EDGE_CELL_NAMES),
-            f"edge library cells are {sorted(cells)}, expected {list(EDGE_CELL_NAMES)}")
+    expected = set(EDGE_CELL_NAMES) | {
+        dummy_array_name(count, mirror_x=mx, mirror_y=my)
+        for count in row_counts for mx, my in ORIENTATIONS
+    }
+    _assert(set(cells) == expected,
+            f"edge library cells are {sorted(cells)}, expected {sorted(expected)}")
 
-    for cell in cells.values():
-        verify_rules(cell)
+    for name in CORE_EDGE_CELL_NAMES:
+        verify_rules(cells[name])
     verify_dummy_topology(cells["dummy_cell_8t"])
     verify_cap_topology(cells["sram_cell_8t_col_cap"], "col")
     verify_cap_topology(cells["sram_cell_8t_row_cap"], "row")
     verify_cap_topology(cells["sram_cell_8t_corner"], "corner")
 
-    frames = {name: process_fingerprint(cell) for name, cell in cells.items()}
+    frames = {name: process_fingerprint(cells[name]) for name in CORE_EDGE_CELL_NAMES}
     _assert(len(set(frames.values())) == 1,
             "dummy/cap process frames do not match at abutment boundaries")
 
     col_cap = cells["sram_cell_8t_col_cap"]
     row_cap = cells["sram_cell_8t_row_cap"]
     corner = cells["sram_cell_8t_corner"]
-    rail_predicate = lambda poly: is_full_m2_rail(poly) or is_bitline_m4_rail(poly)
+    def rail_predicate(poly):
+        return is_full_m2_rail(poly) or is_bitline_m4_rail(poly)
     _assert(
         filtered_polygon_fingerprint(col_cap, rail_predicate)
         == filtered_polygon_fingerprint(corner, rail_predicate),
@@ -1426,9 +1554,8 @@ def verify_edge_gds(path: Path) -> dict[str, str]:
     )
 
     conductor_layers = {LIG, LISD, V0, M1, V1, M2, V2, M3, V3, M4, V4, M5}
-    wordline_predicate = lambda poly: (
-        poly.layer in conductor_layers and not rail_predicate(poly)
-    )
+    def wordline_predicate(poly):
+        return poly.layer in conductor_layers and not rail_predicate(poly)
     _assert(
         filtered_polygon_fingerprint(row_cap, wordline_predicate)
         == filtered_polygon_fingerprint(corner, wordline_predicate),
@@ -1454,7 +1581,67 @@ def verify_edge_gds(path: Path) -> dict[str, str]:
     _assert(any(is_box(poly, WLB_M5)
                 for poly in _layer_polygons(row_cap, M5)),
             "row cap is missing the full-height WLB M5 trunk")
-    return {name: polygon_fingerprint(cell) for name, cell in sorted(cells.items())}
+
+    for mx, my in ORIENTATIONS:
+        for name, kind, canonical in (
+            (oriented_name("dummy_vertical_8t", mx, my), "row", row_cap),
+            (oriented_name("sram_cell_8t_corner", mx, my), "corner", corner),
+            (topbot_name(mx, my), "col", col_cap),
+        ):
+            cell = cells[name]
+            _assert(not cell.references, f"{name}: oriented master must be materialized")
+            restored = oriented_cell(cell, canonical.name, mx, my)
+            _assert(polygon_fingerprint(restored) == polygon_fingerprint(canonical),
+                    f"{name}: geometry/pins do not match the canonical orientation")
+            verify_rules(restored)
+            verify_cap_topology(cell, kind)
+
+    blank = cells["FILLER_BLANK_8t"]
+    width, height = MARKER[2] - MARKER[0], MARKER[3] - MARKER[1]
+    _assert(edge_boundary(blank) == (0, MARKER[1], width / 2, MARKER[3]),
+            "blank filler is not a half-width 8T tile")
+    _assert({p.layer for p in blank.polygons} == {FIN, GATE, BOUNDARY}
+            and not blank.labels and not blank.references,
+            "blank filler contains unexpected devices, conductors, or hierarchy")
+    _assert(len(_layer_polygons(blank, GATE)) == 1, "blank filler needs one gate column")
+    _assert([bbox(p)[1::2] for p in _layer_polygons(blank, FIN)]
+            == [bbox(p)[1::2] for p in _layer_polygons(col_cap, FIN)],
+            "blank filler FIN grid does not match 8T")
+    filler = cells["FILLER_cgedge_8t"]
+    _assert(edge_boundary(filler) == (0, 0, width, round(4 * height, 7)),
+            "column-group filler is not four 8T rows high")
+    _assert(len(filler.references) == 8, "column-group filler needs eight half-width tiles")
+    for index, ref in enumerate(filler.references):
+        row, col = divmod(index, 2)
+        expected_y = (row + 1) * height + MARKER[1] if row % 2 else row * height - MARKER[1]
+        _assert(ref.cell_name == blank.name and not ref.rotation
+                and bool(ref.x_reflection) == bool(row % 2)
+                and all(abs(a - b) < 1e-7 for a, b in zip(ref.origin, (col * width / 2, expected_y))),
+                "column-group filler has a misplaced blank tile")
+    for count in row_counts:
+        for mx, my in ORIENTATIONS:
+            row = cells[dummy_array_name(count, mirror_x=mx, mirror_y=my)]
+            _assert(edge_boundary(row) == (0, 0, round(count * width, 7), round(height, 7)),
+                    f"{row.name}: wrong row-count boundary")
+            _assert(len(row.references) == count, f"{row.name}: wrong dummy count")
+            for index, ref in enumerate(row.references):
+                slot = count - 1 - index if mx else index
+                _assert(ref.cell_name == oriented_name("dummy_vertical_8t", bool(index % 2) != mx, my)
+                        and not ref.rotation and not ref.x_reflection
+                        and all(abs(a - b) < 1e-7 for a, b in zip(ref.origin, (slot * width - MARKER[0], -MARKER[1]))),
+                        f"{row.name}: wrong dummy slot/orientation")
+    return {name: polygon_fingerprint(cell.copy(name + "_flat").flatten())
+            for name, cell in sorted(cells.items())}
+
+
+def parse_row_counts(value: str) -> tuple[int, ...]:
+    try:
+        counts = tuple(sorted({int(item) for item in value.split(",")}))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("edge row counts must be integers") from error
+    if not counts or any(count < 1 for count in counts):
+        raise argparse.ArgumentTypeError("edge row counts must be positive")
+    return counts
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -1476,6 +1663,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--edge-output",
         type=Path,
         help="generated dummy/row-cap/column-cap/corner GDS; defaults beside --output",
+    )
+    parser.add_argument(
+        "--edge-rows", type=parse_row_counts, default=(64,),
+        help="comma-separated dummy-array address row counts (default: 64)",
     )
     parser.add_argument(
         "--tap-output",
@@ -1512,7 +1703,7 @@ def main(argv: list[str]) -> int:
             return 0
 
         if args.verify_edges:
-            digests = verify_edge_gds(args.verify_edges)
+            digests = verify_edge_gds(args.verify_edges, args.edge_rows)
             print(f"PASS {args.verify_edges}: {len(digests)} edge cells")
             for name, digest in digests.items():
                 print(f"  {name}: sha256={digest}")
@@ -1535,10 +1726,10 @@ def main(argv: list[str]) -> int:
         edge_output = args.edge_output or args.output.with_name("sram_cell_8t_edges.gds")
         edge_output.parent.mkdir(parents=True, exist_ok=True)
         edge_lib = build_edge_library(
-            lib.cells[0], unit=lib.unit, precision=lib.precision
+            lib.cells[0], unit=lib.unit, precision=lib.precision, row_counts=args.edge_rows
         )
         edge_lib.write_gds(str(edge_output), timestamp=FIXED_GDS_TIMESTAMP)
-        edge_digests = verify_edge_gds(edge_output)
+        edge_digests = verify_edge_gds(edge_output, args.edge_rows)
         print(f"wrote {edge_output}: {len(edge_digests)} edge cells")
         for name, edge_digest in edge_digests.items():
             print(f"  {name}: sha256={edge_digest}")

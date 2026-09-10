@@ -69,7 +69,8 @@ std::string SynthesisManager::generate_tcl_content() const {
         << "\n"
 
         << "# Analyze and elaborate\n"
-        << "analyze -f sverilog {sram_control.v delay_cell.v}\n"
+        << "analyze -f sverilog {sram_control.v delay_cell.v"
+        << (cli_options_.single_port ? "" : " row_decoder.v") << "}\n"
         << "elaborate ctrl_decode -parameters \"" << generate_parameter_string() << "\"\n"
         << "rename_design [current_design] ctrl_decode\n"
         << "link\n\n"
