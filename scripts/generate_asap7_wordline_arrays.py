@@ -29,6 +29,7 @@ import gdstk
 
 BOUNDARY = 100
 TAP_CELL_NAME = "tapcell_sram_8t"
+STRAP_CELL_NAME = "strapcell_sram_8t"
 GATE = 7
 PIN_TEXTTYPE = 251
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
@@ -143,18 +144,32 @@ def slot_layout(wordlines: int, tap_pitch: int) -> tuple[int, list[int]]:
     return wordlines + wordlines // tap_pitch, slot_of
 
 
-def tap_tag(tap_pitch: int) -> str:
-    return f"_tap{tap_pitch}" if tap_pitch else ""
+def tap_tag(tap_pitch: int, strap_pitch: int = 0) -> str:
+    if not tap_pitch:
+        return ""
+    return f"_tap{tap_pitch}" + (f"_strap{strap_pitch}" if strap_pitch else "")
 
 
-def row_name(contract: CellContract, wordlines: int, tap_pitch: int = 0) -> str:
-    return f"sramcol_x{wordlines}{tap_tag(tap_pitch)}_{contract.suffix}"
+def strap_slots(wordlines: int, tap_pitch: int, strap_pitch: int) -> set[int]:
+    """Physical slots whose tap is upgraded to a supply strap."""
+    if not tap_pitch or not strap_pitch:
+        return set()
+    slots, slot_of = slot_layout(wordlines, tap_pitch)
+    taps = sorted(set(range(slots)) - set(slot_of))
+    return {slot for index, slot in enumerate(taps)
+            if index % strap_pitch == 0}
+
+
+def row_name(contract: CellContract, wordlines: int, tap_pitch: int = 0,
+             strap_pitch: int = 0) -> str:
+    return (f"sramcol_x{wordlines}"
+            f"{tap_tag(tap_pitch, strap_pitch)}_{contract.suffix}")
 
 
 def array_name(contract: CellContract, wordlines: int, mux_rows: int,
-               tap_pitch: int = 0) -> str:
+               tap_pitch: int = 0, strap_pitch: int = 0) -> str:
     return (f"array_x{wordlines}x{mux_rows}"
-            f"{tap_tag(tap_pitch)}_{contract.suffix}")
+            f"{tap_tag(tap_pitch, strap_pitch)}_{contract.suffix}")
 
 
 def build_row(
@@ -164,6 +179,8 @@ def build_row(
     wordlines: int,
     tap_cell: gdstk.Cell | None = None,
     tap_pitch: int = 0,
+    strap_cell: gdstk.Cell | None = None,
+    strap_pitch: int = 0,
 ) -> gdstk.Cell:
     x0, y0, x1, y1 = boundary_box(bitcell)
     width = x1 - x0
@@ -174,7 +191,15 @@ def build_row(
         tx0, ty0, tx1, ty1 = boundary_box(tap_cell)
         if abs((tx1 - tx0) - width) > 1e-6 or abs((ty1 - ty0) - height) > 1e-6:
             raise RuntimeError("tap cell does not share the bitcell boundary")
-    row = library.new_cell(row_name(contract, wordlines, tap_pitch))
+        if strap_pitch:
+            if strap_cell is None:
+                raise RuntimeError("a strap pitch needs a strap cell")
+            if boundary_box(strap_cell) != boundary_box(tap_cell):
+                raise RuntimeError("strap cell does not share the tap boundary")
+    straps = strap_slots(wordlines, tap_pitch, strap_pitch)
+    row = library.new_cell(
+        row_name(contract, wordlines, tap_pitch, strap_pitch)
+    )
 
     origins: list[tuple[float, float]] = []
     mirrors: list[bool] = []
@@ -205,8 +230,9 @@ def build_row(
         # Bound the distance from any bitcell to a well/substrate tie.  The tap
         # hands every bitline straight through, so it can sit mid-row.
         if tap_pitch and (index + 1) % tap_pitch == 0:
+            master = strap_cell if slot in straps else tap_cell
             row.add(gdstk.Reference(
-                tap_cell, origin=(slot * width - tx0, -ty0)
+                master, origin=(slot * width - tx0, -ty0)
             ))
             slot += 1
 
@@ -239,12 +265,13 @@ def build_array(
     wordlines: int,
     mux_rows: int,
     tap_pitch: int = 0,
+    strap_pitch: int = 0,
 ) -> gdstk.Cell:
     x0, y0, x1, y1 = boundary_box(row)
     width = x1 - x0
     height = y1 - y0
     array = library.new_cell(
-        array_name(contract, wordlines, mux_rows, tap_pitch)
+        array_name(contract, wordlines, mux_rows, tap_pitch, strap_pitch)
     )
 
     row_origins: list[tuple[float, float]] = []
@@ -309,6 +336,7 @@ def build_library(
     mux_rows: int,
     tap_gds: Path | None = None,
     tap_pitch: int = 0,
+    strap_pitch: int = 0,
 ) -> gdstk.Library:
     source_lib_8t, bitcell_8t = load_cell(source_8t, "sram_cell_8t")
     source_lib_6t, bitcell_6t = load_cell(source_6t, "sram_cell_6t_122")
@@ -331,19 +359,24 @@ def build_library(
 
     # Only the 8T tap hands every bitline through, so only the 8T rows can
     # take an interleaved tap.  The published 6T tap terminates its column.
-    tap_cell = None
+    tap_cell = strap_cell = None
     if tap_pitch:
         if tap_gds is None:
             raise RuntimeError("--tap-pitch needs --tap-gds")
         _tap_lib, tap_cell = load_cell(tap_gds, TAP_CELL_NAME)
         library.add(tap_cell)
+        if strap_pitch:
+            _strap_lib, strap_cell = load_cell(tap_gds, STRAP_CELL_NAME)
+            library.add(strap_cell)
 
     for contract in CONTRACTS:
         pitch = tap_pitch if contract.key == "8t" else 0
+        straps = strap_pitch if contract.key == "8t" else 0
         for count in wordline_counts:
             row = build_row(library, bitcells[contract.key], contract, count,
-                            tap_cell=tap_cell, tap_pitch=pitch)
-            build_array(library, row, contract, count, mux_rows, pitch)
+                            tap_cell=tap_cell, tap_pitch=pitch,
+                            strap_cell=strap_cell, strap_pitch=straps)
+            build_array(library, row, contract, count, mux_rows, pitch, straps)
     return library
 
 
@@ -481,13 +514,15 @@ def verify_contract(
     wordlines: int,
     mux_rows: int,
     tap_pitch: int = 0,
+    strap_pitch: int = 0,
 ) -> None:
     bitcell = cells[contract.bitcell_name]
     bx0, by0, bx1, by1 = boundary_box(bitcell)
     pitch_x, pitch_y = bx1 - bx0, by1 - by0
     slots, slot_of = slot_layout(wordlines, tap_pitch)
-    row = cells[row_name(contract, wordlines, tap_pitch)]
-    array = cells[array_name(contract, wordlines, mux_rows, tap_pitch)]
+    row = cells[row_name(contract, wordlines, tap_pitch, strap_pitch)]
+    array = cells[array_name(contract, wordlines, mux_rows, tap_pitch,
+                             strap_pitch)]
 
     rx0, ry0, rx1, ry1 = boundary_box(row)
     ax0, ay0, ax1, ay1 = boundary_box(array)
@@ -503,7 +538,9 @@ def verify_contract(
 
     if len(row.references) != slots:
         raise RuntimeError(f"{row.name}: expected {slots} cell references")
-    allowed = {contract.bitcell_name} | ({TAP_CELL_NAME} if tap_pitch else set())
+    allowed = {contract.bitcell_name}
+    if tap_pitch:
+        allowed |= {TAP_CELL_NAME, STRAP_CELL_NAME}
     if any(reference.cell_name not in allowed
            for reference in row.references):
         raise RuntimeError(f"{row.name}: contains an unexpected reference")
@@ -512,7 +549,7 @@ def verify_contract(
     # land on the slots the bitcell origins skip.
     taps = sorted(float(reference.origin[0]) - rx0
                   for reference in row.references
-                  if reference.cell_name == TAP_CELL_NAME)
+                  if reference.cell_name in (TAP_CELL_NAME, STRAP_CELL_NAME))
     expected_taps = sorted(
         set(range(slots)) - {slot_of[index] for index in range(wordlines)}
     )
@@ -522,6 +559,15 @@ def verify_contract(
         )
     for actual, slot in zip(taps, expected_taps):
         assert_close(actual, slot * pitch_x, f"{row.name}: tap slot {slot}")
+
+    # Straps must land on the tap slots the pitch selects, and nowhere else.
+    want = strap_slots(wordlines, tap_pitch, strap_pitch)
+    got = {round((float(r.origin[0]) - rx0) / pitch_x)
+           for r in row.references if r.cell_name == STRAP_CELL_NAME}
+    if got != want:
+        raise RuntimeError(
+            f"{row.name}: straps on slots {sorted(got)}, expected {sorted(want)}"
+        )
     if len(array.references) != mux_rows:
         raise RuntimeError(f"{array.name}: expected {mux_rows} row references")
     if any(reference.cell_name != row.name for reference in array.references):
@@ -555,12 +601,13 @@ def verify_contract(
 
 def verify_io_pitch(cells: dict[str, gdstk.Cell], io_gds: Path,
                     wordlines: int, mux_rows: int,
-                    tap_pitch: int = 0) -> None:
+                    tap_pitch: int = 0, strap_pitch: int = 0) -> None:
     if mux_rows != 4:
         return
     io_lib = gdstk.read_gds(str(io_gds))
     io_cells = {cell.name: cell for cell in io_lib.cells}
-    array = cells[array_name(CONTRACTS[0], wordlines, mux_rows, tap_pitch)]
+    array = cells[array_name(CONTRACTS[0], wordlines, mux_rows, tap_pitch,
+                             strap_pitch)]
     mappings = {
         "ioprech_sram_8t_a": {
             "BLA": "BLT_A", "BLAN": "BLTN_A",
@@ -608,17 +655,21 @@ def cell_digest(cell: gdstk.Cell) -> str:
 
 
 def verify_gds(path: Path, wordline_counts: list[int], mux_rows: int,
-               io_gds: Path, tap_pitch: int = 0) -> dict[str, str]:
+               io_gds: Path, tap_pitch: int = 0,
+               strap_pitch: int = 0) -> dict[str, str]:
     library = gdstk.read_gds(str(path))
     cells = {cell.name: cell for cell in library.cells}
     expected = {contract.bitcell_name for contract in CONTRACTS}
     if tap_pitch:
         expected.add(TAP_CELL_NAME)
+        if strap_pitch:
+            expected.add(STRAP_CELL_NAME)
     for contract in CONTRACTS:
         pitch = tap_pitch if contract.key == "8t" else 0
+        straps = strap_pitch if contract.key == "8t" else 0
         for count in wordline_counts:
-            expected.add(row_name(contract, count, pitch))
-            expected.add(array_name(contract, count, mux_rows, pitch))
+            expected.add(row_name(contract, count, pitch, straps))
+            expected.add(array_name(contract, count, mux_rows, pitch, straps))
     if set(cells) != expected:
         missing = sorted(expected - set(cells))
         extra = sorted(set(cells) - expected)
@@ -626,10 +677,11 @@ def verify_gds(path: Path, wordline_counts: list[int], mux_rows: int,
 
     for contract in CONTRACTS:
         pitch = tap_pitch if contract.key == "8t" else 0
+        straps = strap_pitch if contract.key == "8t" else 0
         for count in wordline_counts:
-            verify_contract(cells, contract, count, mux_rows, pitch)
+            verify_contract(cells, contract, count, mux_rows, pitch, straps)
             if contract.key == "8t":
-                verify_io_pitch(cells, io_gds, count, mux_rows, pitch)
+                verify_io_pitch(cells, io_gds, count, mux_rows, pitch, straps)
     return {name: cell_digest(cells[name]) for name in sorted(cells)
             if name.startswith(("sramcol_", "array_"))}
 
@@ -685,6 +737,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
              "(default: 0, no taps)",
     )
     parser.add_argument(
+        "--strap-pitch", type=int, default=0,
+        help="upgrade every Nth tap to a power strap (default: 0, no straps)",
+    )
+    parser.add_argument(
         "--verify", type=Path,
         help="verify an existing GDS instead of generating one",
     )
@@ -696,6 +752,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     if args.tap_pitch and any(count % args.tap_pitch
                               for count in args.word_lines):
         parser.error("--tap-pitch must divide every wordline count")
+    if args.strap_pitch < 0:
+        parser.error("--strap-pitch must not be negative")
+    if args.strap_pitch and not args.tap_pitch:
+        parser.error("--strap-pitch needs --tap-pitch")
     return args
 
 
@@ -705,19 +765,19 @@ def main(argv: list[str]) -> int:
         if args.verify:
             digests = verify_gds(
                 args.verify, args.word_lines, args.mux_rows, args.io_gds,
-                args.tap_pitch,
+                args.tap_pitch, args.strap_pitch,
             )
             print(f"PASS {args.verify}: {len(digests)} parameterized cells")
         else:
             library = build_library(
                 args.gds_8t, args.gds_6t, args.word_lines, args.mux_rows,
-                args.tap_gds, args.tap_pitch,
+                args.tap_gds, args.tap_pitch, args.strap_pitch,
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             library.write_gds(str(args.output), timestamp=FIXED_GDS_TIMESTAMP)
             digests = verify_gds(
                 args.output, args.word_lines, args.mux_rows, args.io_gds,
-                args.tap_pitch,
+                args.tap_pitch, args.strap_pitch,
             )
             print(f"wrote {args.output}: {len(digests)} parameterized cells")
         for name, digest in digests.items():

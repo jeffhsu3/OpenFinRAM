@@ -45,6 +45,7 @@ EDGE_CELL_NAMES = (
     "sram_cell_8t_corner",
 )
 TAP_CELL_NAME = "tapcell_sram_8t"
+STRAP_CELL_NAME = "strapcell_sram_8t"
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
 
 # ASAP7 GDS drawing layers.
@@ -125,6 +126,21 @@ TAP_CONTACT_X = (0.042, 0.066)
 TAP_VIA_X = (0.045, 0.063)
 TAP_VIA_HEIGHT = 0.018
 TAP_BAND_INSET = 0.0135
+
+# Power-strap geometry.  The bitcell fills M1-M5 (M3 is WLA, M4 carries the
+# port-B bitlines, M5 is WLB), so the only place a supply can climb out of the
+# M2 rails is the tap column, where M3 and M5 are unused.  M3 still has to
+# clear the 9 nm neighbour overhang at both slot edges, which pins the climb to
+# the cell centre; M5 is free across the whole slot, so the two spines sit on
+# the gate-column centres.
+STRAP_CLIMB_X = 0.054
+STRAP_SPINE_X = {"vss!": 0.027, "vdd!": 0.081}
+STRAP_STEP_Y = 0.050
+STRAP_M5_HALF = 0.012
+GATE_A = (0.017, -0.181, 0.037, 0.439)
+GATE_B = (0.071, -0.169, 0.091, 0.451)
+WLA_M3 = (0.045, -0.162, 0.063, 0.432)
+WLB_M5 = (0.048, -0.162, 0.072, 0.432)
 GATE_A = (0.017, -0.181, 0.037, 0.439)
 GATE_B = (0.071, -0.169, 0.091, 0.451)
 WLA_M3 = (0.045, -0.162, 0.063, 0.432)
@@ -656,6 +672,35 @@ def group_tie_bands(
     return groups
 
 
+def add_supply_climb(
+    cell: gdstk.Cell, rail: tuple[float, float], spine_x: float,
+    y_direction: int,
+) -> None:
+    """Stagger an M2->M3->M4->M5 climb, as the IO column's staircase does.
+
+    M4 is horizontal-only and M5 vertical-only in the ASAP7 public rules, so
+    the transitions cannot share a track: V2 leaves the supply rail on a
+    vertical M3, V3 turns onto a horizontal M4 run, and V4 lands on the
+    vertical M5 spine.  The rail itself is full width, so it already provides
+    V2's horizontal endcaps and no extra M2 landing is needed.
+    """
+    x2 = STRAP_CLIMB_X
+    y2 = (rail[0] + rail[1]) / 2
+    y3 = y2 + y_direction * STRAP_STEP_Y
+
+    rect(cell, (x2 - 0.009, y2 - 0.009, x2 + 0.009, y2 + 0.009), V2)
+    rect(cell, (x2 - 0.009, min(y2, y3) - 0.014,
+                x2 + 0.009, max(y2, y3) + 0.014), M3)
+
+    rect(cell, (x2 - 0.014, y3 - 0.012, x2 + 0.014, y3 + 0.012), M3)
+    rect(cell, (x2 - 0.009, y3 - 0.012, x2 + 0.009, y3 + 0.012), V3)
+    rect(cell, (min(x2 - 0.020, spine_x - 0.023), y3 - 0.012,
+                max(x2 + 0.020, spine_x + 0.023), y3 + 0.012), M4)
+
+    rect(cell, (spine_x - 0.012, y3 - 0.012,
+                spine_x + 0.012, y3 + 0.012), V4)
+
+
 def build_tap_library(
     bitcell: gdstk.Cell, unit: float = 1e-6, precision: float = 2.5e-10
 ) -> gdstk.Library:
@@ -663,7 +708,16 @@ def build_tap_library(
     lib = gdstk.Library(
         "openfinram_asap7_8t_tap", unit=unit, precision=precision
     )
-    cell = lib.new_cell(TAP_CELL_NAME)
+    for name in (TAP_CELL_NAME, STRAP_CELL_NAME):
+        build_tap_cell(lib, name, bitcell, strap=name == STRAP_CELL_NAME)
+    return lib
+
+
+def build_tap_cell(
+    lib: gdstk.Library, name: str, bitcell: gdstk.Cell, strap: bool
+) -> gdstk.Cell:
+    """Build the array tap; `strap` adds the M2-to-M5 supply climb."""
+    cell = lib.new_cell(name)
     x0, y0, x1, y1 = bbox(
         next(p for p in bitcell.polygons if p.layer == BOUNDARY)
     )
@@ -713,7 +767,25 @@ def build_tap_library(
             rect(cell, (vx0, rail_y0, vx1, rail_y1), V1)
 
     copy_labels(bitcell, cell, {"vdd!", "vss!"})
-    return lib
+
+    if strap:
+        # One full-height M5 spine per supply.  Rows abut exactly at the cell
+        # boundary, as the WLA/WLB trunks already do, so the spines join into a
+        # continuous vertical rail down the tap column -- the direction the M2
+        # rails cannot carry.  Horizontal M6 tying the columns together crosses
+        # bitcells and therefore belongs to the array assembler, not this cell.
+        for net, spine_x in STRAP_SPINE_X.items():
+            # VSS has two rails at equal distance from the well, so pick the
+            # lower one explicitly and climb away from the array centre; that
+            # keeps both M4 landings clear of the port-B bitline rails.
+            rail = min(rails[net], key=lambda r: r[0])
+            add_supply_climb(cell, rail, spine_x,
+                             1 if net == "vdd!" else -1)
+            rect(cell, (spine_x - STRAP_M5_HALF, y0,
+                        spine_x + STRAP_M5_HALF, y1), M5)
+            cell.add(gdstk.Label(net, (spine_x, (rail[0] + rail[1]) / 2),
+                                 layer=M5, texttype=PIN_TEXTTYPE))
+    return cell
 
 
 def polygon_fingerprint(cell: gdstk.Cell) -> str:
@@ -1251,19 +1323,79 @@ def verify_gds(path: Path) -> str:
     return polygon_fingerprint(cell)
 
 
-def verify_tap_gds(path: Path, bitcell_path: Path) -> str:
+def verify_strap_topology(strap: gdstk.Cell, tap: gdstk.Cell) -> None:
+    """The strap is the tap plus a working M2-to-M5 climb per supply."""
+    # The strap must keep every tie, rail and process shape the tap has.
+    tap_shapes = {(p.layer, p.datatype, bbox(p)) for p in tap.polygons}
+    strap_shapes = {(p.layer, p.datatype, bbox(p)) for p in strap.polygons}
+    missing = tap_shapes - strap_shapes
+    _assert(not missing,
+            f"strap drops {len(missing)} tap shapes, e.g. {sorted(missing)[:2]}")
+
+    # One full-height M5 spine per supply, inside the slot and clear of each
+    # other.  Rows abut at the boundary, so a spine short of it breaks the
+    # vertical rail the strap exists to provide.
+    x0, y0, x1, y1 = MARKER
+    spines = sorted(bbox(p) for p in _layer_polygons(strap, M5))
+    _assert(len(spines) == len(STRAP_SPINE_X),
+            f"expected {len(STRAP_SPINE_X)} M5 spines, found {len(spines)}")
+    for spine, (net, centre) in zip(spines, sorted(STRAP_SPINE_X.items(),
+                                                   key=lambda kv: kv[1])):
+        _assert(abs(spine[0] - (centre - STRAP_M5_HALF)) < 1e-9
+                and abs(spine[2] - (centre + STRAP_M5_HALF)) < 1e-9,
+                f"{net} M5 spine is not centred on {centre}")
+        _assert(abs(spine[1] - y0) < 1e-9 and abs(spine[3] - y1) < 1e-9,
+                f"{net} M5 spine does not span the full row pitch")
+        _assert(x0 <= spine[0] and spine[2] <= x1,
+                f"{net} M5 spine leaves the tap slot")
+    _assert(spines[1][0] - spines[0][2] >= 0.018 - 1e-9,
+            "the two M5 spines are closer than 18 nm")
+
+    # M3 has to clear the 9 nm neighbour overhang at both slot edges.
+    for poly in _layer_polygons(strap, M3):
+        box = bbox(poly)
+        _assert(box[0] >= 0.027 - 1e-9 and box[2] <= 0.081 + 1e-9,
+                f"strap M3 at {box} intrudes on the neighbour overhang")
+
+    # The climb's M4 must not land on a port-B bitline rail.
+    bitline_y = [(bbox(p)[1], bbox(p)[3]) for p in _layer_polygons(strap, M4)
+                 if is_bitline_m4_rail(p)]
+    _assert(len(bitline_y) == 2, "strap lost a port-B bitline M4 rail")
+    for poly in _layer_polygons(strap, M4):
+        if is_bitline_m4_rail(poly):
+            continue
+        box = bbox(poly)
+        for low, high in bitline_y:
+            _assert(box[3] <= low or high <= box[1],
+                    f"strap M4 climb at {box} overlaps a bitline rail")
+
+    # Connectivity: collapsing the supply labels onto one component per climb
+    # is what proves the staircase actually reaches the spine.  VSS keeps two
+    # components because the tap never joined its two rails through metal.
+    _devices, labels = extract_connectivity(strap, expected_channels=0)
+    _assert(len(labels["vdd!"]) == 1,
+            "strap VDD rail and M5 spine are not connected")
+    _assert(len(labels["vss!"]) == 2,
+            "strap VSS rail and M5 spine are not connected")
+    _assert(labels["vdd!"].isdisjoint(labels["vss!"]),
+            "strap shorts VDD to VSS")
+
+
+def verify_tap_gds(path: Path, bitcell_path: Path) -> dict[str, str]:
     lib = gdstk.read_gds(str(path))
     cells = {cell.name: cell for cell in lib.cells}
-    _assert(set(cells) == {TAP_CELL_NAME},
-            f"tap library cells are {sorted(cells)}, expected [{TAP_CELL_NAME}]")
+    expected = {TAP_CELL_NAME, STRAP_CELL_NAME}
+    _assert(set(cells) == expected,
+            f"tap library cells are {sorted(cells)}, expected {sorted(expected)}")
     bit_lib = gdstk.read_gds(str(bitcell_path))
     bitcell = next((c for c in bit_lib.cells if c.name == CELL_NAME), None)
     if bitcell is None:
         raise ValueError(f"{CELL_NAME!r} not found in {bitcell_path}")
-    cell = cells[TAP_CELL_NAME]
-    verify_tap_rules(cell)
-    verify_tap_topology(cell, bitcell)
-    return polygon_fingerprint(cell)
+    for name in sorted(expected):
+        verify_tap_rules(cells[name])
+        verify_tap_topology(cells[name], bitcell)
+    verify_strap_topology(cells[STRAP_CELL_NAME], cells[TAP_CELL_NAME])
+    return {name: polygon_fingerprint(cells[name]) for name in sorted(expected)}
 
 
 def verify_edge_gds(path: Path) -> dict[str, str]:
@@ -1388,8 +1520,10 @@ def main(argv: list[str]) -> int:
 
         if args.verify_tap:
             bitcell_path = args.output
-            digest = verify_tap_gds(args.verify_tap, bitcell_path)
-            print(f"PASS {args.verify_tap}: {TAP_CELL_NAME}, sha256={digest}")
+            digests = verify_tap_gds(args.verify_tap, bitcell_path)
+            print(f"PASS {args.verify_tap}: {len(digests)} tap cells")
+            for name, digest in digests.items():
+                print(f"  {name}: sha256={digest}")
             return 0
 
         lib = build_cell(args.source_gds)
@@ -1417,8 +1551,10 @@ def main(argv: list[str]) -> int:
             lib.cells[0], unit=lib.unit, precision=lib.precision
         )
         tap_lib.write_gds(str(tap_output), timestamp=FIXED_GDS_TIMESTAMP)
-        tap_digest = verify_tap_gds(tap_output, args.output)
-        print(f"wrote {tap_output}: {TAP_CELL_NAME}, sha256={tap_digest}")
+        tap_digests = verify_tap_gds(tap_output, args.output)
+        print(f"wrote {tap_output}: {len(tap_digests)} tap cells")
+        for name, digest in tap_digests.items():
+            print(f"  {name}: sha256={digest}")
         return 0
     except (OSError, RuntimeError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

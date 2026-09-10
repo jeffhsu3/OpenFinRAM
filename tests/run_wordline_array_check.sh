@@ -42,4 +42,12 @@ tapped="$scratch/sram_wordline_arrays_tap8.gds"
 "$python_bin" "$generator" --word-lines 32 --tap-pitch 8 --output "$tapped"
 "$python_bin" "$generator" --word-lines 32 --tap-pitch 8 --verify "$tapped"
 
-echo "PASS: parameterized 8T/6T wordline rows, arrays, taps, and 8T IO pitch"
+# Upgrade a subset of the taps to power straps.  The strap carries the same
+# ties and bitline pass-throughs, so every abutment probe must still pass.
+strapped="$scratch/sram_wordline_arrays_tap8_strap2.gds"
+"$python_bin" "$generator" --word-lines 32 --tap-pitch 8 --strap-pitch 2 \
+    --output "$strapped"
+"$python_bin" "$generator" --word-lines 32 --tap-pitch 8 --strap-pitch 2 \
+    --verify "$strapped"
+
+echo "PASS: parameterized 8T/6T wordline rows, arrays, taps, straps, and 8T IO pitch"
