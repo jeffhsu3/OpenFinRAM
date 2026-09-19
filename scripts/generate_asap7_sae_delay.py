@@ -23,6 +23,9 @@ What comes from chipforge_asap7
 * ``RowStack``/``RowBand``: the nFET-below / pFET-above row, its rails, its
   n/p seam and its fin grid, with ``band_height`` pinned to the released
   270 nm 7.5-track row (or the next fin-legal height for 4 fins).
+* ``NandSpec``/``build_nand``: the whole first stage.  ``NandSpec(fingers=1,
+  abut=False)`` is the NAND2xp33 island on this row, with B (rail side) as EN
+  and A (output side) as IN; it is referenced at the tile origin and flattened.
 * ``build_device_band``: ACTIVE + SDT + LISD on every S/D column of a tile.
 * ``RowSupportSpec``/``build_row_support``: the filler and tap for this exact
   stack, so DRC runs on a properly terminated row (``filler cell filler tap
@@ -32,10 +35,11 @@ What comes from chipforge_asap7
 
 What this script still draws itself
 -----------------------------------
-The tiles and the M1 routing, copied from the released NAND2xp33 / BUFx2 /
-INVx1 standard cells (``asap7sc7p5t_28``):
+The inverter tiles and their M1 routing, copied from the released BUFx2 and
+INVx1 standard cells (``asap7sc7p5t_28``), plus the seam bar that hands each
+tile's output to the next:
 
-  nand   VSS A n B Y  /  VDD A Y B VDD      first stage with EN
+  nand   VSS EN n IN Y  /  VDD EN Y IN VDD   first stage (chipforge NandSpec)
   pair   D G S G D    (two chain stages sharing one source column)
   inv    S G D        (a trailing odd stage)
 
@@ -65,9 +69,11 @@ from typing import Any, Literal
 
 from chipforge_asap7.devices import (
     FinFETSpec,
+    NandSpec,
     RowStack,
     RowSupportSpec,
     build_device_band,
+    build_nand,
     build_row_support,
 )
 from chipforge_asap7.devices.finfet import (
@@ -81,10 +87,10 @@ from chipforge_asap7.devices.finfet import (
     M1_WIDTH,
     POLY_OVERHANG,
     SD_BAR_WIDTH,
-    SELECT_X_ENC,
     VT_LAYERS,
 )
 from chipforge_asap7.layout import (
+    COLUMN_PITCH,
     FIN_WIDTH,
     GATE_PITCH,
     GATE_WIDTH,
@@ -120,8 +126,19 @@ PIN_ROW_OFFSET = M1_WIDTH + M1_MIN_SPACE  # 36
 #: keeps two neighbouring 22 nm gate straps at the 31 nm LIG.S.4-5 spacing.
 LIG_GATE_EXT = 1
 #: Tile widths in gate tracks: NAND2xp33 and BUFx2-minus-a-finger are 4 CPP,
-#: INVx1 is 3.  Each tile owns both of its edge dummy gates.
+#: INVx1 is 3.  Each tile owns both of its edge dummy gates.  A column-pitched
+#: cell widens the trailing inverter to 4 so the cell stays on the 108 nm
+#: bitcell column pitch.
 TILE_TRACKS = {"nand": 4, "pair": 4, "inv": 3}
+#: GATE.ACTIVE.S.4: ACTIVE stops 9 nm short of a dummy gate, so it runs 25 nm
+#: past the outer edge of the last *active* gate, whatever the tile width.
+GATE_ACTIVE_SPACE = 9
+ACTIVE_PAST_GATE = GATE_PITCH - GATE_WIDTH - GATE_ACTIVE_SPACE  # 25
+#: Bitcell row pitches the cell can be matched to: the released 6T cell is
+#: 108 x 270 nm (one standard-cell row, by coincidence of the fin grid); this
+#: branch's 8T cell is 108 x 594 nm, 22 fin pitches.
+BITCELL_ROW_HEIGHT = {"6t": STD_CELL_HEIGHT, "8t": 594}
+PITCHES = ("stdcell", "6t", "8t")
 
 _M1_PIN = LAYERS["M1_PIN"]
 
@@ -154,10 +171,7 @@ class Tile:
     kind: Literal["nand", "pair", "inv"]
     x0: int
     stages: tuple[int, ...]
-
-    @property
-    def tracks(self) -> int:
-        return TILE_TRACKS[self.kind]
+    tracks: int
 
     @property
     def width(self) -> int:
@@ -168,14 +182,26 @@ class Tile:
         return self.x0 + self.width
 
     @property
+    def track_xs(self) -> tuple[int, ...]:
+        """Center X of every gate track the tile owns."""
+        return tuple(self.x0 + GATE_PITCH // 2 + t * GATE_PITCH for t in range(self.tracks))
+
+    @property
     def gate_xs(self) -> tuple[int, ...]:
         """Center X of the active gates, left to right (cell coordinates)."""
         count = 2 if self.kind in ("nand", "pair") else 1
-        return tuple(self.x0 + GATE_PITCH // 2 + (1 + i) * GATE_PITCH for i in range(count))
+        return self.track_xs[1:1 + count]
 
     @property
-    def dummy_xs(self) -> tuple[int, int]:
-        return (self.x0 + GATE_PITCH // 2, self.x1 - GATE_PITCH // 2)
+    def dummy_xs(self) -> tuple[int, ...]:
+        """Every track that is not an active gate: the two edges, plus padding."""
+        return tuple(x for x in self.track_xs if x not in self.gate_xs)
+
+    @property
+    def active_x(self) -> tuple[int, int]:
+        """ACTIVE extent: 25 nm past the outer active gate edges (46 nm from a 4-CPP edge)."""
+        return (self.gate_xs[0] - GATE_WIDTH // 2 - ACTIVE_PAST_GATE,
+                self.gate_xs[-1] + GATE_WIDTH // 2 + ACTIVE_PAST_GATE)
 
 
 @dataclass(frozen=True)
@@ -188,6 +214,11 @@ class SaeDelayConfig:
     nand_enable: bool = True  # first stage is a NAND2 with EN (replica gate)
     load_fF: float = 8.0  # characterization load (sense-enable fanout)
     vt: Literal["rvt", "lvt", "slvt", "sram"] = "sram"
+    # "stdcell": a CORE cell on the 270 nm 7.5-track row for the synthesized
+    # ctrl_decode region.  "6t"/"8t": a column-pitched cell for the handcrafted
+    # periphery -- width a multiple of the 108 nm bitcell column pitch, height
+    # exactly one bitcell row (270 nm for 6T, 594 nm for 8T).
+    pitch: Literal["stdcell", "6t", "8t"] = "stdcell"
 
     def __post_init__(self) -> None:
         if not 2 <= self.stages <= 12:
@@ -202,18 +233,35 @@ class SaeDelayConfig:
             raise ValueError("load_fF must be in [0.5, 64]")
         if self.vt not in VT_LAYERS:
             raise ValueError(f"vt must be one of {tuple(VT_LAYERS)}")
+        if self.pitch not in PITCHES:
+            raise ValueError(f"pitch must be one of {PITCHES}")
+        if self.pitch == "6t" and max(self.nfin_n, self.nfin_p) > 3:
+            raise ValueError("a 6T-pitched cell is one 270 nm bitcell row: at most 3 fins")
         self.stack  # FinFETSpec validates the fin/height grid
+        if self.nand_enable:
+            self.nand_spec  # NandSpec validates that its contacts fit the row
+        if self.column_pitched:
+            _assert(self.width % COLUMN_PITCH == 0,
+                    f"{self.pitch} cell width {self.width} is off the {COLUMN_PITCH} nm column pitch")
 
     # ── Naming ────────────────────────────────────────────────────────────────
     @property
     def cell_name(self) -> str:
         en = "_en" if self.nand_enable else ""
-        return f"sae_delay_{self.stages}s_{self.nfin_n}n{self.nfin_p}p{en}_{self.vt}"
+        tag = "" if self.pitch == "stdcell" else f"_{self.pitch}"
+        return f"sae_delay_{self.stages}s_{self.nfin_n}n{self.nfin_p}p{en}_{self.vt}{tag}"
 
     # ── Row ───────────────────────────────────────────────────────────────────
     @property
+    def column_pitched(self) -> bool:
+        return self.pitch != "stdcell"
+
+    @property
     def band_height(self) -> int:
-        """Half the 7.5-track row, or the next fin-legal height (4 fins)."""
+        """Half a bitcell row when pitched; else half the 7.5-track row, or
+        the next fin-legal height (4 fins)."""
+        if self.column_pitched:
+            return BITCELL_ROW_HEIGHT[self.pitch] // 2
         tallest = FinFETSpec(fins=max(self.nfin_n, self.nfin_p)).default_height_per_row
         return max(STD_CELL_HEIGHT // 2, tallest)
 
@@ -228,6 +276,16 @@ class SaeDelayConfig:
     def height(self) -> int:
         return self.stack.height
 
+    @property
+    def nand_spec(self) -> NandSpec:
+        """The first stage as chipforge_asap7 draws it: the NAND2xp33 island on this row.
+
+        One finger per input; B is on the rail side of the series stack and
+        carries EN, A is on the output side and carries IN, the timing input.
+        """
+        return NandSpec(rows=((self.nfin_n, self.nfin_p),), fingers=1, vt=self.vt,
+                        abut=False, band_height=self.band_height)
+
     # ── Floorplan ─────────────────────────────────────────────────────────────
     @property
     def tiles(self) -> tuple[Tile, ...]:
@@ -235,15 +293,18 @@ class SaeDelayConfig:
         x = 0
         stage = 0
         if self.nand_enable:
-            tiles.append(Tile("nand", x, (0,)))
+            tiles.append(Tile("nand", x, (0,), self.nand_spec.tracks))
             x += tiles[-1].width
             stage = 1
         while self.stages - stage >= 2:
-            tiles.append(Tile("pair", x, (stage, stage + 1)))
+            tiles.append(Tile("pair", x, (stage, stage + 1), TILE_TRACKS["pair"]))
             x += tiles[-1].width
             stage += 2
         if self.stages - stage == 1:
-            tiles.append(Tile("inv", x, (stage,)))
+            # A 3-track inverter leaves a column-pitched cell half a column
+            # short; one padding dummy track squares it up.
+            tracks = TILE_TRACKS["inv"] + (1 if self.column_pitched else 0)
+            tiles.append(Tile("inv", x, (stage,), tracks))
         return tuple(tiles)
 
     @property
@@ -253,6 +314,11 @@ class SaeDelayConfig:
     @property
     def width(self) -> int:
         return self.width_cpp * GATE_PITCH
+
+    @property
+    def columns(self) -> float:
+        """Width in bitcell column pitches (integral when `column_pitched`)."""
+        return self.width / COLUMN_PITCH
 
     @property
     def gate_track_xs(self) -> list[int]:
@@ -284,13 +350,16 @@ class SaeDelayConfig:
         seam = self.stack.seam_y(0)
         first, last = self.tiles[0], self.tiles[-1]
         pos = {
-            "IN": (first.x0 + (135 if first.kind == "nand" else 55), seam),
+            "IN": (first.x0 + 55, seam),
             "OUT": (last.x0 + (117 if last.kind == "inv" else 189), seam),
             "VDD": (self.width / 2, self.height),
             "VSS": (self.width / 2, 0),
         }
-        if self.nand_enable:
-            pos["EN"] = (first.x0 + 57, seam)
+        if self.nand_enable:  # NandSpec's A (output side) is IN, its B (rail side) is EN
+            nand_pins = self.nand_spec.pin_positions
+            for pin, nand_pin in (("IN", "A"), ("EN", "B")):
+                x, y = nand_pins[nand_pin]
+                pos[pin] = (first.x0 + x, y)
         return pos
 
     # ── Netlist ───────────────────────────────────────────────────────────────
@@ -380,13 +449,16 @@ class _Canvas:
     def rect(self, layer: str, x0: float, y0: float, x1: float, y1: float) -> None:
         box(self.cell, layer, x0, y0, x1, y1)
 
-    def m1(self, x0: float, y0: float, x1: float, y1: float, pin: str | None = None) -> None:
-        self.rect("M1", x0, y0, x1, y1)
-        shape = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    def record(self, shape: Box, pin: str | None = None) -> None:
+        """LEF bookkeeping: an M1 rectangle is a pin's port or an obstruction."""
         if pin is None:
             self.obstructions.append(shape)
         else:
             self.pins.setdefault(pin, []).append(shape)
+
+    def m1(self, x0: float, y0: float, x1: float, y1: float, pin: str | None = None) -> None:
+        self.rect("M1", x0, y0, x1, y1)
+        self.record((min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)), pin)
 
     def flag(self, x0: float, x1: float, y: float, pin: str | None = None) -> None:
         """An 18 nm horizontal M1 bar on a via row (V0.M1.AUX.3 wants exactly 18)."""
@@ -420,7 +492,7 @@ class _Canvas:
     def diffusion(self, tile: Tile, *, n_cols, p_cols, n_sources, p_sources,
                   n_drains, p_drains) -> None:
         """ACTIVE/SDT/LISD per band via chipforge_asap7, plus rail ties and drain vias."""
-        active_x = (tile.x0 + SELECT_X_ENC, tile.x1 - SELECT_X_ENC)
+        active_x = tile.active_x
         for band, cols, sources, drains in (
             (self.n, n_cols, n_sources, n_drains),
             (self.p, p_cols, p_sources, p_drains),
@@ -439,34 +511,42 @@ class _Canvas:
                 self.v0(tile.x0 + c, band.contact_y)
 
 
-def _draw_nand(cv: _Canvas, tile: Tile) -> None:
-    """NAND2xp33: N series ``VSS A n B Y``, P parallel ``VDD A Y B VDD``.
+def _place_nand(cv: _Canvas, tile: Tile) -> None:
+    """The first stage, straight from chipforge_asap7's `NandSpec`.
 
-    The released cell's A gate (VSS side of the stack) carries EN and its B
-    gate (Y side) carries IN: the timing-critical input drives the device
-    nearest the output, and the series order matches `SaeDelayConfig.devices`
-    (LVS compares structure, so the order is not a free choice).
+    ``NandSpec(fingers=1, abut=False)`` draws the whole island -- implant, fin
+    and gate grids, rails, ``VSS EN · IN Y`` over ``VDD EN Y IN VDD``, contacts
+    and the output bar over its right dummy -- with IN on the output side of
+    the series stack, which is both the fast position for the timing input and
+    the series order `SaeDelayConfig.devices` declares (LVS compares structure,
+    so the order is not a free choice).  The cell is built standalone,
+    referenced at the tile origin and flattened, so the delay cell stays one
+    flat cell; its BOUNDARY is dropped in favour of the delay cell's own.
+    All this script adds is the hand-off: the seam bar from the NAND's output
+    bar to the next tile.
     """
-    x = tile.x0
-    cv.diffusion(tile, n_cols=(54, 162), p_cols=(54, 108, 162),
-                 n_sources=(54,), p_sources=(54, 162), n_drains=(162,), p_drains=(108,))
-    # A = EN: seam bar, vertical bar, pin flags on the (free) drain rows.
-    cv.gate_contact(x + 81, from_column=x + 54)
-    cv.seam_bar(x + 36, x + 78, "EN")
-    cv.vbar(x + 36, x + 55, cv.bar_lo, cv.bar_hi, "EN")
-    cv.flag(x + 18, x + 55, cv.y_n, "EN")
-    cv.flag(x + 18, x + 55, cv.y_p, "EN")
-    # B = IN: pad on the gate, vertical bar, pin flags one track inside.
-    cv.gate_contact(x + 135)
-    cv.vbar(x + 126, x + 144, cv.y_pin_n + HALF_M1, cv.y_pin_p - HALF_M1, "IN")
-    cv.flag(x + 107, x + 144, cv.y_pin_n, "IN")
-    cv.flag(x + 107, x + 144, cv.y_pin_p, "IN")
-    # Y: P drain (108) on the top flag, N drain (162) on the bottom flag, joined
-    # by a bar over the right dummy, handed on along the seam.
-    cv.flag(x + 94, x + 198, cv.y_p)
-    cv.flag(x + 143, x + 198, cv.y_n)
-    cv.vbar(x + 180, x + 198, cv.bar_lo, cv.bar_hi)
-    cv.seam_bar(x + 180, tile.x1)
+    gdspy = require_gdspy()
+    spec = cv.cfg.nand_spec
+    nand = build_nand(spec, name=f"{cv.cell.name}__nand", draw_pin_labels=False)
+    cv.cell.add(gdspy.CellReference(nand, origin=(tile.x0, 0)))
+    cv.cell.flatten()
+    boundary = (LAYERS["BOUNDARY"]["layer"], LAYERS["BOUNDARY"]["datatype"])
+    cv.cell.remove_polygons(lambda _pts, layer, datatype: (layer, datatype) == boundary)
+
+    # LEF bookkeeping.  NandSpec publishes pin *points*, so the M1 rectangle
+    # under each is that pin's port, the full-width bars on the rail Ys are
+    # the supplies, and everything else obstructs.
+    points = {"IN": spec.pin_positions["A"], "EN": spec.pin_positions["B"]}
+    rails = dict(spec.rails)
+    for x0, y0, x1, y1 in layer_boxes(nand, "M1"):
+        pin = next((name for name, (px, py) in points.items()
+                    if x0 <= px <= x1 and y0 <= py <= y1), None)
+        if pin is None and (x0, x1) == (0, spec.width):
+            pin = rails.get((y0 + y1) / 2)
+        cv.record((x0 + tile.x0, y0, x1 + tile.x0, y1), pin)
+
+    bar_x0, _ = spec.output_bar_x(spec.columns("n", "Y")[0])
+    cv.seam_bar(tile.x0 + bar_x0, tile.x1)
 
 
 def _draw_pair(cv: _Canvas, tile: Tile, *, first: bool, last: bool) -> None:
@@ -527,37 +607,42 @@ def _build(cfg: SaeDelayConfig, *, lib: Any = None, name: str | None = None,
     cv = _Canvas(cfg, cell)
     stack = cfg.stack
     width, height = cfg.width, cfg.height
+    tiles = cfg.tiles
+    # A NandSpec tile brings its own row (implant, grids, cuts, rails), so the
+    # row drawn here starts where it ends; identical shapes butt at the seam.
+    own_x0 = tiles[0].x1 if tiles[0].kind == "nand" else 0
 
     # Implant tiles the row band by band; the p band and its well coincide.
     for band in (cv.n, cv.p):
-        cv.rect(band.implant, 0, band.y0, width, band.y1)
+        cv.rect(band.implant, own_x0, band.y0, width, band.y1)
         if band.in_nwell:
-            cv.rect("NWELL", 0, band.y0, width, band.y1)
+            cv.rect("NWELL", own_x0, band.y0, width, band.y1)
     if vt_layer := VT_LAYERS[cfg.vt]:
-        cv.rect(vt_layer, 0, 0, width, height)
+        cv.rect(vt_layer, own_x0, 0, width, height)
 
     # FIN and GATE are manufacturing grids across the whole cell.
     for y_fin in stack.fin_grid_ys:
-        cv.rect("FIN", 0, y_fin, width, y_fin + FIN_WIDTH)
+        cv.rect("FIN", own_x0, y_fin, width, y_fin + FIN_WIDTH)
     for x_gate in cfg.gate_track_xs:
-        cv.rect("GATE", x_gate - GATE_WIDTH // 2, -POLY_OVERHANG,
-                x_gate + GATE_WIDTH // 2, height + POLY_OVERHANG)
+        if x_gate > own_x0:
+            cv.rect("GATE", x_gate - GATE_WIDTH // 2, -POLY_OVERHANG,
+                    x_gate + GATE_WIDTH // 2, height + POLY_OVERHANG)
     # Poly is cut on both rails, and dummy tracks are also cut on the seam
-    # (the released cells' split GCUT), 17 nm clear of the active gates.
+    # (the released cells' split GCUT), 17 nm clear of the active gates.  The
+    # seam cuts cover every tile's dummies, the NAND's included.
     for y_rail, _ in stack.rails:
-        cv.rect("GATE_CUT", 0, y_rail - HALF_CUT, width, y_rail + HALF_CUT)
+        cv.rect("GATE_CUT", own_x0, y_rail - HALF_CUT, width, y_rail + HALF_CUT)
     for x0, x1 in _merge_spans([(x - GATE_PITCH // 2, x + GATE_PITCH // 2) for x in cfg.dummy_xs]):
         cv.rect("GATE_CUT", x0, cv.seam - HALF_CUT, x1, cv.seam + HALF_CUT)
 
     # Rails: 16 nm LI under 18 nm M1, centred on the row boundary.
     for y_rail, net in stack.rails:
-        cv.rect("LIG", 0, y_rail - HALF_RAIL, width, y_rail + HALF_RAIL)
-        cv.m1(0, y_rail - HALF_M1, width, y_rail + HALF_M1, net)
+        cv.rect("LIG", own_x0, y_rail - HALF_RAIL, width, y_rail + HALF_RAIL)
+        cv.m1(own_x0, y_rail - HALF_M1, width, y_rail + HALF_M1, net)
 
-    tiles = cfg.tiles
     for index, tile in enumerate(tiles):
         if tile.kind == "nand":
-            _draw_nand(cv, tile)
+            _place_nand(cv, tile)
         elif tile.kind == "pair":
             _draw_pair(cv, tile, first=index == 0, last=index == len(tiles) - 1)
         else:
@@ -677,18 +762,20 @@ def lef_abstract(cfg: SaeDelayConfig) -> str:
     pins, obstructions = pin_shapes(cfg)
     directions = {"IN": "INPUT", "EN": "INPUT", "OUT": "OUTPUT", "VDD": "INOUT", "VSS": "INOUT"}
     uses = {"VDD": "POWER", "VSS": "GROUND"}
+    # A column-pitched cell is placed against the array by the macro
+    # assembler, not on standard-cell sites, so it is a BLOCK.
     out = [
         "VERSION 5.8 ;",
         'BUSBITCHARS "[]" ;',
         'DIVIDERCHAR "/" ;',
         f"MACRO {cfg.cell_name}",
-        "  CLASS CORE ;",
+        f"  CLASS {'BLOCK' if cfg.column_pitched else 'CORE'} ;",
         "  ORIGIN 0 0 ;",
         f"  FOREIGN {cfg.cell_name} 0 0 ;",
         f"  SIZE {_um(cfg.width)} BY {_um(cfg.height)} ;",
         "  SYMMETRY X Y ;",
     ]
-    if cfg.height == STD_CELL_HEIGHT:
+    if not cfg.column_pitched and cfg.height == STD_CELL_HEIGHT:
         out.append("  SITE asap7sc7p5t ;")
     for pin in cfg.pins:
         out += [f"  PIN {pin}", f"    DIRECTION {directions[pin]} ;",
@@ -892,8 +979,9 @@ def write_cell(cfg: SaeDelayConfig, out: Path) -> dict:
     (out / f"{cfg.cell_name}_lvs_ref.sp").write_text(lvs_schematic(cfg))
     (out / f"{cfg.cell_name}.lef").write_text(lef_abstract(cfg))
     summary = {
-        "cell": cfg.cell_name, "width_nm": cfg.width, "height_nm": cfg.height,
-        "width_cpp": cfg.width_cpp, "tiles": [t.kind for t in cfg.tiles],
+        "cell": cfg.cell_name, "pitch": cfg.pitch, "width_nm": cfg.width,
+        "height_nm": cfg.height, "width_cpp": cfg.width_cpp, "columns": cfg.columns,
+        "tiles": [t.kind for t in cfg.tiles],
         "pins": {k: list(v) for k, v in cfg.pin_positions.items()},
         "fins_per_stage": {str(k): v for k, v in measured.items()},
     }
@@ -908,6 +996,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--nfin-p", type=int, default=2)
     ap.add_argument("--no-nand", action="store_true", help="plain chain, no enable NAND")
     ap.add_argument("--vt", choices=tuple(VT_LAYERS), default="sram")
+    ap.add_argument("--pitch", choices=PITCHES, default="stdcell",
+                    help="stdcell: CORE cell on the 270 nm row; 6t/8t: column-pitched "
+                         "cell one bitcell row tall (270 / 594 nm), width on the 108 nm column pitch")
     ap.add_argument("--load-fF", type=float, default=8.0)
     ap.add_argument("--out", type=str, default="results/sae_delay_cell")
     ap.add_argument("--calibrate", action="store_true", help="run Xyce grid + write CAL_PATH")
@@ -920,15 +1011,17 @@ def main(argv: list[str] | None = None) -> int:
         calibrate()
         return 0
     cfg = SaeDelayConfig(stages=args.stages, nfin_n=args.nfin_n, nfin_p=args.nfin_p,
-                         nand_enable=not args.no_nand, load_fF=args.load_fF, vt=args.vt)
+                         nand_enable=not args.no_nand, load_fF=args.load_fF, vt=args.vt,
+                         pitch=args.pitch)
     if args.sim_only:
         print(json.dumps({"config": str(cfg), **simulate(cfg)}, indent=1))
         return 0
 
     out = REPO_ROOT / args.out
     summary = write_cell(cfg, out)
-    print(f"{cfg.cell_name}: {cfg.width} x {cfg.height} nm ({cfg.width_cpp} CPP), "
-          f"tiles={summary['tiles']}, fins/stage={summary['fins_per_stage']['0']} (stage 0)")
+    print(f"{cfg.cell_name}: {cfg.width} x {cfg.height} nm ({cfg.width_cpp} CPP, "
+          f"{cfg.columns:g} columns), tiles={summary['tiles']}, "
+          f"fins/stage={summary['fins_per_stage']['0']} (stage 0)")
     print(f"wrote {out}")
     rc = 0
     if args.drc:

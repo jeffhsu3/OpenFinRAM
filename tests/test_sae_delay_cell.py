@@ -72,6 +72,19 @@ class TestSaeDelayConfig:
         assert SaeDelayConfig(nfin_n=1, nfin_p=3).height == 270
         assert SaeDelayConfig(nfin_n=4, nfin_p=2).height == 324  # next fin-legal band
 
+    def test_pitched_cells_match_the_bitcell_row_and_column_pitch(self):
+        eight = SaeDelayConfig(stages=6, pitch="8t")
+        assert (eight.height, eight.width, eight.columns) == (594, 864, 8)
+        assert [t.tracks for t in eight.tiles] == [4, 4, 4, 4]  # padded trailing inverter
+        six = SaeDelayConfig(stages=4, nfin_n=3, nfin_p=3, nand_enable=False, pitch="6t")
+        assert (six.height, six.width, six.columns) == (270, 432, 4)
+        with pytest.raises(ValueError):
+            SaeDelayConfig(nfin_n=4, pitch="6t")  # 4 fins do not fit one 270 nm row
+        assert SaeDelayConfig(stages=6).columns == 7.5  # the CORE cell is not column-pitched
+        lef = lef_abstract(eight)
+        assert "CLASS BLOCK" in lef and "SITE" not in lef and "SIZE 0.864 BY 0.594" in lef
+        assert verify_topology(layout(eight), eight)[5] == {"n": 2, "p": 2}
+
 
 class TestCellOutputs:
     def test_netlist_device_counts(self):
@@ -92,6 +105,26 @@ class TestCellOutputs:
             measured = verify_topology(layout(cfg), cfg)
             assert measured[0] == {"n": 3, "p": 1}
             assert measured[3] == {"n": 3, "p": 1}
+
+    def test_nand_tile_is_chipforge_nandspec(self):
+        """The first stage is `NandSpec(fingers=1, abut=False)`, flattened in place."""
+        from chipforge_asap7.devices import build_nand
+        from scripts.generate_asap7_sae_delay import layer_boxes
+
+        cfg = SaeDelayConfig(stages=4, nfin_n=2, nfin_p=3)
+        spec = cfg.nand_spec
+        assert (spec.fingers, spec.abut) == (1, False)
+        assert (spec.width, spec.height) == (cfg.tiles[0].width, cfg.height)
+        assert list(spec.gate_xs) == cfg.stage_gate_xs[0]
+        cell = layout(cfg)
+        assert cell.references == []  # one flat cell, as before
+        nand = build_nand(spec)
+        for layer in ("ACTIVE", "SDT", "LISD", "LIG", "V0", "M1", "GATE", "FIN"):
+            assert set(layer_boxes(nand, layer)) <= set(layer_boxes(cell, layer)), layer
+        assert layer_boxes(cell, "BOUNDARY") == [(0, 0, cfg.width, cfg.height)]
+        # IN is NandSpec's output-side input, EN its rail-side one.
+        seam = spec.seam_y
+        assert cfg.pin_positions["IN"] == (135, seam) and cfg.pin_positions["EN"] == (81, seam)
 
     def test_lef_abstract(self):
         lef = lef_abstract(SaeDelayConfig(stages=6, nand_enable=True))
@@ -129,9 +162,19 @@ class TestPhysicalVerification:
         SaeDelayConfig(stages=6, nfin_n=2, nfin_p=2, nand_enable=True),
         SaeDelayConfig(stages=4, nfin_n=3, nfin_p=3, nand_enable=False),
         SaeDelayConfig(stages=2, nfin_n=1, nfin_p=1, nand_enable=True, vt="rvt"),
+        SaeDelayConfig(stages=6, nfin_n=2, nfin_p=2, pitch="8t"),
+        SaeDelayConfig(stages=4, nfin_n=1, nfin_p=3, pitch="6t"),
     ])
     def test_terminated_row_is_drc_clean(self, cfg, tmp_path):
         assert drc(cfg, tmp_path) == []
+
+    @needs_klayout
+    @pytest.mark.parametrize("cfg", [
+        SaeDelayConfig(stages=6, nfin_n=2, nfin_p=2, pitch="8t"),
+        SaeDelayConfig(stages=4, nfin_n=1, nfin_p=3, pitch="6t"),
+    ])
+    def test_pitched_cells_pass_lvs(self, cfg, tmp_path):
+        assert lvs(cfg, tmp_path).matched
 
     @needs_klayout
     def test_lvs_matches_and_detects_wrong_sizing(self, tmp_path):
