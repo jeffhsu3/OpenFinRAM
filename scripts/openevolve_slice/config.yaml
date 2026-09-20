@@ -1,0 +1,105 @@
+# OpenEvolve configuration: evolve the router of the ASAP7 four-wordline driver
+# slice against a model served with an OpenAI-style API on localhost:8000.
+#
+#   .venv/bin/python scripts/run_openevolve_slice.py --check          # baseline score, no LLM
+#   .venv/bin/python scripts/run_openevolve_slice.py --iterations 200
+#
+# The runner overrides llm.models[].name with whatever the server reports when
+# --model auto (the default), attaches the thinking-aware client in
+# local_llm.py, and normalises wire cost against the baseline program.
+
+max_iterations: 200
+checkpoint_interval: 10
+log_level: "INFO"
+random_seed: 42
+language: "python"
+
+# A 3B model rewrites a 70-line function far more reliably than it writes
+# SEARCH/REPLACE diffs that have to match the source character for character.
+diff_based_evolution: false
+max_code_length: 12000
+
+llm:
+  api_base: "http://localhost:8000/v1"
+  api_key: "EMPTY"                      # vLLM ignores it; the SDK insists on one
+  models:
+    - name: "/home/jeff/iv4/models/Nanbeige4.2-3B"
+      weight: 1.0
+  temperature: 0.8
+  top_p: 0.95
+  max_tokens: 6000                      # raise to ~16000 with --thinking
+  timeout: 600                          # ~50 tok/s: a full rewrite is 30-60 s, thinking several minutes
+  retries: 2
+  retry_delay: 5
+
+prompt:
+  system_message: |
+    You improve one Python function, route_slice(frame), which routes the metal
+    of a standard-cell-like block in the ASAP7 7 nm process: a four-wordline
+    SRAM row-decoder driver slice. Four NAND gates sit in two rows at the bottom
+    and four inverter wordline drivers sit above them. The leaf cells are fixed;
+    you only add M2 (horizontal), M3 (vertical), V1 (M1 to M2) and V2 (M2 to M3)
+    rectangles, in nanometres, and say where the pins are.
+
+    Hard requirements, checked in this order. A program that fails one scores
+    below every program that passes it.
+    1. Static rules and connectivity: wires at least 18 wide; vias exactly 18x18;
+       every V1 inside one M2 rectangle that runs 8 past it on one side and on a
+       published landing (a_bar, y_bar, input_strap at least 14 inside the bar's
+       ends, or exactly centred on wl_pad); every V2 inside one M2 and one M3
+       rectangle; at least 18 from blocked_m2 / blocked_m3; x within
+       [9, width - 9]. Net SEL joins all four a_bars. Net N<i> joins
+       nands[i].y_bar to drivers[i].input_strap. Net WL<i> goes from
+       drivers[i].wl_pad to the top edge on M3. No two nets may touch.
+    2. KLayout LVS and the full ASAP7 DRC deck on three slice sizes and on two
+       slices placed side by side. DRC is stricter than rule 1: two wire ends
+       facing each other need 31, and M3 must run 14 past a V2 along its length.
+    Frame coordinates differ between sizes, so compute every coordinate from the
+    frame. Never hard-code a number that came from one example.
+
+    Then the score rewards, in this order of weight:
+    - pin_escape: for each input pin (SEL and B0..B3) the number of vertical M3
+      columns, on a 36 nm grid, that can run from the pin's M2 bar straight down
+      to y = 0 without coming within 18 of another net's M3. Long M3 wires low in
+      the slice destroy this for the pins above them.
+    - m2_feedthrough: horizontal M2 tracks below driver_y0 left completely free.
+      Putting two M2 wires on the same y, or on y values 36 apart, frees tracks.
+    - m3_feedthrough: M3 columns free all the way from y = 0 to driver_y0.
+    - less total wire and fewer vias.
+
+    The program imports Router from router_kit, a fixed module that already
+    encodes the via and end-cap rules. Build every shape through it (r.v1, r.v2,
+    r.m2, r.m3, r.m3_to_top, r.pin) and do not redefine or replace it.
+
+    Reply with the complete program in one ```python block: the module
+    docstring, the import line, and route_slice between the EVOLVE-BLOCK
+    markers. Start from the current program and change ONE idea: a track, a
+    column, a tap position, or which wires share a track. A program that raises
+    an exception scores zero, so keep every dictionary key and call exactly as
+    the frame and the kit define them.
+  num_top_programs: 2
+  num_diverse_programs: 1
+  use_template_stochasticity: false
+  include_artifacts: true               # static errors and DRC hits with coordinates go back to the model
+  max_artifact_bytes: 3000
+
+database:
+  population_size: 60
+  archive_size: 20
+  num_islands: 3
+  elite_selection_ratio: 0.2
+  exploitation_ratio: 0.6
+  exploration_ratio: 0.2
+  migration_interval: 20
+  migration_rate: 0.1
+  # Keep routers that trade pin access against vertical feed-through apart.
+  feature_dimensions: ["pin_escape", "m3_feedthrough"]
+  feature_bins: 6
+
+evaluator:
+  timeout: 420                          # stage 3 is ~6 KLayout runs
+  max_retries: 1
+  cascade_evaluation: true
+  cascade_thresholds: [0.25, 0.5]       # static clean -> one physical size clean -> full matrix
+  parallel_evaluations: 3
+  enable_artifacts: true
