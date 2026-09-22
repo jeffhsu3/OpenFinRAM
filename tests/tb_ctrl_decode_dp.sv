@@ -18,14 +18,13 @@ module tb_ctrl_decode_dp #(
     logic ce_n_B = 1, we_n_B = 1, oe_n_B = 1;
     logic [ADDR_WIDTH-1:0] A_A = 0, A_B = 0;
 
-    logic [NUM_BANK-1:0][NUM_WL-1:0] wlt_A, wlb_A, wlt_B, wlb_B;
+    logic [NUM_BANK-1:0][2*NUM_WL-1:0] wl_A, wl_B;
     logic [NUM_BANK-1:0][COLUMN_MUX-1:0]
-        yselt_A, yseltn_A, yselb_A, yselbn_A,
-        yselt_B, yseltn_B, yselb_B, yselbn_B;
+        ysel_A, yseln_A, ysel_B, yseln_B;
     logic [NUM_BANK-1:0]
-        blprechtn_A, blprechbn_A, wrena_A, wrenan_A,
+        blprechn_A, wrena_A, wrenan_A,
         oeb_out_A, oe_out_A, sae_A,
-        blprechtn_B, blprechbn_B, wrena_B, wrenan_B,
+        blprechn_B, wrena_B, wrenan_B,
         oeb_out_B, oe_out_B, sae_B;
 
     ctrl_decode #(
@@ -36,16 +35,14 @@ module tb_ctrl_decode_dp #(
         .ce_n_A(ce_n_A), .ce_n_B(ce_n_B),
         .we_n_A(we_n_A), .we_n_B(we_n_B),
         .oe_n_A(oe_n_A), .oe_n_B(oe_n_B), .A_A(A_A), .A_B(A_B),
-        .wlt_A(wlt_A), .wlb_A(wlb_A),
-        .blprechtn_A(blprechtn_A), .blprechbn_A(blprechbn_A),
-        .yselt_A(yselt_A), .yseltn_A(yseltn_A),
-        .yselb_A(yselb_A), .yselbn_A(yselbn_A),
+        .wl_A(wl_A),
+        .blprechn_A(blprechn_A),
+        .ysel_A(ysel_A), .yseln_A(yseln_A),
         .wrena_A(wrena_A), .wrenan_A(wrenan_A),
         .oeb_out_A(oeb_out_A), .oe_out_A(oe_out_A), .sae_A(sae_A),
-        .wlt_B(wlt_B), .wlb_B(wlb_B),
-        .blprechtn_B(blprechtn_B), .blprechbn_B(blprechbn_B),
-        .yselt_B(yselt_B), .yseltn_B(yseltn_B),
-        .yselb_B(yselb_B), .yselbn_B(yselbn_B),
+        .wl_B(wl_B),
+        .blprechn_B(blprechn_B),
+        .ysel_B(ysel_B), .yseln_B(yseln_B),
         .wrena_B(wrena_B), .wrenan_B(wrenan_B),
         .oeb_out_B(oeb_out_B), .oe_out_B(oe_out_B), .sae_B(sae_B)
     );
@@ -63,36 +60,30 @@ module tb_ctrl_decode_dp #(
         input bit write_access
     );
         int unsigned row, col, bank;
-        logic topbot;
-        logic [NUM_BANK*NUM_WL-1:0] expected_wlt, expected_wlb;
-        logic [NUM_BANK*COLUMN_MUX-1:0]
-            expected_yselt, expected_yseltn, expected_yselb, expected_yselbn;
-        logic [NUM_BANK-1:0] expected_precht, expected_prechb;
+        logic upper;
+        logic [NUM_BANK*2*NUM_WL-1:0] expected_wl;
+        logic [NUM_BANK*COLUMN_MUX-1:0] expected_ysel, expected_yseln;
+        logic [NUM_BANK-1:0] expected_prech;
         logic [NUM_BANK-1:0] expected_wrena, expected_wrenan;
         logic [NUM_BANK-1:0] expected_oeb, expected_oe, expected_sae;
 
         row    = address & (NUM_WL - 1);
         col    = (address >> ROW_BITS) & (COLUMN_MUX - 1);
-        topbot = address[ROW_BITS+COL_BITS];
+        upper  = address[ROW_BITS+COL_BITS];
         bank   = address >> (ROW_BITS + COL_BITS + 1);
 
-        expected_wlt = '0; expected_wlb = '0;
-        expected_yselt = '0; expected_yseltn = '1;
-        expected_yselb = '0; expected_yselbn = '1;
-        expected_precht = '0; expected_prechb = '0;
+        expected_wl = '0;
+        expected_ysel = '0; expected_yseln = '1;
+        expected_prech = '0;
         expected_wrena = '0; expected_wrenan = '1;
         expected_oeb = '1; expected_oe = '0; expected_sae = '0;
-        if (topbot) begin
-            expected_wlt[bank*NUM_WL + row] = 1'b1;
-            expected_yselt[bank*COLUMN_MUX + col] = 1'b1;
-            expected_yseltn[bank*COLUMN_MUX + col] = 1'b0;
-            expected_precht[bank] = 1'b1;
-        end else begin
-            expected_wlb[bank*NUM_WL + row] = 1'b1;
-            expected_yselb[bank*COLUMN_MUX + col] = 1'b1;
-            expected_yselbn[bank*COLUMN_MUX + col] = 1'b0;
-            expected_prechb[bank] = 1'b1;
-        end
+        // One array per column: the bit above the column select is the top
+        // bit of the wordline index, and the one select and one precharge of
+        // the port fire whichever half of the array the row is in.
+        expected_wl[bank*2*NUM_WL + upper*NUM_WL + row] = 1'b1;
+        expected_ysel[bank*COLUMN_MUX + col] = 1'b1;
+        expected_yseln[bank*COLUMN_MUX + col] = 1'b0;
+        expected_prech[bank] = 1'b1;
         if (write_access) begin
             expected_wrena[bank] = 1'b1;
             expected_wrenan[bank] = 1'b0;
@@ -114,34 +105,32 @@ module tb_ctrl_decode_dp #(
         @(posedge clk); #2;
 
         if (!port_b) begin
-            if (wlt_A !== expected_wlt || wlb_A !== expected_wlb ||
-                yselt_A !== expected_yselt || yseltn_A !== expected_yseltn ||
-                yselb_A !== expected_yselb || yselbn_A !== expected_yselbn ||
-                blprechtn_A !== expected_precht || blprechbn_A !== expected_prechb ||
+            if (wl_A !== expected_wl ||
+                ysel_A !== expected_ysel || yseln_A !== expected_yseln ||
+                blprechn_A !== expected_prech ||
                 wrena_A !== expected_wrena || wrenan_A !== expected_wrenan ||
                 oeb_out_A !== expected_oeb || oe_out_A !== expected_oe ||
                 sae_A !== expected_sae) begin
                 errors++;
                 $display("FAIL A %s address=%0d", write_access ? "write" : "read", address);
             end
-            if (wlt_B !== '0 || wlb_B !== '0 || wrena_B !== '0 ||
-                wrenan_B !== '1 || sae_B !== '0) begin
+            if (wl_B !== '0 || ysel_B !== '0 || blprechn_B !== '0 ||
+                wrena_B !== '0 || wrenan_B !== '1 || sae_B !== '0) begin
                 errors++;
                 $display("FAIL A access activated idle port B at address=%0d", address);
             end
         end else begin
-            if (wlt_B !== expected_wlt || wlb_B !== expected_wlb ||
-                yselt_B !== expected_yselt || yseltn_B !== expected_yseltn ||
-                yselb_B !== expected_yselb || yselbn_B !== expected_yselbn ||
-                blprechtn_B !== expected_precht || blprechbn_B !== expected_prechb ||
+            if (wl_B !== expected_wl ||
+                ysel_B !== expected_ysel || yseln_B !== expected_yseln ||
+                blprechn_B !== expected_prech ||
                 wrena_B !== expected_wrena || wrenan_B !== expected_wrenan ||
                 oeb_out_B !== expected_oeb || oe_out_B !== expected_oe ||
                 sae_B !== expected_sae) begin
                 errors++;
                 $display("FAIL B %s address=%0d", write_access ? "write" : "read", address);
             end
-            if (wlt_A !== '0 || wlb_A !== '0 || wrena_A !== '0 ||
-                wrenan_A !== '1 || sae_A !== '0) begin
+            if (wl_A !== '0 || ysel_A !== '0 || blprechn_A !== '0 ||
+                wrena_A !== '0 || wrenan_A !== '1 || sae_A !== '0) begin
                 errors++;
                 $display("FAIL B access activated idle port A at address=%0d", address);
             end
@@ -169,8 +158,7 @@ module tb_ctrl_decode_dp #(
         ce_n_B = 0; we_n_B = 0; oe_n_B = 1; A_B = NUM_ADDR - 1;
         @(posedge clk); #2;
         if ($countones(wrena_A) != 1 || $countones(wrena_B) != 1 ||
-            $countones(wlt_A) + $countones(wlb_A) != 1 ||
-            $countones(wlt_B) + $countones(wlb_B) != 1) begin
+            $countones(wl_A) != 1 || $countones(wl_B) != 1) begin
             errors++;
             $display("FAIL simultaneous A/B write activation");
         end

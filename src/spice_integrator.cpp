@@ -310,25 +310,15 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                 }
                 oss << "\n+";
             } else {
-                // Wordlines (top)
-                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
-                    oss << " wlt_a[" << i + bank * cli_options_.num_wls << "]";
-                }
-                oss << "\n+";
-                
-                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
-                    oss << " wlt_b[" << i + bank * cli_options_.num_wls << "]";
+                // One unsplit array per column: 2*NUM_WL wordlines a bank.
+                const uint64_t rows = 2 * cli_options_.num_wls;
+                for (uint64_t i = 0; i < rows; ++i) {
+                    oss << " wl_a[" << i + bank * rows << "]";
                 }
                 oss << "\n+";
 
-                // Wordlines (bottom)
-                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
-                    oss << " wlb_a[" << i + bank * cli_options_.num_wls << "]";
-                }
-                oss << "\n+";
-
-                for (uint64_t i = 0; i < cli_options_.num_wls; ++i) {
-                    oss << " wlb_b[" << i + bank * cli_options_.num_wls << "]";
+                for (uint64_t i = 0; i < rows; ++i) {
+                    oss << " wl_b[" << i + bank * rows << "]";
                 }
                 oss << "\n+";
             }
@@ -377,7 +367,7 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             ctrl_sigs = {
                 "wrena_A", "wrenan_A", "wrena_B", "wrenan_B",
                 "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B",
-                "blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B",
+                "blprechn_A", "blprechn_B",
                 "sae_A", "sae_B"
             };
         }
@@ -416,51 +406,12 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                 oss << "\n+";
             }
         } else {
-            // yseltn
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yseltn_A[" << bank << "]";
+            for (const char* bus : {"yseln_A", "ysel_A", "yseln_B", "ysel_B"}) {
+                for (int index = 0; index < cli_options_.num_banks * 4; ++index) {
+                    oss << " " << bus << "[" << index << "]";
+                }
+                oss << "\n+";
             }
-            oss << "\n+";
-
-            // yselt
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselt_A[" << bank << "]";
-            }
-            oss << "\n+";
-
-            // yselbn
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselbn_A[" << bank << "]";
-            }
-            oss << "\n+";
-
-            // yselb
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselb_A[" << bank << "]";
-            }
-            oss << "\n+";
-
-
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yseltn_B[" << bank << "]";
-            }
-            oss << "\n+";
-
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselt_B[" << bank << "]";
-            }
-            oss << "\n+";
-
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselbn_B[" << bank << "]";
-            }
-            oss << "\n+";
-
-
-            for (int bank = 0; bank < cli_options_.num_banks * 4; ++bank) {
-                oss << " yselb_B[" << bank << "]";
-            }
-            oss << "\n+";
         }
         
         // Control signals and power

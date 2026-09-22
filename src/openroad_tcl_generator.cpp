@@ -368,7 +368,7 @@ dict for {net pins} $dp_reset_nets {
         file << "close $structure_fd\n";
     }
     file << "report_checks -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > timing.rpt\n";
-    file << "report_checks -to [get_ports -quiet {wlt* wlb*}] -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > wordline_timing.rpt\n";
+    file << "report_checks -to [get_ports -quiet {wlt* wlb* wl_A* wl_B*}] -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > wordline_timing.rpt\n";
     file << "report_check_types -max_slew -max_capacitance -max_fanout -violators -verbose > electrical.rpt\n";
     file << "check_setup -verbose > final_setup.rpt\n";
     file << "report_clock_properties > clock_properties.rpt\n";

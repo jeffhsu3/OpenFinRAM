@@ -251,14 +251,18 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
     return create_subckt(bank_name, ports, instances.str());
 }
 
+// The 8T column is one unsplit array with port A's IO at one end of the
+// bitlines and port B's at the other.  config_.num_wls stays NUM_WL, the rows
+// one row-select address field covers; the array has twice that.
 std::string SpiceGenerator::generate_cell_row_8t() {
+    const int rows = 2 * config_.num_wls;
     std::vector<std::string> ports;
-    append_indexed_ports(ports, "WLA[", config_.num_wls, "]");
-    append_indexed_ports(ports, "WLB[", config_.num_wls, "]");
+    append_indexed_ports(ports, "WLA[", rows, "]");
+    append_indexed_ports(ports, "WLB[", rows, "]");
     append_ports(ports, {"BLA", "BLAN", "BLB", "BLBN", "VDD", "VSS"});
 
     std::stringstream instances;
-    for (int i = 0; i < config_.num_wls; ++i) {
+    for (int i = 0; i < rows; ++i) {
         instances << "X" << i << " WLA[" << i << "] WLB[" << i << "] BLA BLAN BLB BLBN VDD VSS sram_cell_8t\n";
     }
 
@@ -269,9 +273,10 @@ std::string SpiceGenerator::generate_cell_row_8t() {
 }
 
 std::string SpiceGenerator::generate_array_8t() {
+    const int rows = 2 * config_.num_wls;
     std::vector<std::string> ports;
-    append_indexed_ports(ports, "WLA[", config_.num_wls, "]");
-    append_indexed_ports(ports, "WLB[", config_.num_wls, "]");
+    append_indexed_ports(ports, "WLA[", rows, "]");
+    append_indexed_ports(ports, "WLB[", rows, "]");
     append_indexed_ports(ports, "BLA[", 4, "]");
     append_indexed_ports(ports, "BLAN[", 4, "]");
     append_indexed_ports(ports, "BLB[", 4, "]");
@@ -281,10 +286,10 @@ std::string SpiceGenerator::generate_array_8t() {
     std::stringstream instances;
     for (int i = 0; i < 4; ++i) {
         instances << "X" << i << " ";
-        for (int j = 0; j < config_.num_wls; ++j) {
+        for (int j = 0; j < rows; ++j) {
             instances << "WLA[" << j << "] ";
         }
-        for (int j = 0; j < config_.num_wls; ++j) {
+        for (int j = 0; j < rows; ++j) {
             instances << "WLB[" << j << "] ";
         }
         instances << "BLA[" << i << "] BLAN[" << i << "] BLB[" << i << "] BLBN[" << i << "] VDD VSS sram_cell_row_8t\n";
@@ -294,81 +299,71 @@ std::string SpiceGenerator::generate_array_8t() {
 }
 
 std::string SpiceGenerator::generate_colgrp_8t() {
+    const int rows = 2 * config_.num_wls;
     std::vector<std::string> ports;
-    append_indexed_ports(ports, "WLTA[", config_.num_wls, "]");
-    append_indexed_ports(ports, "WLTB[", config_.num_wls, "]");
-    append_indexed_ports(ports, "WLBA[", config_.num_wls, "]");
-    append_indexed_ports(ports, "WLBB[", config_.num_wls, "]");
+    append_indexed_ports(ports, "WLA[", rows, "]");
+    append_indexed_ports(ports, "WLB[", rows, "]");
     append_ports(ports, {"DA", "QA", "DB", "QB"});
-
-    const std::vector<std::string> ctrl_port_names = {
+    append_ports(ports, {
         "wrenaA", "wrenanA", "wrenaB", "wrenanB",
         "oeb_outA", "oe_outA", "oeb_outB", "oe_outB",
-        "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB"
-    };
-    append_ports(ports, ctrl_port_names);
-
-    append_indexed_ports(ports, "yseltnA[", 4, "]");
-    append_indexed_ports(ports, "yseltA[", 4, "]");
-    append_indexed_ports(ports, "yselbnA[", 4, "]");
-    append_indexed_ports(ports, "yselbA[", 4, "]");
-    append_indexed_ports(ports, "yseltnB[", 4, "]");
-    append_indexed_ports(ports, "yseltB[", 4, "]");
-    append_indexed_ports(ports, "yselbnB[", 4, "]");
-    append_indexed_ports(ports, "yselbB[", 4, "]");
+        "blprechnA", "blprechnB"
+    });
+    append_indexed_ports(ports, "yselnA[", 4, "]");
+    append_indexed_ports(ports, "yselA[", 4, "]");
+    append_indexed_ports(ports, "yselnB[", 4, "]");
+    append_indexed_ports(ports, "yselB[", 4, "]");
     append_ports(ports, {"sae_A", "sae_B", "VDD", "VSS"});
 
     std::stringstream instances;
     instances << "X0 ";
-    append_indexed_tokens(instances, "WLTA[", config_.num_wls, "]");
-    append_indexed_tokens(instances, "WLTB[", config_.num_wls, "]");
-    append_indexed_tokens(instances, "BLT_A[", 4, "]");
-    append_indexed_tokens(instances, "BLTN_A[", 4, "]");
-    append_indexed_tokens(instances, "BLT_B[", 4, "]");
-    append_indexed_tokens(instances, "BLTN_B[", 4, "]");
+    append_indexed_tokens(instances, "WLA[", rows, "]");
+    append_indexed_tokens(instances, "WLB[", rows, "]");
+    append_indexed_tokens(instances, "BL_A[", 4, "]");
+    append_indexed_tokens(instances, "BLN_A[", 4, "]");
+    append_indexed_tokens(instances, "BL_B[", 4, "]");
+    append_indexed_tokens(instances, "BLN_B[", 4, "]");
     instances << " VDD VSS array_sram_8t\n";
 
-    instances << "X1 ";
-    append_indexed_tokens(instances, "WLBA[", config_.num_wls, "]");
-    append_indexed_tokens(instances, "WLBB[", config_.num_wls, "]");
-    append_indexed_tokens(instances, "BLB_A[", 4, "]");
-    append_indexed_tokens(instances, "BLBN_A[", 4, "]");
-    append_indexed_tokens(instances, "BLB_B[", 4, "]");
-    append_indexed_tokens(instances, "BLBN_B[", 4, "]");
-    instances << " VDD VSS array_sram_8t\n";
-
-    instances << "X2 wrenaA wrenanA wrenaB wrenanB ";
-    instances << "oeb_outA oe_outA DA QA oeb_outB oe_outB DB QB ";
-    append_indexed_tokens(instances, "BLT_A[", 4, "]");
-    append_indexed_tokens(instances, "BLTN_A[", 4, "]");
-    append_indexed_tokens(instances, "BLB_A[", 4, "]");
-    append_indexed_tokens(instances, "BLBN_A[", 4, "]");
-    append_indexed_tokens(instances, "BLT_B[", 4, "]");
-    append_indexed_tokens(instances, "BLTN_B[", 4, "]");
-    append_indexed_tokens(instances, "BLB_B[", 4, "]");
-    append_indexed_tokens(instances, "BLBN_B[", 4, "]");
-
-    instances << "blprechtnA blprechbnA blprechtnB blprechbnB ";
-    append_indexed_tokens(instances, "yseltnA[", 4, "]");
-    append_indexed_tokens(instances, "yseltA[", 4, "]");
-    append_indexed_tokens(instances, "yselbnA[", 4, "]");
-    append_indexed_tokens(instances, "yselbA[", 4, "]");
-    append_indexed_tokens(instances, "yseltnB[", 4, "]");
-    append_indexed_tokens(instances, "yseltB[", 4, "]");
-    append_indexed_tokens(instances, "yselbnB[", 4, "]");
-    append_indexed_tokens(instances, "yselbB[", 4, "]");
-    instances << "sae_A sae_B VDD VSS iocolgrp_sram_8t\n";
+    // Each wrapper is the published two-faced core.  Only the face turned to
+    // the array carries bitlines: port A stands left of the array and uses its
+    // right (B) face, port B stands right and uses its left (T) face.  The
+    // other face idles precharged -- precharge enable and selects low,
+    // complement selects high -- on four internal stub pairs.  SAE drives
+    // SAPRECHN too: one sense phase per port precharges low and evaluates high.
+    auto io = [&](const std::string& port, bool array_on_b_face) {
+        const std::string idle = "idle_" + port;
+        auto bus = [&](const std::string& name) { append_indexed_tokens(instances, name + "[", 4, "]"); };
+        auto constant = [&](const std::string& net) { for (int i = 0; i < 4; ++i) instances << net << " "; };
+        instances << "XIO_" << port << " wrenan" << port << " wrena" << port
+                  << " sae_" << port << " sae_" << port
+                  << " oeb_out" << port << " oe_out" << port
+                  << " D" << port << " Q" << port << " ";
+        // bltn blt blbn blb
+        bus(array_on_b_face ? idle + "_bln" : "BLN_" + port);
+        bus(array_on_b_face ? idle + "_bl" : "BL_" + port);
+        bus(array_on_b_face ? "BLN_" + port : idle + "_bln");
+        bus(array_on_b_face ? "BL_" + port : idle + "_bl");
+        // blprechtn blprechbn
+        instances << (array_on_b_face ? "VSS" : "blprechn" + port) << " "
+                  << (array_on_b_face ? "blprechn" + port : "VSS") << " ";
+        // yseltn yselt yselbn yselb
+        if (array_on_b_face) { constant("VDD"); constant("VSS"); bus("yseln" + port); bus("ysel" + port); }
+        else                 { bus("yseln" + port); bus("ysel" + port); constant("VDD"); constant("VSS"); }
+        instances << "VDD VSS ioprech_sram_8t_" << (port == "A" ? "a" : "b") << "\n";
+    };
+    io("A", true);
+    io("B", false);
 
     return create_subckt("colgrp_sram_8t", ports, instances.str());
 }
 
 std::string SpiceGenerator::generate_stacked_colgrp_8t() {
+    const int rows = 2 * config_.num_wls;
     std::vector<std::string> ports;
     for (int mux = 0; mux < config_.num_banks; ++mux) {
-        append_indexed_ports(ports, "WLTA[", config_.num_wls, "]", mux * config_.num_wls);
-        append_indexed_ports(ports, "WLTB[", config_.num_wls, "]", mux * config_.num_wls);
-        append_indexed_ports(ports, "WLBA[", config_.num_wls, "]", mux * config_.num_wls);
-        append_indexed_ports(ports, "WLBB[", config_.num_wls, "]", mux * config_.num_wls);
+        append_indexed_ports(ports, "WLA[", rows, "]", mux * rows);
+        append_indexed_ports(ports, "WLB[", rows, "]", mux * rows);
     }
 
     append_indexed_ports(ports, "DA[", config_.num_data_bits / 2, "]");
@@ -378,8 +373,8 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
 
     const std::vector<std::string> ctrl_port_names = {
         "wrenaA", "wrenanA", "wrenaB", "wrenanB",
-        "oeb_outA", "oe_outA", "oeb_outB", "oe_outB", 
-        "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB",
+        "oeb_outA", "oe_outA", "oeb_outB", "oe_outB",
+        "blprechnA", "blprechnB",
         "sae_A", "sae_B"
     };
     for (const auto& name : ctrl_port_names) {
@@ -388,50 +383,39 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
         }
     }
 
-    append_indexed_ports(ports, "yseltnA[", 4 * config_.num_banks, "]");
-    append_indexed_ports(ports, "yseltA[", 4 * config_.num_banks, "]");
-    append_indexed_ports(ports, "yselbnA[", 4 * config_.num_banks, "]");
-    append_indexed_ports(ports, "yselbA[", 4 * config_.num_banks, "]");
-    append_indexed_ports(ports, "yseltnB[", 4 * config_.num_banks, "]");
-    append_indexed_ports(ports, "yseltB[", 4 * config_.num_banks, "]");
-    append_indexed_ports(ports, "yselbnB[", 4 * config_.num_banks, "]");
-    append_indexed_ports(ports, "yselbB[", 4 * config_.num_banks, "]");
+    append_indexed_ports(ports, "yselnA[", 4 * config_.num_banks, "]");
+    append_indexed_ports(ports, "yselA[", 4 * config_.num_banks, "]");
+    append_indexed_ports(ports, "yselnB[", 4 * config_.num_banks, "]");
+    append_indexed_ports(ports, "yselB[", 4 * config_.num_banks, "]");
     append_ports(ports, {"VDD", "VSS"});
 
     std::stringstream instances;
     for (int mux = 0; mux < config_.num_banks; ++mux) {
         for (int bit = 0; bit < config_.num_data_bits / 2; ++bit) {
             instances << "X" << mux << "_" << bit << " ";
-            append_indexed_tokens(instances, "WLTA[", config_.num_wls, "]", mux * config_.num_wls);
-            append_indexed_tokens(instances, "WLTB[", config_.num_wls, "]", mux * config_.num_wls);
-            append_indexed_tokens(instances, "WLBA[", config_.num_wls, "]", mux * config_.num_wls);
-            append_indexed_tokens(instances, "WLBB[", config_.num_wls, "]", mux * config_.num_wls);
+            append_indexed_tokens(instances, "WLA[", rows, "]", mux * rows);
+            append_indexed_tokens(instances, "WLB[", rows, "]", mux * rows);
 
             instances << "DA[" << bit << "] QA[" << bit << "] "
                       << "DB[" << bit << "] QB[" << bit << "] ";
             instances << "wrenaA[" << mux << "] wrenanA[" << mux
                       << "] wrenaB[" << mux << "] wrenanB[" << mux
-                      << "] oeb_outA[" << mux << "] oe_outA[" << mux << "] oeb_outB[" << mux << "] oe_outB[" << mux 
-                      << "] blprechtnA[" << mux << "] blprechbnA[" << mux << "] blprechtnB[" << mux << "] blprechbnB[" << mux
+                      << "] oeb_outA[" << mux << "] oe_outA[" << mux << "] oeb_outB[" << mux << "] oe_outB[" << mux
+                      << "] blprechnA[" << mux << "] blprechnB[" << mux
                       << "] ";
 
-            append_indexed_tokens(instances, "yseltnA[", 4, "]", mux * 4);
-            append_indexed_tokens(instances, "yseltA[", 4, "]", mux * 4);
-            append_indexed_tokens(instances, "yselbnA[", 4, "]", mux * 4);
-            append_indexed_tokens(instances, "yselbA[", 4, "]", mux * 4);
-            append_indexed_tokens(instances, "yseltnB[", 4, "]", mux * 4);
-            append_indexed_tokens(instances, "yseltB[", 4, "]", mux * 4);
-            append_indexed_tokens(instances, "yselbnB[", 4, "]", mux * 4);
-            append_indexed_tokens(instances, "yselbB[", 4, "]", mux * 4);
+            append_indexed_tokens(instances, "yselnA[", 4, "]", mux * 4);
+            append_indexed_tokens(instances, "yselA[", 4, "]", mux * 4);
+            append_indexed_tokens(instances, "yselnB[", 4, "]", mux * 4);
+            append_indexed_tokens(instances, "yselB[", 4, "]", mux * 4);
 
             instances << "sae_A[" << mux << "] sae_B[" << mux << "] ";
             instances << " VDD VSS colgrp_sram_8t\n";
         }
     }
 
-    // Generate bank name matching GDS: stacked_colgrp_x{bits}x{num_data_bits / 2}x{num_banks}
-    // bits = num_wls (since each colgrp has 2 arrays, each with num_wls)
-    std::string bank_name = "stacked_colgrp_x" + std::to_string(config_.num_wls * 2) + "x" + std::to_string(config_.num_data_bits / 2) + "x" + std::to_string(config_.num_banks);
+    // Bank name: stacked_colgrp_x{wordlines of the array}x{num_data_bits / 2}x{num_banks}
+    std::string bank_name = "stacked_colgrp_x" + std::to_string(rows) + "x" + std::to_string(config_.num_data_bits / 2) + "x" + std::to_string(config_.num_banks);
     return create_subckt(bank_name, ports, instances.str());
 }
 
@@ -483,7 +467,6 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
         content << sep << SpiceTemplates::get_iocolgrp() << "\n\n";
         content << sep << SpiceTemplates::get_ioprech_8t_a() << "\n\n";
         content << sep << SpiceTemplates::get_ioprech_8t_b() << "\n\n";
-        content << sep << SpiceTemplates::get_iocolgrp_8t() << "\n\n";
 
         content << sep << generate_cell_row_8t() << "\n";
         content << sep << generate_array_8t() << "\n";

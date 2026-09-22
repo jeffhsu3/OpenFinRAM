@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -25,7 +26,7 @@ class PhysicalMacroTests(unittest.TestCase):
             gdstk.rectangle((0.2, 0), (0.3, 0.1), layer=19),
             gdstk.rectangle((0.4, 0), (0.5, 0.1), layer=19),
         )
-        label = gdstk.Label("yselt_A[0]", (0.05, 0.05), layer=50, texttype=251)
+        label = gdstk.Label("ysel_A[0]", (0.05, 0.05), layer=50, texttype=251)
         cell.add(
             label,
             gdstk.Label("vdd", (0.25, 0.05), layer=19),
@@ -145,13 +146,21 @@ class PhysicalMacroTests(unittest.TestCase):
             report.write_text("")
             check_route_drc(report)
 
-    def test_both_ports_and_banks_map_without_tieoffs(self):
+    def test_both_ports_and_banks_map_onto_one_unsplit_array(self):
         for port in "AB":
             self.assertEqual(leaf_net(f"D{port}", 1, 3, 4), f"D_{port}[3]")
             self.assertEqual(leaf_net(f"wrena{port}", 1, 3, 4), f"wrena_{port}[1]")
             self.assertEqual(leaf_net(f"wrenan{port}", 1, 3, 4), f"wrenan_{port}[1]")
-            self.assertEqual(leaf_net(f"WLT{port}[2]", 1, 3, 4), f"wlt_{port}[6]")
-            self.assertEqual(leaf_net(f"yselt{port}[2]", 1, 3, 4), f"yselt_{port}[6]")
+            self.assertEqual(leaf_net(f"blprechn{port}", 1, 3, 4), f"blprechn_{port}[1]")
+            # NUM_WL = 4: a bank's array has eight wordlines, the upper four
+            # being the ones the address bit above the column select picks.
+            self.assertEqual(leaf_net(f"WL{port}[2]", 1, 3, 4), f"wl_{port}[10]")
+            self.assertEqual(leaf_net(f"WL{port}[7]", 0, 3, 4), f"wl_{port}[7]")
+            self.assertEqual(leaf_net(f"ysel{port}[2]", 1, 3, 4), f"ysel_{port}[6]")
+            self.assertEqual(leaf_net(f"yseln{port}[2]", 1, 3, 4), f"yseln_{port}[6]")
+            for split_era in (f"WLT{port}[2]", f"yselt{port}[2]", f"blprechtn{port}"):
+                with self.assertRaisesRegex(RuntimeError, "unmapped"):
+                    leaf_net(split_era, 0, 0, 4)
         with self.assertRaisesRegex(RuntimeError, "unmapped"):
             leaf_net("typo", 0, 0, 2)
 
@@ -172,8 +181,36 @@ class PhysicalMacroTests(unittest.TestCase):
                 self.assertTrue(any(p.get("private") for p in pins.values()))
                 for port in "AB":
                     self.assertTrue(
-                        {f"WLT{port}[{i}]" for i in range(wordlines)} <= nets
+                        {f"WL{port}[{i}]" for i in range(wordlines)} <= nets
                     )
+                    self.assertTrue(
+                        {f"{sel}{port}[{i}]" for sel in ("ysel", "yseln") for i in range(4)}
+                        | {f"blprechn{port}"} <= nets
+                    )
+                self.assertFalse(
+                    [n for n in nets if n.startswith(
+                        ("WLTA", "WLTB", "WLBA", "WLBB", "yselt", "yselb", "blprecht", "blprechb")
+                    )]
+                )
+                # The idle face of each wrapper (A's left, B's right) is tied
+                # off through the router: each of its nine control pins is a
+                # supply terminal, selects and precharge enable low, complement
+                # selects high.
+                graph = MetalGraph(master)
+                net_of = {
+                    root: p["net"]
+                    for p in pins.values()
+                    for root in graph.at(p["layer"], tuple(p["point"]))
+                }
+                idle, tied = {"A": "T", "B": "B"}, 0
+                for label in master.get_labels():
+                    pin = re.fullmatch(r"(YSEL|BLPRECH)([TB])(N?)_([AB])(\[\d\])?", label.text)
+                    if not pin or pin[2] != idle[pin[4]]:
+                        continue
+                    want = "vdd" if pin[1] == "YSEL" and pin[3] else "vss"
+                    self.assertEqual(net_of[graph.label_root(label)], want, label.text)
+                    tied += 1
+                self.assertEqual(tied, 18)
 
                 def count(cell):
                     return (
@@ -182,7 +219,7 @@ class PhysicalMacroTests(unittest.TestCase):
                         else sum(count(ref.cell) for ref in cell.references)
                     )
 
-                self.assertEqual(count(master), 8 * wordlines)
+                self.assertEqual(count(master), 4 * wordlines)
                 self.assertIn("OBS", lef)
                 self.assertGreater(size[1], 6 * 0.594)
 

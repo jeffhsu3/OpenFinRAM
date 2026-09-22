@@ -192,7 +192,7 @@ class EdgeFrameTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "canonical orientation"):
                 edges.verify_edge_gds(path, (1, 3, 18))
 
-    def test_compiler_places_all_corners_and_end_rows_without_parent_mirrors(self):
+    def test_compiler_places_corners_and_end_rows_without_parent_mirrors(self):
         for count in (2, 18):
             with self.subTest(count=count):
                 leaf = build_leaf(count, math.gcd(count, 16))
@@ -200,9 +200,11 @@ class EdgeFrameTests(unittest.TestCase):
                     r for r in leaf.references if r.cell_name == "dp_array_end_rows"
                 )
                 self.assertFalse(end_ref.rotation or end_ref.x_reflection)
+                # One unsplit array has one capped end, port A's on the left:
+                # a corner above and below it, and no mirrored-in-x master.
                 corners = {
-                    edges.oriented_name("sram_cell_8t_corner", mx, my)
-                    for mx, my in edges.ORIENTATIONS
+                    edges.oriented_name("sram_cell_8t_corner", False, my)
+                    for my in (False, True)
                 }
                 refs = [r for r in end_ref.cell.references if r.cell_name in corners]
                 self.assertEqual({r.cell_name for r in refs}, corners)
@@ -214,7 +216,7 @@ class EdgeFrameTests(unittest.TestCase):
                     for r in end_ref.cell.references
                     if r.cell_name.startswith("dummy_vertical_array_")
                 ]
-                self.assertEqual(len(rows), 4)
+                self.assertEqual(len(rows), 2)
                 self.assertTrue(
                     all(not r.rotation and not r.x_reflection for r in rows)
                 )
@@ -224,7 +226,7 @@ class EdgeFrameTests(unittest.TestCase):
                 caps = [
                     r for r in colgrp.references if r.cell_name.startswith("col_cap_")
                 ]
-                self.assertEqual(len(caps), 2)
+                self.assertEqual(len(caps), 1)
                 self.assertTrue(
                     all(not r.rotation and not r.x_reflection for r in caps)
                 )

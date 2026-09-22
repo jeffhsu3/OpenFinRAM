@@ -1,3 +1,9 @@
+// Two-port (2RW) controller.  Each port has its IO column at its own end of
+// the bitlines -- port A at one end, port B at the other -- so a column is one
+// unsplit array of 2*NUM_WL wordlines with one precharge and one column select
+// per port.  NUM_WL stays the number of rows one row-select field addresses;
+// the address bit above the column select (bank_sel) picks the upper or lower
+// NUM_WL wordlines of that one array.
 module ctrl_decode #(
     parameter ADDR_WIDTH = 5,
     parameter NUM_WL     = 2,
@@ -17,28 +23,20 @@ module ctrl_decode #(
     input  logic [ADDR_WIDTH-1:0] A_A,
     input  logic [ADDR_WIDTH-1:0] A_B,
 
-    output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlt_A,
-    output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlb_A,
-    output logic [NUM_BANK-1:0]                 blprechtn_A,
-    output logic [NUM_BANK-1:0]                 blprechbn_A,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselt_A,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseltn_A,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselb_A,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselbn_A,
+    output logic [NUM_BANK-1:0][2*NUM_WL-1:0]   wl_A,
+    output logic [NUM_BANK-1:0]                 blprechn_A,
+    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] ysel_A,
+    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseln_A,
     output logic [NUM_BANK-1:0]                 wrena_A,
     output logic [NUM_BANK-1:0]                 wrenan_A,
     output logic [NUM_BANK-1:0]                 oeb_out_A,
     output logic [NUM_BANK-1:0]                 oe_out_A,
     output logic [NUM_BANK-1:0]                 sae_A,
 
-    output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlt_B,
-    output logic [NUM_BANK-1:0][NUM_WL-1:0]     wlb_B,
-    output logic [NUM_BANK-1:0]                 blprechtn_B,
-    output logic [NUM_BANK-1:0]                 blprechbn_B,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselt_B,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseltn_B,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselb_B,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yselbn_B,
+    output logic [NUM_BANK-1:0][2*NUM_WL-1:0]   wl_B,
+    output logic [NUM_BANK-1:0]                 blprechn_B,
+    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] ysel_B,
+    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseln_B,
     output logic [NUM_BANK-1:0]                 wrena_B,
     output logic [NUM_BANK-1:0]                 wrenan_B,
     output logic [NUM_BANK-1:0]                 oeb_out_B,
@@ -127,7 +125,9 @@ module ctrl_decode #(
 
     wire wl_read_fire_B  = wl_any_fire_B && read_req_B;
 
-    // Predecode once per port and share across all bank/half enables.
+    // Predecode once per port and share across all bank/half enables.  The two
+    // driver arrays of a port are the upper and lower NUM_WL wordlines of one
+    // array: wl[bank][{bank_sel, row}].
     wire [NUM_WL-1:0] row_decode_A, row_decode_B;
     sram_row_decode #(.NUM_WL(NUM_WL)) u_row_decode_A
         (.A(row_sel_r_A), .SEL(row_decode_A));
@@ -138,14 +138,18 @@ module ctrl_decode #(
                         && (slice_sel_r_A == bank);
         wire enable_B = rst_n && (read_req_B || write_req_B) && wl_any_fire_B
                         && (slice_sel_r_B == bank);
-        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_top_A
-            (.SEL(row_decode_A), .EN(enable_A && bank_sel_r_A), .WL(wlt_A[bank]));
-        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_bottom_A
-            (.SEL(row_decode_A), .EN(enable_A && !bank_sel_r_A), .WL(wlb_A[bank]));
-        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_top_B
-            (.SEL(row_decode_B), .EN(enable_B && bank_sel_r_B), .WL(wlt_B[bank]));
-        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_bottom_B
-            (.SEL(row_decode_B), .EN(enable_B && !bank_sel_r_B), .WL(wlb_B[bank]));
+        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_upper_A
+            (.SEL(row_decode_A), .EN(enable_A && bank_sel_r_A),
+             .WL(wl_A[bank][2*NUM_WL-1:NUM_WL]));
+        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_lower_A
+            (.SEL(row_decode_A), .EN(enable_A && !bank_sel_r_A),
+             .WL(wl_A[bank][NUM_WL-1:0]));
+        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_upper_B
+            (.SEL(row_decode_B), .EN(enable_B && bank_sel_r_B),
+             .WL(wl_B[bank][2*NUM_WL-1:NUM_WL]));
+        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_lower_B
+            (.SEL(row_decode_B), .EN(enable_B && !bank_sel_r_B),
+             .WL(wl_B[bank][NUM_WL-1:0]));
     end
 
     // SAE is asserted after wl_read_fire with an additional SAE_BUF delay
@@ -217,48 +221,30 @@ module ctrl_decode #(
     end
 
     always_comb begin
-        blprechtn_A = '0;
-        blprechbn_A = '0;
+        blprechn_A  = '0;
         oeb_out_A   = '1;
         sae_A       = '0;
 
-        blprechtn_B = '0;
-        blprechbn_B = '0;
+        blprechn_B  = '0;
         oeb_out_B   = '1;
         sae_B       = '0;
 
         for (int i = 0; i < NUM_BANK; i = i + 1) begin
-            yselt_A[i]  = '0;
-            yseltn_A[i] = '1;
-            yselb_A[i]  = '0;
-            yselbn_A[i] = '1;
+            ysel_A[i]   = '0;
+            yseln_A[i]  = '1;
             wrena_A[i]  = 1'b0;
             wrenan_A[i] = 1'b1;
 
-            yselt_B[i]  = '0;
-            yseltn_B[i] = '1;
-            yselb_B[i]  = '0;
-            yselbn_B[i] = '1;
+            ysel_B[i]   = '0;
+            yseln_B[i]  = '1;
             wrena_B[i]  = 1'b0;
             wrenan_B[i] = 1'b1;
         end
 
         if (read_req_A || write_req_A) begin
-            if (bank_sel_r_A) begin
-                blprechtn_A[slice_sel_r_A] = prech_off_A;
-                blprechbn_A[slice_sel_r_A] = 1'b0;
-            end else begin
-                blprechtn_A[slice_sel_r_A] = 1'b0;
-                blprechbn_A[slice_sel_r_A] = prech_off_A;
-            end
-
-            if (bank_sel_r_A) begin
-                yselt_A[slice_sel_r_A]  = ONEHOT_BASE << col_sel_r_A;
-                yseltn_A[slice_sel_r_A] = ~yselt_A[slice_sel_r_A];
-            end else begin
-                yselb_A[slice_sel_r_A]  = ONEHOT_BASE << col_sel_r_A;
-                yselbn_A[slice_sel_r_A] = ~yselb_A[slice_sel_r_A];
-            end
+            blprechn_A[slice_sel_r_A] = prech_off_A;
+            ysel_A[slice_sel_r_A]     = ONEHOT_BASE << col_sel_r_A;
+            yseln_A[slice_sel_r_A]    = ~ysel_A[slice_sel_r_A];
 
             if (read_req_A) begin
                 oeb_out_A[slice_sel_r_A] = oe_n_A;
@@ -272,21 +258,9 @@ module ctrl_decode #(
         end
 
         if (read_req_B || write_req_B) begin
-            if (bank_sel_r_B) begin
-                blprechtn_B[slice_sel_r_B] = prech_off_B;
-                blprechbn_B[slice_sel_r_B] = 1'b0;
-            end else begin
-                blprechtn_B[slice_sel_r_B] = 1'b0;
-                blprechbn_B[slice_sel_r_B] = prech_off_B;
-            end
-
-            if (bank_sel_r_B) begin
-                yselt_B[slice_sel_r_B]  = ONEHOT_BASE << col_sel_r_B;
-                yseltn_B[slice_sel_r_B] = ~yselt_B[slice_sel_r_B];
-            end else begin
-                yselb_B[slice_sel_r_B]  = ONEHOT_BASE << col_sel_r_B;
-                yselbn_B[slice_sel_r_B] = ~yselb_B[slice_sel_r_B];
-            end
+            blprechn_B[slice_sel_r_B] = prech_off_B;
+            ysel_B[slice_sel_r_B]     = ONEHOT_BASE << col_sel_r_B;
+            yseln_B[slice_sel_r_B]    = ~ysel_B[slice_sel_r_B];
 
             if (read_req_B) begin
                 oeb_out_B[slice_sel_r_B] = oe_n_B;

@@ -241,6 +241,12 @@ XIO_B WRENAN_B WRENA_B SAE_B SAPRECHN_B OEB_OUT_B OE_OUT_B D_B Q_B
 .ENDS)";
 }
 
+// Both wrappers side by side with both faces wired out.  The emitted macro no
+// longer contains this: each port's IO stands at its own end of the bitlines
+// and SpiceGenerator::generate_colgrp_8t instantiates the wrappers directly,
+// idling the face turned away from the array.  It stays as the fixture the
+// device-level IO regressions drive (tests/spice/asap7_8t_ioprech_write.sp,
+// _isolation.sp), which exercise both faces of both wrappers.
 std::string SpiceTemplates::get_iocolgrp_8t() {
     // The wrappers expose SAE and SAPRECHN separately.  The existing dual-port
     // controller has one sense phase per port, whose low/high levels already

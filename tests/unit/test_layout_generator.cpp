@@ -37,7 +37,9 @@ TEST(LayoutGenerator8T, LoadsConfiguredRoutedIoColumn) {
     ScopedCurrentPath cwd(REPO_ROOT);
     OpenFinRAM::LayerMap layer_map;
     layer_map.init_asap7_layermap();
-    LayoutGenerator generator(dual_port_options(), layer_map);
+    // A column is one unsplit array of 2*NUM_WL wordlines; the tracked library
+    // carries the 2/32/64/128 ladder, so NUM_WL = 16 asks for its x32 column.
+    LayoutGenerator generator(dual_port_options(16), layer_map);
 
     ASSERT_TRUE(generator.load_sram_gds());
     EXPECT_TRUE(generator.extract_required_cells());

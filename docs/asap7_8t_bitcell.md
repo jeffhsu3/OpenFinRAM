@@ -18,9 +18,10 @@ The same implementation emits 6T variants for non-standard sizes.
 
 The routed dual-port IO-column hierarchy is generated in
 `tech/gds/sram_8t_iocolumn.gds` by
-`scripts/generate_asap7_8t_iocolumn.py`. It contains
-`iocolgrp_sram_8t`, capped left/right arrays, and parameterized
-`colgrp_x{2N}x4_sram_8t` cells.
+`scripts/generate_asap7_8t_iocolumn.py`. It contains one IO column per port
+(`iocol_sram_8t_a`, `iocol_sram_8t_b`), the edge cap, and parameterized
+`colgrp_x{N}x4_sram_8t` cells: port A's IO, the cap, one unsplit array of N
+wordlines, and port B's IO at the far end of the bitlines.
 
 ## Reference and topology
 
@@ -73,8 +74,10 @@ materializes each variant's polygons and pins. `_lr` reverses X and `_v2`
 reverses Y about the **placement boundary**, retaining its original coordinates;
 geometry overhangs do not determine the mirror center. Side caps use `v1` for
 the canonical row and `v2` for the Y-reversed row. Placement selects these
-masters with translations, including the right half-array, so asymmetric
-select/well bands do not rely on mirrored parent references.
+masters with translations, so asymmetric select/well bands do not rely on
+mirrored parent references. (The `_lr` masters terminated the right half
+array of the earlier mid-bitline floorplan; the unsplit column has one capped
+end, port A's, and places only the canonical ones.)
 
 `--edge-rows N[,N...]` generates the equivalent of `dummy_vertical_array_X64`
 for arbitrary positive address row counts (default: 64). As in the academic
@@ -178,7 +181,11 @@ physical `BUFx2_ASAP7_75t_R` cells; the obsolete replica-bitline-derived SPICE
 buffer chain is not part of this implementation.
 
 The controller uses a shared hierarchical row predecoder per port and explicit
-wordline enable/driver stages per bank and half. See the
+wordline enable/driver stages per bank, in two arrays of `NUM_WL` that drive
+the lower and upper `NUM_WL` wordlines of the one array (`wl_A[2*NUM_WL]`,
+`wl_B[2*NUM_WL]`); the address bit above the column select picks between them.
+Each port has one precharge enable (`blprechn`) and one select bus
+(`ysel`/`yseln`) per bank. See the
 [parameterized decoder design](asap7_8t_decoder.md) for its RTL, load/drive
 parameters, and standalone layout generator at the 8T array pin coordinates.
 
@@ -196,14 +203,31 @@ assumption: see "Measured stability" below. Concurrent dual-port read holds
 single-port figure — with the caveat, stated there, that these are nominal
 corner values and carry no mismatch or yield claim.
 
-The physical `iocolgrp_sram_8t` implements that composite contract. It places
-the A and B wrappers side by side with 0.144 um routing gaps at each outside
-edge and between the cores. Port B passes across the A wrapper on M4; the A
-wrapper contains no M4 geometry. Port A rises from M2 to M6 in the central
-gap, crosses the B wrapper on M6 using M5 vertical transitions, and drops to
-M2 in the right gap. Both ports export their write-enable and write-data pins,
-and each wrapper's `SAE`/`SAPRECHN` pair is shorted to the corresponding
-per-port sense phase.
+Physically each port has its IO column at its own end of the bitlines:
+
+```
+iocol_sram_8t_a | edge cap | array, 2*NUM_WL wordlines ... tap | iocol_sram_8t_b
+```
+
+Port A's bitlines leave the array on M2 and port B's on M4, so neither crosses
+the other's core. (Until 2026-09-21 both wrappers sat side by side between two
+half arrays: port B crossed the A wrapper on M4 and port A rose to M6 to cross
+the B wrapper. That bought bitlines half as long at the price of both
+crossovers and a top/bottom split through the RTL and the netlist.) Each
+`iocol` is its wrapper plus a 0.144 um gap strapped on the bitlines' own
+layer. The edge cap hands every bitline through and the filler beside it has
+no metal, so port A's M2 bitlines are strapped across the filler; port B's end
+meets its IO on the array's last tap, as an IO face always has.
+
+The wrappers are still the published two-faced core. Only the face turned to
+the array carries bitlines (A's right face, B's left). The other face idles
+precharged: its four selects and precharge enable are tied low and its four
+complement selects high, as `VSS`/`VDD` labels on the wrapper's own M3 pins,
+which the macro router connects like any other supply terminal. Both ports
+export their write-enable and write-data pins, and each wrapper's
+`SAE`/`SAPRECHN` pair is shorted to the corresponding per-port sense phase.
+The two-faced composite `iocolgrp_sram_8t` survives only as the SPICE fixture
+the device-level IO regressions drive.
 
 ## Physical interface
 
@@ -461,11 +485,12 @@ deck before treating this cell as tapeout-qualified.
 
 The open-source 2RW path now uses `scripts/compile_asap7_2rw.py` for macro
 placement and routing, separate from the academic 6T assembler. It generates
-tapped half-arrays, the column/row/corner cap family, and both IO wrappers at
-the requested wordline count. Column tiles are placed in routing channels;
+one tapped array of `2 * --wordlines` wordlines per column, the cap family at
+its port-A end, and an IO column at each end. Column tiles are placed in routing channels;
 banks share the external data buses and receive separate controller selects.
 The controller floorplan uses measured 8T tile geometry. Both write-enable
-polarities and both write-data buses are routed without tie-offs.
+polarities and both write-data buses are routed without tie-offs; the only
+tied pins are the nine controls of each wrapper's idle face.
 
 The assembler extracts metal/via connectivity from the actual hard-cell GDS.
 Each disconnected supply component gets its own terminal, so the router must

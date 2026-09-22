@@ -287,48 +287,139 @@ TEST(SpiceTemplates8T, PortWrappersPreserveIndependentControls) {
     EXPECT_EQ(count_occurrences(port_b, "iocolgrp_sram_6t122_v2"), 1U);
 }
 
-TEST(SpiceTemplates8T, CombinedIoUsesPortWrappersAndSupportsBothWritePorts) {
-    const std::string combined = OpenFinRAM::SpiceTemplates::get_iocolgrp_8t();
+namespace {
 
-    EXPECT_EQ(count_occurrences(combined, "ioprech_sram_8t_a"), 1U);
-    EXPECT_EQ(count_occurrences(combined, "ioprech_sram_8t_b"), 1U);
-    EXPECT_NE(combined.find(
-        "XIO_B wrenan_B wrena_B sae_B sae_B oeb_out_B oe_out_B DB QB"),
-        std::string::npos);
-    EXPECT_NE(combined.find("wrena_A wrenan_A wrena_B wrenan_B"),
-              std::string::npos);
-    EXPECT_EQ(combined.find("XIO_B vdd vss"), std::string::npos);
-    EXPECT_EQ(combined.find("XSA_A"), std::string::npos);
-    EXPECT_EQ(combined.find("XWRMUX_T"), std::string::npos);
+// The column group of a small generated deck, as one text the binding helpers
+// can search without also finding the XIO_* instances inside the wrappers.
+std::string generated_colgrp_8t() {
+    MainCliOptions config;
+    config.single_port = false;
+    config.num_wls = 2;
+    config.num_data_bits = 4;
+    config.num_banks = 1;
+    const std::string generated =
+        OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    std::string text;
+    for (const auto& statement : subckt_body(generated, "colgrp_sram_8t")) {
+        text += statement + "\n";
+    }
+    return text;
 }
 
-TEST(SpiceTemplates8T, WrapperAndCompositeInstanceAritiesMatch) {
+}  // namespace
+
+TEST(SpiceTemplates8T, ColumnGroupUsesPortWrappersAndSupportsBothWritePorts) {
+    const std::string colgrp = generated_colgrp_8t();
+
+    EXPECT_EQ(count_occurrences(colgrp, "ioprech_sram_8t_a"), 1U);
+    EXPECT_EQ(count_occurrences(colgrp, "ioprech_sram_8t_b"), 1U);
+    EXPECT_EQ(count_occurrences(colgrp, "array_sram_8t"), 1U);  // one unsplit array
+    EXPECT_NE(colgrp.find(
+        "XIO_B wrenanB wrenaB sae_B sae_B oeb_outB oe_outB DB QB"),
+        std::string::npos);
+    EXPECT_EQ(colgrp.find("XIO_B VDD VSS"), std::string::npos);
+    EXPECT_EQ(colgrp.find("iocolgrp_sram_8t"), std::string::npos);
+    for (const std::string& split_era : {"WLTA", "WLBA", "yselt", "yselb", "blprecht"}) {
+        EXPECT_EQ(colgrp.find(split_era), std::string::npos) << split_era;
+    }
+}
+
+TEST(SpiceTemplates8T, WrapperAndColumnGroupInstanceAritiesMatch) {
     const std::string core = OpenFinRAM::SpiceTemplates::get_iocolgrp();
     const std::string port_a = OpenFinRAM::SpiceTemplates::get_ioprech_8t_a();
     const std::string port_b = OpenFinRAM::SpiceTemplates::get_ioprech_8t_b();
-    const std::string combined = OpenFinRAM::SpiceTemplates::get_iocolgrp_8t();
+    const std::string colgrp = generated_colgrp_8t();
 
     EXPECT_EQ(instance_node_count(port_a, "XIO_A"), subckt_port_count(core));
     EXPECT_EQ(instance_node_count(port_b, "XIO_B"), subckt_port_count(core));
-    EXPECT_EQ(instance_node_count(combined, "XIO_A"), subckt_port_count(port_a));
-    EXPECT_EQ(instance_node_count(combined, "XIO_B"), subckt_port_count(port_b));
+    EXPECT_EQ(instance_node_count(colgrp, "XIO_A"), subckt_port_count(port_a));
+    EXPECT_EQ(instance_node_count(colgrp, "XIO_B"), subckt_port_count(port_b));
 }
 
 TEST(SpiceTemplates8T, WriteEnableBindingsFollowWrapperFormalOrder) {
     const std::string port_a = OpenFinRAM::SpiceTemplates::get_ioprech_8t_a();
     const std::string port_b = OpenFinRAM::SpiceTemplates::get_ioprech_8t_b();
-    const std::string combined = OpenFinRAM::SpiceTemplates::get_iocolgrp_8t();
+    const std::string colgrp = generated_colgrp_8t();
 
-    const auto a = instance_bindings(combined, "XIO_A", port_a);
-    const auto b = instance_bindings(combined, "XIO_B", port_b);
+    const auto a = instance_bindings(colgrp, "XIO_A", port_a);
+    const auto b = instance_bindings(colgrp, "XIO_B", port_b);
     ASSERT_EQ(a.count("WRENAN_A"), 1U);
     ASSERT_EQ(a.count("WRENA_A"), 1U);
     ASSERT_EQ(b.count("WRENAN_B"), 1U);
     ASSERT_EQ(b.count("WRENA_B"), 1U);
-    EXPECT_EQ(a.at("WRENAN_A"), "wrenan_A");
-    EXPECT_EQ(a.at("WRENA_A"), "wrena_A");
-    EXPECT_EQ(b.at("WRENAN_B"), "wrenan_B");
-    EXPECT_EQ(b.at("WRENA_B"), "wrena_B");
+    EXPECT_EQ(a.at("WRENAN_A"), "wrenanA");
+    EXPECT_EQ(a.at("WRENA_A"), "wrenaA");
+    EXPECT_EQ(b.at("WRENAN_B"), "wrenanB");
+    EXPECT_EQ(b.at("WRENA_B"), "wrenaB");
+}
+
+// One IO per end of the bitlines: port A stands left of the array and meets
+// it with the wrapper's B face, port B stands right and meets it with its T
+// face.  The face turned away idles precharged with every column deselected.
+TEST(SpiceTemplates8T, EachPortUsesTheFaceTurnedToTheArrayAndIdlesTheOther) {
+    const std::string colgrp = generated_colgrp_8t();
+    const auto a = instance_bindings(
+        colgrp, "XIO_A", OpenFinRAM::SpiceTemplates::get_ioprech_8t_a());
+    const auto b = instance_bindings(
+        colgrp, "XIO_B", OpenFinRAM::SpiceTemplates::get_ioprech_8t_b());
+    ASSERT_FALSE(a.empty());
+    ASSERT_FALSE(b.empty());
+
+    EXPECT_EQ(a.at("BLPRECHBN_A"), "blprechnA");
+    EXPECT_EQ(a.at("BLPRECHTN_A"), "VSS");
+    EXPECT_EQ(b.at("BLPRECHTN_B"), "blprechnB");
+    EXPECT_EQ(b.at("BLPRECHBN_B"), "VSS");
+    std::set<std::string> idle_stubs;
+    for (int i = 0; i < 4; ++i) {
+        const std::string n = "[" + std::to_string(i) + "]";
+        EXPECT_EQ(a.at("BLB_A" + n), "BL_A" + n);
+        EXPECT_EQ(a.at("BLBN_A" + n), "BLN_A" + n);
+        EXPECT_EQ(a.at("YSELB_A" + n), "yselA" + n);
+        EXPECT_EQ(a.at("YSELBN_A" + n), "yselnA" + n);
+        EXPECT_EQ(a.at("YSELT_A" + n), "VSS");
+        EXPECT_EQ(a.at("YSELTN_A" + n), "VDD");
+
+        EXPECT_EQ(b.at("BLT_B" + n), "BL_B" + n);
+        EXPECT_EQ(b.at("BLTN_B" + n), "BLN_B" + n);
+        EXPECT_EQ(b.at("YSELT_B" + n), "yselB" + n);
+        EXPECT_EQ(b.at("YSELTN_B" + n), "yselnB" + n);
+        EXPECT_EQ(b.at("YSELB_B" + n), "VSS");
+        EXPECT_EQ(b.at("YSELBN_B" + n), "VDD");
+
+        for (const std::string& stub : {a.at("BLT_A" + n), a.at("BLTN_A" + n),
+                                        b.at("BLB_B" + n), b.at("BLBN_B" + n)}) {
+            EXPECT_EQ(stub.rfind("idle_", 0), 0U) << stub;
+            idle_stubs.insert(stub);
+        }
+    }
+    EXPECT_EQ(idle_stubs.size(), 16U);  // sixteen separate stubs, none shared
+
+    // The array's bitlines are exactly the ones the two used faces carry.
+    const auto array = instance_bindings(
+        colgrp, "X0", [] {
+            MainCliOptions config;
+            config.single_port = false;
+            config.num_wls = 2;
+            config.num_data_bits = 4;
+            config.num_banks = 1;
+            const std::string generated =
+                OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+            std::string text;
+            for (const auto& statement : subckt_body(generated, "array_sram_8t")) {
+                text += statement + "\n";
+            }
+            return text;
+        }());
+    ASSERT_FALSE(array.empty());
+    for (int i = 0; i < 4; ++i) {
+        const std::string n = "[" + std::to_string(i) + "]";
+        EXPECT_EQ(array.at("BLA" + n), "BL_A" + n);
+        EXPECT_EQ(array.at("BLAN" + n), "BLN_A" + n);
+        EXPECT_EQ(array.at("BLB" + n), "BL_B" + n);
+        EXPECT_EQ(array.at("BLBN" + n), "BLN_B" + n);
+    }
+    EXPECT_EQ(array.count("WLA[3]"), 1U);  // NUM_WL = 2: four wordlines, one array
+    EXPECT_EQ(array.count("WLA[4]"), 0U);
 }
 
 TEST(SpiceTemplates8T, GeneratedDeckOmitsRetiredReplicaSaeScaffolding) {
@@ -392,8 +483,8 @@ TEST(SpiceTemplates8T, GeneratedMacroHierarchyCarriesBothWritePorts) {
         EXPECT_NE(std::find(stacked_header.begin(), stacked_header.end(), pin),
                   stacked_header.end()) << pin;
     }
-    EXPECT_EQ(subckt_instance_node_count(generated, "colgrp_sram_8t", "X2"),
-              named_subckt_port_count(generated, "iocolgrp_sram_8t"));
+    EXPECT_EQ(subckt_instance_node_count(generated, "colgrp_sram_8t", "X0"),
+              named_subckt_port_count(generated, "array_sram_8t"));
     EXPECT_EQ(subckt_instance_node_count(generated, "stacked_colgrp_x4x2x1", "X0_0"),
               named_subckt_port_count(generated, "colgrp_sram_8t"));
 
@@ -406,7 +497,9 @@ TEST(SpiceTemplates8T, GeneratedMacroHierarchyCarriesBothWritePorts) {
         EXPECT_EQ(fields.back(), "sram_cell_8t");
         ++active_cells;
     }
-    EXPECT_EQ(active_cells, 2U);  // Physical end caps/taps have no dummy devices.
+    // NUM_WL = 2: one unsplit array of four wordlines.  Physical end caps and
+    // taps have no dummy devices.
+    EXPECT_EQ(active_cells, 4U);
 }
 
 TEST(SpiceTemplates8T, TrackedWrapperNetlistMatchesTheTemplateContract) {

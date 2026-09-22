@@ -45,29 +45,33 @@ bool LayoutGenerator::extract_required_cells() {
             return false;
         }
 
+        // One unsplit array per column, 2*NUM_WL wordlines, with an IO column
+        // at each end of the bitlines.
+        const unsigned rows = 2 * cli_options_.num_wls;
         const std::string array_name =
-            "array_x" + std::to_string(cli_options_.num_wls) + "x4_sram_8t";
+            "array_x" + std::to_string(rows) + "x4_sram_8t";
         const std::string colgrp_name =
-            "colgrp_x" + std::to_string(cli_options_.num_wls * 2) + "x4_sram_8t";
+            "colgrp_x" + std::to_string(rows) + "x4_sram_8t";
         sram_cells_.bitcell = sram_lib.get_cell("sram_cell_8t");
         sram_cells_.array_cell = sram_lib.get_cell(array_name.c_str());
-        sram_cells_.io_colgrp = sram_lib.get_cell("iocolgrp_sram_8t");
+        sram_cells_.io_colgrp = sram_lib.get_cell("iocol_sram_8t_a");
+        auto* io_b = sram_lib.get_cell("iocol_sram_8t_b");
         sram_cells_.colgrp = sram_lib.get_cell(colgrp_name.c_str());
 
         if (sram_cells_.bitcell == nullptr ||
             sram_cells_.array_cell == nullptr ||
             sram_cells_.io_colgrp == nullptr ||
+            io_b == nullptr ||
             sram_cells_.colgrp == nullptr) {
             LOGE << "The routed 8T IO-column library does not contain the "
-                 << cli_options_.num_wls << "-wordline half-array contract";
-            LOGE << "Regenerate tech/gds/sram_8t_iocolumn.gds with "
-                 << "scripts/generate_asap7_8t_iocolumn.py --word-lines "
-                 << cli_options_.num_wls;
+                 << rows << "-wordline array contract";
+            LOGE << "Regenerate tech/gds/sram_wordline_arrays.gds and "
+                 << "tech/gds/sram_8t_iocolumn.gds with --word-lines " << rows;
             return false;
         }
 
         LOGI << "Found routed dual-port cells: " << array_name << ", "
-             << sram_cells_.io_colgrp->name << ", " << colgrp_name;
+             << sram_cells_.io_colgrp->name << ", " << io_b->name << ", " << colgrp_name;
         return true;
     }
 

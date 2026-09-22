@@ -4,6 +4,11 @@
 Every disconnected supply component is a separate routing terminal.  Physical
 pin connectivity is extracted again after DEF stream-out before publishing GDS.
 The controller is the already placed/routed ctrl_decode from this compiler run.
+
+A column is one unsplit array with port A's IO at one end of the bitlines and
+port B's at the other.  ``--wordlines`` is still NUM_WL, the rows one row-select
+address field covers; the array has twice that, the address bit above the
+column select being the top bit of its wordline index.
 """
 
 from __future__ import annotations
@@ -165,19 +170,18 @@ def abstract(cell, name, signal_labels):
 
 
 def leaf_net(name, bank, bit, wordlines):
+    """Macro net of a column pin; `wordlines` is NUM_WL, half the array's."""
     if name in ("vdd", "vss"):
         return name
     if name in ("DA", "DB", "QA", "QB"):
         return f"{name[0]}_{name[1]}[{bit}]"
-    wl = re.fullmatch(r"WL([TB])([AB])\[(\d+)\]", name)
+    wl = re.fullmatch(r"WL([AB])\[(\d+)\]", name)
     if wl:
-        return f"wl{wl[1].lower()}_{wl[2]}[{bank * wordlines + int(wl[3])}]"
-    mux = re.fullmatch(r"(yseltn|yselt|yselbn|yselb)([AB])\[(\d+)\]", name)
+        return f"wl_{wl[1]}[{bank * 2 * wordlines + int(wl[2])}]"
+    mux = re.fullmatch(r"(yseln|ysel)([AB])\[(\d+)\]", name)
     if mux:
         return f"{mux[1]}_{mux[2]}[{bank * 4 + int(mux[3])}]"
-    ctrl = re.fullmatch(
-        r"(wrena|wrenan|oeb_out|oe_out|blprechtn|blprechbn)([AB])", name
-    )
+    ctrl = re.fullmatch(r"(wrena|wrenan|oeb_out|oe_out|blprechn)([AB])", name)
     if ctrl:
         return f"{ctrl[1]}_{ctrl[2]}[{bank}]"
     if name in ("sae_A", "sae_B"):
@@ -186,6 +190,7 @@ def leaf_net(name, bank, bit, wordlines):
 
 
 def build_leaf(wordlines, tap_pitch):
+    """``iocol A | cap | array of `wordlines` | iocol B`` with its dummy end rows."""
     gds = REPO / "tech/gds"
     lib = arrays.build_library(
         gds / "sram_cell_8t.gds",
@@ -202,13 +207,11 @@ def build_leaf(wordlines, tap_pitch):
     edges = {
         c.name: c for c in gdstk.read_gds(str(gds / "sram_cell_8t_edges.gds")).cells
     }
-    io = columns.build_combined_io(
-        lib, wrappers["ioprech_sram_8t_a"], wrappers["ioprech_sram_8t_b"]
-    )
+    io_a = columns.build_port_io(lib, wrappers["ioprech_sram_8t_a"], "A")
+    io_b = columns.build_port_io(lib, wrappers["ioprech_sram_8t_b"], "B")
     caps = columns.build_cap_array(lib, edges)
-    caps_lr = columns.build_cap_array(lib, edges, mirror_x=True)
     array = cells[f"array_x{wordlines}x4_tap{tap_pitch}_sram_8t"]
-    leaf = columns.build_colgrp(lib, array, io, caps, wordlines, caps_lr)
+    leaf = columns.build_colgrp(lib, array, io_a, io_b, caps, wordlines)
     capped = lib.new_cell("capped_" + leaf.name)
     capped.add(gdstk.Reference(leaf))
     for label in leaf.labels:
@@ -216,32 +219,33 @@ def build_leaf(wordlines, tap_pitch):
     width = columns.boundary_box(leaf)[2]
     bx0, by0, bx1, by1 = columns.boundary_box(cells["sram_cell_8t"])
     slot_width, pitch = bx1 - bx0, by1 - by0
+    io_a_width = columns.boundary_box(io_a)[2]
     cap_width = columns.boundary_box(caps)[2]
-    array_width = columns.boundary_box(array)[2]
     blank = edges["FILLER_BLANK_8t"]
     fx0, fy0, fx1, fy1 = columns.boundary_box(blank)
     half_width = fx1 - fx0
     ends = lib.new_cell("dp_array_end_rows")
-    # Each end explicitly selects the corresponding master orientation. A
-    # mirrored parent reference would also reverse asymmetric process bands.
-    for right in (False, True):
-        array_x = width - cap_width - array_width if right else cap_width
-        corner_x = width - cap_width if right else cap_width - slot_width
-        filler_x = width - slot_width if right else 0
-        for bottom in (False, True):
-            y = -pitch if bottom else 4 * pitch
-            row = edge_cells.build_dummy_vertical_array(
-                lib, edges, wordlines, tap_pitch, mirror_x=right, mirror_y=bottom
-            )
-            ends.add(gdstk.Reference(row, origin=(array_x, y)))
-            corner = edges[edge_cells.oriented_name("sram_cell_8t_corner", right, bottom)]
-            ends.add(gdstk.Reference(corner, origin=(corner_x - bx0, y - by0)))
-            for col in range(2):
-                ends.add(gdstk.Reference(
-                    blank, origin=(filler_x + col * half_width - fx0,
-                                   y + fy1 if bottom else y - fy0),
-                    x_reflection=bottom,
-                ))
+    # The array has one capped end, port A's; a dummy row runs above and below
+    # it from there, with a corner over the cap and blanks over the filler.
+    # Port B's end meets its IO on the array's last tap, as an IO face always
+    # has, and the dummy rows simply stop there.
+    array_x = io_a_width + cap_width
+    corner_x = array_x - slot_width
+    filler_x = io_a_width
+    for bottom in (False, True):
+        y = -pitch if bottom else 4 * pitch
+        row = edge_cells.build_dummy_vertical_array(
+            lib, edges, wordlines, tap_pitch, mirror_x=False, mirror_y=bottom
+        )
+        ends.add(gdstk.Reference(row, origin=(array_x, y)))
+        corner = edges[edge_cells.oriented_name("sram_cell_8t_corner", False, bottom)]
+        ends.add(gdstk.Reference(corner, origin=(corner_x - bx0, y - by0)))
+        for col in range(2):
+            ends.add(gdstk.Reference(
+                blank, origin=(filler_x + col * half_width - fx0,
+                               y + fy1 if bottom else y - fy0),
+                x_reflection=bottom,
+            ))
     capped.add(gdstk.Reference(ends))
     columns.rect(capped, (0, -pitch, width, 5 * pitch), 100)
     return capped
@@ -254,8 +258,9 @@ def run(args):
         raise RuntimeError("banks must be a power of two")
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
-    tap_pitch = math.gcd(args.wordlines, 16)
-    leaf = build_leaf(args.wordlines, tap_pitch)
+    array_wordlines = 2 * args.wordlines
+    tap_pitch = math.gcd(array_wordlines, 16)
+    leaf = build_leaf(array_wordlines, tap_pitch)
     leaf_labels = [label for label in leaf.labels if not supply(label.text)]
     hard, pins, lef, size = abstract(leaf, "dp_column", leaf_labels)
     ctrl_lib = gdstk.read_gds(str(args.controller))
@@ -462,7 +467,9 @@ def run(args):
         "size_um": [width, height],
         "banks": args.banks,
         "bits": args.bits,
+        "floorplan": "one IO per end of the bitlines: port A | array | port B",
         "wordlines_per_half": args.wordlines,
+        "array_wordlines": array_wordlines,
         "tap_pitch": tap_pitch,
         "column_tiles": len(instances) - 1,
         "checked_net_partitions": len(probes),

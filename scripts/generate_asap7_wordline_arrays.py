@@ -608,9 +608,12 @@ def verify_io_pitch(cells: dict[str, gdstk.Cell], io_gds: Path,
     io_cells = {cell.name: cell for cell in io_lib.cells}
     array = cells[array_name(CONTRACTS[0], wordlines, mux_rows, tap_pitch,
                              strap_pitch)]
+    # The face of each wrapper that meets the array: port A stands at the left
+    # end of the bitlines and uses its right (B) face, port B at the right end
+    # uses its left (T) face.
     mappings = {
         "ioprech_sram_8t_a": {
-            "BLA": "BLT_A", "BLAN": "BLTN_A",
+            "BLA": "BLB_A", "BLAN": "BLBN_A",
         },
         "ioprech_sram_8t_b": {
             "BLB": "BLT_B", "BLBN": "BLTN_B",

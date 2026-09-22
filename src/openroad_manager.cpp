@@ -60,25 +60,31 @@ bool OpenRoadManager::run_openroad_flow() {
         gdstk::ErrorCode error = gdstk::ErrorCode::NoError;
         auto lib = gdstk::read_gds(join_path(get_current_dir_name(),
             "tech/gds/sram_8t_iocolumn.gds").c_str(), 0, 1e-2, nullptr, &error);
-        auto* io = lib.get_cell("iocolgrp_sram_8t");
+        // One IO per end of the bitlines: port A | cap | one array | port B.
+        auto* io_a = lib.get_cell("iocol_sram_8t_a");
+        auto* io_b = lib.get_cell("iocol_sram_8t_b");
+        auto* cap = lib.get_cell("col_cap_x4_sram_8t");
         auto* bitcell = lib.get_cell("sram_cell_8t");
-        if (error != gdstk::ErrorCode::NoError || !io || !bitcell) {
+        if (error != gdstk::ErrorCode::NoError || !io_a || !io_b || !cap || !bitcell) {
             LOGE << "Cannot measure the 8T IO/bitcell geometry for controller placement";
             lib.free_all();
             return false;
         }
-        auto io_size = OpenFinRAM::get_cell_size_from_boundary(io, map);
+        auto io_a_size = OpenFinRAM::get_cell_size_from_boundary(io_a, map);
+        auto io_b_size = OpenFinRAM::get_cell_size_from_boundary(io_b, map);
+        auto cap_size = OpenFinRAM::get_cell_size_from_boundary(cap, map);
         auto bit_size = OpenFinRAM::get_cell_size_from_boundary(bitcell, map);
-        if (!io_size.valid || !bit_size.valid) {
+        if (!io_a_size.valid || !io_b_size.valid || !cap_size.valid || !bit_size.valid) {
             LOGE << "8T IO/bitcell has no valid placement boundary";
             lib.free_all();
             return false;
         }
-        // Same tap policy as compile_asap7_2rw.py; +1 is the outside cap.
-        const unsigned tap_pitch = std::gcd(cli_options_.num_wls, 16u);
-        const unsigned slots = cli_options_.num_wls + cli_options_.num_wls / tap_pitch;
-        sram_width = (io_size.width + 2 * (slots + 1) * bit_size.width)
-                     * cli_options_.num_banks;
+        // Same tap policy as compile_asap7_2rw.py, over the whole array.
+        const unsigned rows = 2 * cli_options_.num_wls;
+        const unsigned tap_pitch = std::gcd(rows, 16u);
+        const unsigned slots = rows + rows / tap_pitch;
+        sram_width = (io_a_size.width + cap_size.width + slots * bit_size.width
+                      + io_b_size.width) * cli_options_.num_banks;
         lib.free_all();
     }
     double col_width = (sram_width + cli_options_.bitcell_width) / cli_options_.num_banks;

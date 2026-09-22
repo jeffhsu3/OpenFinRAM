@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Generate routed ASAP7 dual-port 8T IO-column hierarchy.
+"""Generate the ASAP7 dual-port 8T column hierarchy: one IO per end of the bitlines.
 
-The port-A and port-B hard wrappers cannot be overlaid: both contain a full
-copy of the differential IO core.  This generator places them side by side
-and joins both to the same pair of 8T arrays.  Port B passes across the A core
-on M4 (the A wrapper has no M4); port A rises from M2 to M6 in a dedicated
-inter-wrapper gap, crosses the B core, and drops back to M2 in a right gap.
+Each port has its IO column at its own end of one unsplit array::
 
-The resulting ``colgrp_x{2N}x4_sram_8t`` cells match the logical
+    iocol A | edge cap | array, N wordlines ... tap | iocol B
+
+Port A's bitlines leave the array on M2 and port B's on M4, so neither port
+crosses the other's IO.  (The earlier floorplan put both IO cores mid-bitline
+between two half arrays: port B crossed the A core on M4 and port A climbed to
+M6 to cross the B core.)
+
+The port-A and port-B hard wrappers are still the published differential core
+behind a pitch adapter, and that core has a bitline interface on both faces.
+Only the face turned to the array is used -- A's right face, B's left.  The
+other face's column selects and precharge enable are tied off so that it
+idles precharged: they carry VSS/VDD labels here, and the macro router
+connects every supply-labelled conductor to its rail.
+
+The resulting ``colgrp_x{N}x4_sram_8t`` cells match the logical
 ``colgrp_sram_8t`` hierarchy emitted by ``SpiceGenerator``.  N is the number
-of wordlines in each half-array and may be any positive value present in the
-parameterized wordline-array input GDS.
+of wordlines of the array and may be any value present in the parameterized
+wordline-array input GDS.
 """
 
 from __future__ import annotations
@@ -50,8 +60,9 @@ def boundary_box(cell: gdstk.Cell) -> tuple[float, float, float, float]:
     return boxes[0]
 
 
-def direct_label(cell: gdstk.Cell, name: str) -> gdstk.Label:
-    labels = [label for label in cell.labels if label.text == name]
+def direct_label(cell: gdstk.Cell, name: str, layer: int | None = None) -> gdstk.Label:
+    labels = [label for label in cell.labels if label.text == name
+              and (layer is None or label.layer == layer)]
     if len(labels) != 1:
         raise RuntimeError(
             f"{cell.name}: expected one direct {name!r} label, found {len(labels)}"
@@ -112,118 +123,47 @@ def add_route_shape(
     routes.setdefault(net, []).append((layer, box))
 
 
-def add_m2_to_m6_stack(
-    cell: gdstk.Cell,
-    routes: dict[str, list[tuple[int, tuple[float, float, float, float]]]],
-    net: str,
-    bottom: tuple[float, float],
-    x_direction: int,
-    y_direction: int,
-    x_step: float = 0.080,
-) -> tuple[float, float]:
-    """Build a direction-legal ASAP7 M2-to-M6 staircase.
+# The face of each wrapper that meets the array.  The published core names its
+# two faces T and B after the half arrays it used to sit between; here they
+# are just the left (T) and the right (B) face of the hard cell.
+ARRAY_FACE = {"A": "B", "B": "T"}
 
-    M4/M6 are horizontal-only and M5 is vertical-only in the public rules.
-    Staggering the transitions lets V2 use an 18 nm vertical M3 landing while
-    V3 uses a 24 nm horizontal M3 landing, and avoids bends on M4--M6.
+
+def port_pin_name(name: str, port: str) -> str | None:
+    """Composite name of a wrapper pin, a supply to tie it to, or None to hide it.
+
+    Pins of the face turned away from the array are tied so that it idles
+    precharged with every column deselected.
     """
-    if x_direction not in (-1, 1) or y_direction not in (-1, 1):
-        raise RuntimeError("via-stack directions must be -1 or 1")
-
-    x2, y2 = bottom
-    x3, y3 = x2, y2 + y_direction * 0.050
-    x4, y4 = x3 + x_direction * x_step, y3
-    x5, y5 = x4, y4 + y_direction * 0.050
-
-    # V2: 18 x 18 nm.  M2 supplies horizontal endcaps and M3 leaves the via
-    # on a vertical 18 nm track, as required by V2.M3.AUX.2.
-    add_route_shape(cell, routes, net, M2,
-                    (x2 - 0.014, y2 - 0.009, x2 + 0.014, y2 + 0.009))
-    add_route_shape(cell, routes, net, V2,
-                    (x2 - 0.009, y2 - 0.009, x2 + 0.009, y2 + 0.009))
-    add_route_shape(
-        cell, routes, net, M3,
-        (x2 - 0.009, min(y2, y3) - 0.014,
-         x2 + 0.009, max(y2, y3) + 0.014),
-    )
-
-    # V3: 18 x 24 nm.  The local M3 bar gives 5 nm horizontal endcaps;
-    # the straight 24 nm M4 segment gives 11 nm horizontal endcaps.
-    add_route_shape(cell, routes, net, M3,
-                    (x3 - 0.014, y3 - 0.012, x3 + 0.014, y3 + 0.012))
-    add_route_shape(cell, routes, net, V3,
-                    (x3 - 0.009, y3 - 0.012, x3 + 0.009, y3 + 0.012))
-    add_route_shape(
-        cell, routes, net, M4,
-        (min(x3 - 0.020, x4 - 0.023), y3 - 0.012,
-         max(x3 + 0.020, x4 + 0.023), y3 + 0.012),
-    )
-
-    # V4 is 24 x 24 nm between horizontal M4 and vertical M5.  V5 is
-    # 24 x 32 nm between vertical M5 and horizontal M6.  The latter follows
-    # V5.M6.AUX.2 in the DRM (32 nm perpendicular to horizontal M6); the
-    # public ORFS KLayout deck currently checks M6's vertical edges instead.
-    add_route_shape(cell, routes, net, V4,
-                    (x4 - 0.012, y4 - 0.012, x4 + 0.012, y4 + 0.012))
-    add_route_shape(
-        cell, routes, net, M5,
-        (x4 - 0.012, min(y4 - 0.023, y5 - 0.027),
-         x4 + 0.012, max(y4 + 0.023, y5 + 0.027)),
-    )
-    add_route_shape(cell, routes, net, V5,
-                    (x5 - 0.012, y5 - 0.016, x5 + 0.012, y5 + 0.016))
-    add_route_shape(cell, routes, net, M6,
-                    (x5 - 0.023, y5 - 0.016, x5 + 0.023, y5 + 0.016))
-    return x5, y5
-
-
-def wrapper_control_name(name: str) -> str | None:
+    used, unused = ARRAY_FACE[port], "TB".replace(ARRAY_FACE[port], "")
     scalar = {
-        "WRENA_A": "wrena_A",
-        "WRENAN_A": "wrenan_A",
-        "WRENA_B": "wrena_B",
-        "WRENAN_B": "wrenan_B",
-        "D_A": "DA",
-        "D_B": "DB",
-        "Q_A": "QA",
-        "OEB_OUT_A": "oeb_out_A",
-        "OE_OUT_A": "oe_out_A",
-        "BLPRECHTN_A": "blprechtn_A",
-        "BLPRECHBN_A": "blprechbn_A",
-        "SAE_A": "sae_A",
-        "Q_B": "QB",
-        "OEB_OUT_B": "oeb_out_B",
-        "OE_OUT_B": "oe_out_B",
-        "BLPRECHTN_B": "blprechtn_B",
-        "BLPRECHBN_B": "blprechbn_B",
-        "SAE_B": "sae_B",
+        f"WRENA_{port}": f"wrena_{port}",
+        f"WRENAN_{port}": f"wrenan_{port}",
+        f"D_{port}": f"D{port}",
+        f"Q_{port}": f"Q{port}",
+        f"OEB_OUT_{port}": f"oeb_out_{port}",
+        f"OE_OUT_{port}": f"oe_out_{port}",
+        f"SAE_{port}": f"sae_{port}",
+        f"BLPRECH{used}N_{port}": f"blprechn_{port}",
+        f"BLPRECH{unused}N_{port}": "VSS",
     }
     if name in scalar:
         return scalar[name]
-    match = re.fullmatch(r"(YSELTN|YSELT|YSELBN|YSELB)_([AB])\[([0-3])\]", name)
-    if match:
-        return f"{match.group(1).lower()}_{match.group(2)}[{match.group(3)}]"
-    return None
+    match = re.fullmatch(rf"YSEL([TB])(N?)_{port}\[([0-3])\]", name)
+    if not match:
+        return None
+    if match.group(1) == used:
+        return f"ysel{match.group(2).lower()}_{port}[{match.group(3)}]"
+    return "VDD" if match.group(2) else "VSS"
 
 
 def colgrp_control_name(name: str) -> str:
-    replacements = {
-        "wrena_A": "wrenaA",
-        "wrenan_A": "wrenanA",
-        "wrena_B": "wrenaB",
-        "wrenan_B": "wrenanB",
-        "oeb_out_A": "oeb_outA",
-        "oe_out_A": "oe_outA",
-        "oeb_out_B": "oeb_outB",
-        "oe_out_B": "oe_outB",
-        "blprechtn_A": "blprechtnA",
-        "blprechbn_A": "blprechbnA",
-        "blprechtn_B": "blprechtnB",
-        "blprechbn_B": "blprechbnB",
-    }
-    if name in replacements:
-        return replacements[name]
-    match = re.fullmatch(r"(yseltn|yselt|yselbn|yselb)_([AB])\[([0-3])\]", name)
+    match = re.fullmatch(
+        r"(wrena|wrenan|oeb_out|oe_out|blprechn)_([AB])", name
+    )
+    if match:
+        return f"{match.group(1)}{match.group(2)}"
+    match = re.fullmatch(r"(yseln|ysel)_([AB])\[([0-3])\]", name)
     if match:
         return f"{match.group(1)}{match.group(2)}[{match.group(3)}]"
     return name
@@ -262,145 +202,86 @@ def validate_route_spacing(
                         )
 
 
-def build_combined_io(
-    library: gdstk.Library,
-    wrapper_a: gdstk.Cell,
-    wrapper_b: gdstk.Cell,
-) -> gdstk.Cell:
-    ax0, ay0, ax1, ay1 = boundary_box(wrapper_a)
-    bx0, by0, bx1, by1 = boundary_box(wrapper_b)
-    if (ax0, ay0, ax1, ay1) != (bx0, by0, bx1, by1):
-        raise RuntimeError("port-A and port-B wrapper boundaries differ")
-    wrapper_width = ax1 - ax0
-    wrapper_height = ay1 - ay0
-    if wrapper_height <= 0 or wrapper_width <= 0:
+def port_io_name(port: str) -> str:
+    return f"iocol_sram_8t_{port.lower()}"
+
+
+def build_port_io(library: gdstk.Library, wrapper: gdstk.Cell, port: str) -> gdstk.Cell:
+    """One port's IO column: its wrapper, and a strapped gap on the array side.
+
+    Port A stands left of the array and port B right of it, so the gap is on
+    A's right and on B's left.  The bitlines cross it on the layer the array
+    delivers them on, M2 for port A and M4 for port B.
+    """
+    x0, y0, x1, y1 = boundary_box(wrapper)
+    width, height = x1 - x0, y1 - y0
+    if height <= 0 or width <= 0:
         raise RuntimeError("invalid 8T IO wrapper boundary")
-    if any(poly.layer == M4 for poly in wrapper_a.polygons):
-        raise RuntimeError("port-A wrapper unexpectedly occupies M4 pass-through layer")
-    if any(poly.layer == M5 for wrapper in (wrapper_a, wrapper_b)
-           for poly in wrapper.polygons):
-        raise RuntimeError("8T wrapper unexpectedly occupies M5 crossover layer")
+    if any(poly.layer == M5 for poly in wrapper.polygons):
+        raise RuntimeError("8T wrapper unexpectedly occupies the M5 wordline layer")
+    layer, half = (M2, 0.009) if port == "A" else (M4, 0.012)
+    wrapper_x = 0.0 if port == "A" else GAP_WIDTH
+    total_width = width + GAP_WIDTH
+    edge_x = total_width if port == "A" else 0.0
 
-    a_x = GAP_WIDTH
-    center_x0 = a_x + wrapper_width
-    b_x = center_x0 + GAP_WIDTH
-    right_x0 = b_x + wrapper_width
-    total_width = right_x0 + GAP_WIDTH
-    lift_x = center_x0 + 0.026
-    drop_x = right_x0 + GAP_WIDTH - 0.026
-
-    cell = library.new_cell("iocolgrp_sram_8t")
-    cell.add(gdstk.Reference(wrapper_a, origin=(a_x - ax0, -ay0)))
-    cell.add(gdstk.Reference(wrapper_b, origin=(b_x - bx0, -by0)))
+    cell = library.new_cell(port_io_name(port))
+    cell.add(gdstk.Reference(wrapper, origin=(wrapper_x - x0, -y0)))
     routes: dict[str, list[tuple[int, tuple[float, float, float, float]]]] = {}
+    face = ARRAY_FACE[port]
+    for source, target in ((f"BL{face}", "BL"), (f"BL{face}N", "BLN")):
+        labels = indexed_labels(wrapper, f"{source}_{port}")
+        if set(labels) != set(range(MUX_ROWS)):
+            raise RuntimeError(f"{wrapper.name}: incomplete {source}_{port} bus")
+        for index, label in labels.items():
+            if label.layer != layer:
+                raise RuntimeError(f"{wrapper.name}: {label.text} is not on layer {layer}")
+            y = float(label.origin[1]) - y0
+            net = f"{target}_{port}[{index}]"
+            span = ((width - 0.018, total_width) if port == "A"
+                    else (0.0, GAP_WIDTH + 0.018))
+            add_route_shape(cell, routes, net, layer,
+                            (span[0], y - half, span[1], y + half))
+            cell.add(clone_label(
+                label, net, (edge_x + (-0.006 if port == "A" else 0.006), y), layer
+            ))
 
-    # Left array interface: A reaches its adjacent core on M2; B crosses the A
-    # core on M4, a layer absent from that wrapper.
-    for prefix in ("BLT", "BLTN"):
-        for index, label in indexed_labels(wrapper_a, f"{prefix}_A").items():
-            y = float(label.origin[1]) - ay0
-            net = f"{prefix}_A[{index}]"
-            add_route_shape(cell, routes, net, M2,
-                            (0.0, y - 0.009, a_x + 0.018, y + 0.009))
-            cell.add(clone_label(label, net, (0.006, y), M2))
-    for prefix in ("BLT", "BLTN"):
-        for index, label in indexed_labels(wrapper_b, f"{prefix}_B").items():
-            y = float(label.origin[1]) - by0
-            net = f"{prefix}_B[{index}]"
-            add_route_shape(cell, routes, net, M4,
-                            (0.0, y - 0.012, b_x + 0.018, y + 0.012))
-            cell.add(clone_label(label, net, (0.006, y), M4))
-
-    # Right array interface: B reaches its adjacent core on M4.  A lifts to M6
-    # in the central gap, crosses the B core, then drops in the right gap.
-    for prefix in ("BLB", "BLBN"):
-        for index, label in indexed_labels(wrapper_b, f"{prefix}_B").items():
-            y = float(label.origin[1]) - by0
-            net = f"{prefix}_B[{index}]"
-            add_route_shape(cell, routes, net, M4,
-                            (right_x0 - 0.018, y - 0.012,
-                             total_width, y + 0.012))
-            cell.add(clone_label(label, net, (total_width - 0.006, y), M4))
-    ordered_a_right_y = sorted(
-        float(item.origin[1]) - ay0
-        for item_prefix in ("BLB", "BLBN")
-        for item in indexed_labels(wrapper_a, f"{item_prefix}_A").values()
+    # SAE and SAPRECHN are intentionally shorted, matching the composite SPICE
+    # phase convention: one sense phase per port precharges low, evaluates high.
+    sae = direct_label(wrapper, f"SAE_{port}")
+    saprechn = direct_label(wrapper, f"SAPRECHN_{port}")
+    sae_point = (wrapper_x + float(sae.origin[0]) - x0, float(sae.origin[1]) - y0)
+    sap_point = (wrapper_x + float(saprechn.origin[0]) - x0,
+                 float(saprechn.origin[1]) - y0)
+    if abs(sae_point[1] - sap_point[1]) > 1e-9:
+        raise RuntimeError(f"port {port} sense controls are not row-aligned")
+    add_route_shape(
+        cell, routes, f"sae_{port}", M3,
+        (min(sae_point[0], sap_point[0]) - 0.008, sae_point[1] - 0.009,
+         max(sae_point[0], sap_point[0]) + 0.008, sae_point[1] + 0.009),
     )
-    for prefix in ("BLB", "BLBN"):
-        for index, label in indexed_labels(wrapper_a, f"{prefix}_A").items():
-            y = float(label.origin[1]) - ay0
-            net = f"{prefix}_A[{index}]"
-            # Close true/complement tracks use alternating vertical M5 lanes.
-            # Their 48 nm center separation leaves the required 24 nm gap
-            # between 24 nm M5 wires while both staircases rise northward.
-            route_rank = ordered_a_right_y.index(y)
-            x_step = 0.080 if route_rank % 2 == 0 else 0.032
-            add_route_shape(cell, routes, net, M2,
-                            (center_x0 - 0.018, y - 0.009,
-                             lift_x + 0.014, y + 0.009))
-            lift_top = add_m2_to_m6_stack(
-                cell, routes, net, (lift_x, y), 1, 1, x_step
-            )
-            drop_top = add_m2_to_m6_stack(
-                cell, routes, net, (drop_x, y), -1, 1, x_step
-            )
-            add_route_shape(cell, routes, net, M6,
-                            (lift_top[0], lift_top[1] - 0.016,
-                             drop_top[0], lift_top[1] + 0.016))
-            add_route_shape(cell, routes, net, M2,
-                            (drop_x - 0.014, y - 0.009,
-                             total_width, y + 0.009))
-            cell.add(clone_label(label, net, (total_width - 0.006, y), M2))
 
-    # Export the active controls.  SAE and SAPRECHN are intentionally shorted
-    # per port, matching the current composite SPICE phase convention.
-    for wrapper, x_offset in ((wrapper_a, a_x), (wrapper_b, b_x)):
-        port = "A" if wrapper is wrapper_a else "B"
-        sae = direct_label(wrapper, f"SAE_{port}")
-        saprechn = direct_label(wrapper, f"SAPRECHN_{port}")
-        sae_point = (x_offset + float(sae.origin[0]) - ax0,
-                     float(sae.origin[1]) - ay0)
-        sap_point = (x_offset + float(saprechn.origin[0]) - ax0,
-                     float(saprechn.origin[1]) - ay0)
-        if abs(sae_point[1] - sap_point[1]) > 1e-9:
-            raise RuntimeError(f"port {port} sense controls are not row-aligned")
-        add_route_shape(
-            cell, routes, f"sae_{port}", M3,
-            (min(sae_point[0], sap_point[0]) - 0.008,
-             sae_point[1] - 0.009,
-             max(sae_point[0], sap_point[0]) + 0.008,
-             sae_point[1] + 0.009),
-        )
+    for label in wrapper.labels:
+        renamed = port_pin_name(label.text, port)
+        if renamed is None:
+            continue
+        point = (wrapper_x + float(label.origin[0]) - x0, float(label.origin[1]) - y0)
+        cell.add(clone_label(label, renamed, point))
 
-        for label in wrapper.labels:
-            renamed = wrapper_control_name(label.text)
-            if renamed is None:
-                continue
-            point = (x_offset + float(label.origin[0]) - ax0,
-                     float(label.origin[1]) - ay0)
-            cell.add(clone_label(label, renamed, point))
-
-    # Export one direct label per supply from the existing wrapper rails.  The
-    # macro-level PG network connects both wrapper instances; no functional IO
-    # pin is consumed as a local supply tie in the true 2RW interface.
+    # One direct label per supply, on the wrapper's own M1 rails.  The tie-offs
+    # above carry the same names on M3, which is how to tell them apart.
     vss_source = max(
-        (label for label in wrapper_b.labels
-         if label.text == "VSS" and label.layer == M1),
+        (label for label in wrapper.labels if label.text == "VSS" and label.layer == M1),
         key=lambda label: float(label.origin[0]),
     )
     vdd_source = next(
-        label for label in wrapper_b.labels
-        if label.text == "VDD" and label.layer == M1
+        label for label in wrapper.labels if label.text == "VDD" and label.layer == M1
     )
-    vss_point = (b_x + float(vss_source.origin[0]) - bx0,
-                 float(vss_source.origin[1]) - by0)
-    vdd_point = (b_x + float(vdd_source.origin[0]) - bx0,
-                 float(vdd_source.origin[1]) - by0)
-    cell.add(clone_label(vss_source, "VSS", vss_point, M1))
-    cell.add(clone_label(vdd_source, "VDD", vdd_point, M1))
+    for source in (vss_source, vdd_source):
+        point = (wrapper_x + float(source.origin[0]) - x0, float(source.origin[1]) - y0)
+        cell.add(clone_label(source, source.text, point, M1))
 
     validate_route_spacing(routes)
-    rect(cell, (0.0, 0.0, total_width, wrapper_height), BOUNDARY)
+    rect(cell, (0.0, 0.0, total_width, height), BOUNDARY)
     return cell
 
 
@@ -425,101 +306,89 @@ def build_cap_array(library: gdstk.Library, edges: dict[str, gdstk.Cell],
 
 
 def colgrp_name(wordlines: int) -> str:
-    return f"colgrp_x{2 * wordlines}x4_sram_8t"
+    return f"colgrp_x{wordlines}x4_sram_8t"
 
 
 def build_colgrp(
     library: gdstk.Library,
     array: gdstk.Cell,
-    combined_io: gdstk.Cell,
+    io_a: gdstk.Cell,
+    io_b: gdstk.Cell,
     cap_array: gdstk.Cell,
     wordlines: int,
-    cap_array_lr: gdstk.Cell,
 ) -> gdstk.Cell:
+    """``iocol A | edge cap | array | iocol B``, one array of `wordlines` wordlines.
+
+    The cap terminates the array's first bitcell as it did at the outer end of
+    a half array; it hands every bitline through, and the filler beside it has
+    no metal, so port A's M2 bitlines are strapped across the filler.  The far
+    end needs no cap: a tapped array ends in a tap there, which is what an IO
+    face has always met.
+    """
     arx0, ary0, arx1, ary1 = boundary_box(array)
-    iox0, ioy0, iox1, ioy1 = boundary_box(combined_io)
+    ax0, ay0, ax1, ay1 = boundary_box(io_a)
+    bx0, by0, bx1, by1 = boundary_box(io_b)
     cpx0, cpy0, cpx1, cpy1 = boundary_box(cap_array)
     array_width, array_height = arx1 - arx0, ary1 - ary0
-    io_width, io_height = iox1 - iox0, ioy1 - ioy0
-    cap_width, cap_height = cpx1 - cpx0, cpy1 - cpy0
-    if abs(array_height - io_height) > 1e-6 or abs(cap_height - io_height) > 1e-6:
-        raise RuntimeError("8T array, IO, and edge-cap heights do not match")
-    if boundary_box(cap_array_lr) != boundary_box(cap_array):
-        raise RuntimeError("8T left/right edge boundaries do not match")
+    cap_width = cpx1 - cpx0
+    for box, what in (((ax0, ay0, ax1, ay1), "port-A IO"), ((bx0, by0, bx1, by1), "port-B IO"),
+                      ((cpx0, cpy0, cpx1, cpy1), "edge cap")):
+        if abs((box[3] - box[1]) - array_height) > 1e-6:
+            raise RuntimeError(f"8T array and {what} heights do not match")
 
-    left_array_x = cap_width
-    io_x = left_array_x + array_width
-    right_array_x = io_x + io_width
-    right_cap_x = right_array_x + array_width
-    total_width = right_cap_x + cap_width
+    cap_x = ax1 - ax0
+    array_x = cap_x + cap_width
+    io_b_x = array_x + array_width
+    total_width = io_b_x + (bx1 - bx0)
     cell = library.new_cell(colgrp_name(wordlines))
-    cell.add(gdstk.Reference(cap_array, origin=(-cpx0, -cpy0)))
-    cell.add(gdstk.Reference(array,
-                             origin=(left_array_x - arx0, -ary0)))
-    cell.add(gdstk.Reference(combined_io,
-                             origin=(io_x - iox0, -ioy0)))
-    cell.add(gdstk.Reference(
-        array,
-        origin=(right_array_x + array_width + arx0, -ary0),
-        rotation=math.pi,
-        x_reflection=True,
-    ))
-    cell.add(gdstk.Reference(
-        cap_array_lr,
-        origin=(right_cap_x - cpx0, -cpy0),
-    ))
+    cell.add(gdstk.Reference(io_a, origin=(-ax0, -ay0)))
+    cell.add(gdstk.Reference(cap_array, origin=(cap_x - cpx0, -cpy0)))
+    cell.add(gdstk.Reference(array, origin=(array_x - arx0, -ary0)))
+    cell.add(gdstk.Reference(io_b, origin=(io_b_x - bx0, -by0)))
 
-    wordline_map = {
-        "WLA": ("WLTA", "WLBA", M3),
-        "WLB": ("WLTB", "WLBB", M5),
-    }
-    for source, (left_name, right_name, layer) in wordline_map.items():
+    for source, layer in (("WLA", M3), ("WLB", M5)):
         for index, label in indexed_labels(array, source).items():
             x, y = map(float, label.origin)
             cell.add(clone_label(
-                label, f"{left_name}[{index}]",
-                (left_array_x + x - arx0, y - ary0), layer,
-            ))
-            cell.add(clone_label(
-                label, f"{right_name}[{index}]",
-                (right_array_x + array_width - (x - arx0), y - ary0), layer,
+                label, f"{source}[{index}]", (array_x + x - arx0, y - ary0), layer,
             ))
 
+    # Each port's bitlines have to arrive at the height and on the layer its IO
+    # column takes them.  Port A's cross the metal-free filler to the cap.
+    filler = next(ref.cell for ref in cap_array.references
+                  if ref.cell_name == "FILLER_cgedge_8t")
+    if any(poly.layer in (M2, M4) for poly in filler.polygons):
+        raise RuntimeError("edge filler is no longer free of bitline metal")
+    fx0, _, fx1, _ = boundary_box(filler)
+    cap_metal_x = cap_x + (fx1 - fx0)
     bitline_map = {
-        "BLA": ("BLT_A", "BLB_A", M2),
-        "BLAN": ("BLTN_A", "BLBN_A", M2),
-        "BLB": ("BLT_B", "BLB_B", M4),
-        "BLBN": ("BLTN_B", "BLBN_B", M4),
+        "BLA": ("BL_A", io_a, M2), "BLAN": ("BLN_A", io_a, M2),
+        "BLB": ("BL_B", io_b, M4), "BLBN": ("BLN_B", io_b, M4),
     }
-    for source, (left_io, right_io, layer) in bitline_map.items():
+    for source, (io_prefix, io_cell, layer) in bitline_map.items():
         array_labels = indexed_labels(array, source)
-        left_labels = indexed_labels(combined_io, left_io)
-        right_labels = indexed_labels(combined_io, right_io)
-        if set(array_labels) != set(left_labels) or set(array_labels) != set(right_labels):
+        io_labels = indexed_labels(io_cell, io_prefix)
+        if set(array_labels) != set(io_labels):
             raise RuntimeError(f"{cell.name}: incomplete {source} interface")
         for index, array_label in array_labels.items():
             y = float(array_label.origin[1]) - ary0
-            for io_label in (left_labels[index], right_labels[index]):
-                if io_label.layer != layer or abs(float(io_label.origin[1]) - y) > 1e-6:
-                    raise RuntimeError(
-                        f"{cell.name}: {io_label.text} does not align to {source}[{index}]"
-                    )
+            io_label = io_labels[index]
+            io_y = float(io_label.origin[1]) - (ay0 if io_cell is io_a else by0)
+            if io_label.layer != layer or abs(io_y - y) > 1e-6:
+                raise RuntimeError(
+                    f"{cell.name}: {io_label.text} does not align to {source}[{index}]"
+                )
+            if io_cell is io_a:
+                rect(cell, (cap_x - 0.018, y - 0.009, cap_metal_x + 0.018, y + 0.009), layer)
 
-    bitline_prefixes = (
-        "BLT_A", "BLTN_A", "BLB_A", "BLBN_A",
-        "BLT_B", "BLTN_B", "BLB_B", "BLBN_B",
-    )
-    for label in combined_io.labels:
-        if label.text.startswith(bitline_prefixes) or label.text in {"VDD", "VSS"}:
-            continue
-        point = (io_x + float(label.origin[0]) - iox0,
-                 float(label.origin[1]) - ioy0)
-        cell.add(clone_label(label, colgrp_control_name(label.text), point))
-    for supply in ("VDD", "VSS"):
-        label = direct_label(combined_io, supply)
-        point = (io_x + float(label.origin[0]) - iox0,
-                 float(label.origin[1]) - ioy0)
-        cell.add(clone_label(label, supply, point))
+    for io_cell, io_x, (ox, oy) in ((io_a, 0.0, (ax0, ay0)), (io_b, io_b_x, (bx0, by0))):
+        for label in io_cell.labels:
+            if label.text.startswith(("BL_", "BLN_")):
+                continue
+            if label.text in {"VDD", "VSS"} and label.layer == M1 and io_cell is io_a:
+                continue  # one rail label per supply is enough; port B's are kept
+            point = (io_x + float(label.origin[0]) - ox, float(label.origin[1]) - oy)
+            cell.add(clone_label(label, colgrp_control_name(label.text), point))
 
     rect(cell, (0.0, 0.0, total_width, array_height), BOUNDARY)
     return cell
@@ -545,7 +414,7 @@ def build_library(
         raise RuntimeError("8T source GDS units/precision do not match")
     wrapper_a = wrappers.get("ioprech_sram_8t_a")
     wrapper_b = wrappers.get("ioprech_sram_8t_b")
-    edge_names = {topbot_name(mx, my) for mx in (False, True) for my in (False, True)}
+    edge_names = {topbot_name(False, my) for my in (False, True)}
     edge_names.update({"FILLER_BLANK_8t", "FILLER_cgedge_8t"})
     bitcell = arrays.get("sram_cell_8t")
     if None in (wrapper_a, wrapper_b, bitcell) or not edge_names <= edges.keys():
@@ -568,13 +437,11 @@ def build_library(
         library.add(arrays[row_name], arrays[array_name])
         selected_arrays[count] = arrays[array_name]
 
-    combined_io = build_combined_io(library, wrapper_a, wrapper_b)
+    io_a = build_port_io(library, wrapper_a, "A")
+    io_b = build_port_io(library, wrapper_b, "B")
     cap_array = build_cap_array(library, edges)
-    cap_array_lr = build_cap_array(library, edges, mirror_x=True)
     for count in wordline_counts:
-        build_colgrp(
-            library, selected_arrays[count], combined_io, cap_array, count, cap_array_lr
-        )
+        build_colgrp(library, selected_arrays[count], io_a, io_b, cap_array, count)
     return library
 
 
@@ -588,9 +455,9 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
     expected = {
         "sram_cell_8t", "FILLER_BLANK_8t", "FILLER_cgedge_8t",
         "ioprech_sram_8t_a", "ioprech_sram_8t_b",
-        "iocolgrp_sram_8t", "col_cap_x4_sram_8t", "col_cap_x4_sram_8t_lr",
+        port_io_name("A"), port_io_name("B"), "col_cap_x4_sram_8t",
     }
-    expected.update(topbot_name(mx, my) for mx in (False, True) for my in (False, True))
+    expected.update(topbot_name(False, my) for my in (False, True))
     for count in wordline_counts:
         expected.update({
             f"sramcol_x{count}_sram_8t",
@@ -603,107 +470,126 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
             f"extra={sorted(set(cells) - expected)}"
         )
 
-    io = cells["iocolgrp_sram_8t"]
-    if len(io.references) != 2:
-        raise RuntimeError("iocolgrp_sram_8t: expected two wrapper references")
-    if {reference.cell_name for reference in io.references} != {
-        "ioprech_sram_8t_a", "ioprech_sram_8t_b"
-    }:
-        raise RuntimeError("iocolgrp_sram_8t: wrong wrapper references")
-    io_box = boundary_box(io)
-    assert_close(io_box[3] - io_box[1], 2.376, "combined IO height")
-    for prefix, layer in (
-        ("BLT_A", M2), ("BLTN_A", M2), ("BLB_A", M2), ("BLBN_A", M2),
-        ("BLT_B", M4), ("BLTN_B", M4), ("BLB_B", M4), ("BLBN_B", M4),
-    ):
-        labels = indexed_labels(io, prefix)
-        if set(labels) != set(range(MUX_ROWS)):
-            raise RuntimeError(f"iocolgrp_sram_8t: incomplete {prefix} bus")
-        if any(label.layer != layer for label in labels.values()):
-            raise RuntimeError(f"iocolgrp_sram_8t: {prefix} is on wrong layer")
-    io_names = {label.text for label in io.labels}
-    required_io = {
-        "wrena_A", "wrenan_A", "wrena_B", "wrenan_B",
-        "DA", "QA", "DB", "QB",
-        "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B",
-        "blprechtn_A", "blprechbn_A", "blprechtn_B", "blprechbn_B",
-        "sae_A", "sae_B", "VDD", "VSS",
-    }
-    required_io.update(
-        f"{prefix}_{port}[{index}]"
-        for prefix in ("yseltn", "yselt", "yselbn", "yselb")
-        for port in ("A", "B") for index in range(MUX_ROWS)
-    )
-    if not required_io.issubset(io_names):
-        raise RuntimeError(
-            f"iocolgrp_sram_8t: missing IO pins {sorted(required_io - io_names)}"
-        )
-    if io_names.intersection({"WRENA_B", "WRENAN_B", "D_B", "SAPRECHN_A", "SAPRECHN_B"}):
-        raise RuntimeError("iocolgrp_sram_8t: internal-only wrapper pins leaked")
-    for layer in (M6, V5, M5, V4, M4, V3, M3, V2, M2):
-        if not any(poly.layer == layer for poly in io.polygons):
-            raise RuntimeError(f"iocolgrp_sram_8t: missing port-A crossover layer {layer}")
-    if any(poly.layer in (V6, M7) for poly in io.polygons):
-        raise RuntimeError("iocolgrp_sram_8t: crossover unexpectedly exceeds M6")
-    m1_geometry = io.get_polygons(layer=M1, datatype=0)
-    for supply in ("VDD", "VSS"):
-        label = direct_label(io, supply)
-        if label.layer != M1:
-            raise RuntimeError(f"iocolgrp_sram_8t: {supply} is not on a wrapper M1 rail")
-        x, y = map(float, label.origin)
-        if not gdstk.inside([(x, y)], m1_geometry)[0]:
-            raise RuntimeError(f"iocolgrp_sram_8t: {supply} label misses wrapper M1")
+    io_boxes = {}
+    for port, layer, other in (("A", M2, M4), ("B", M4, None)):
+        io = cells[port_io_name(port)]
+        wrapper = f"ioprech_sram_8t_{port.lower()}"
+        if [reference.cell_name for reference in io.references] != [wrapper]:
+            raise RuntimeError(f"{io.name}: expected exactly its own wrapper")
+        if any(ref.rotation or ref.x_reflection for ref in io.references):
+            raise RuntimeError(f"{io.name}: the wrapper must only be translated")
+        io_boxes[port] = boundary_box(io)
+        assert_close(io_boxes[port][3] - io_boxes[port][1], 2.376, f"{io.name} height")
+        wrapper_box = boundary_box(cells[wrapper])
+        assert_close(io_boxes[port][2] - io_boxes[port][0],
+                     wrapper_box[2] - wrapper_box[0] + GAP_WIDTH, f"{io.name} width")
+        # The bitlines meet the array at the face turned to it, on its layer.
+        face_x = io_boxes[port][2] if port == "A" else io_boxes[port][0]
+        for prefix in ("BL", "BLN"):
+            labels = indexed_labels(io, f"{prefix}_{port}")
+            if set(labels) != set(range(MUX_ROWS)):
+                raise RuntimeError(f"{io.name}: incomplete {prefix}_{port} bus")
+            for label in labels.values():
+                if label.layer != layer:
+                    raise RuntimeError(f"{io.name}: {label.text} is on the wrong layer")
+                if abs(float(label.origin[0]) - face_x) > 0.0061:
+                    raise RuntimeError(f"{io.name}: {label.text} is not at the array face")
+        # One IO per end: nothing crosses a core any more, so nothing of the
+        # composite's own rises above the layer its bitlines arrive on.
+        own = {poly.layer for poly in io.polygons} - {BOUNDARY}
+        if not own <= {layer, M3}:
+            raise RuntimeError(f"{io.name}: unexpected routing layers {sorted(own)}")
+        names = [label.text for label in io.labels]
+        required = {
+            f"wrena_{port}", f"wrenan_{port}", f"D{port}", f"Q{port}",
+            f"oeb_out_{port}", f"oe_out_{port}", f"blprechn_{port}", f"sae_{port}",
+        }
+        required.update(f"{prefix}_{port}[{index}]" for prefix in ("ysel", "yseln")
+                        for index in range(MUX_ROWS))
+        if not required.issubset(names):
+            raise RuntimeError(f"{io.name}: missing IO pins {sorted(required - set(names))}")
+        leaked = [name for name in names if re.match(r"(YSEL|BLPRECH|SAPRECHN|WRENA|D_|Q_)", name)
+                  or re.match(r"(yselt|yselb|blprecht|blprechb)", name)]
+        if leaked:
+            raise RuntimeError(f"{io.name}: wrapper-only or split-era pins leaked: {leaked}")
+        # The idle face: four selects and its precharge enable low, four
+        # complement selects high, each on the wrapper's own M3 pin.
+        ties = {supply: [label for label in io.labels
+                         if label.text == supply and label.layer == M3]
+                for supply in ("VDD", "VSS")}
+        if (len(ties["VSS"]), len(ties["VDD"])) != (MUX_ROWS + 1, MUX_ROWS):
+            raise RuntimeError(f"{io.name}: idle-face tie-offs are incomplete")
+        unused = "TB".replace(ARRAY_FACE[port], "")
+        wrapper_cell = cells[wrapper]
+        wx0, wy0, _, _ = wrapper_box
+        shift = 0.0 if port == "A" else GAP_WIDTH
+        for supply, pins in (
+            ("VSS", [f"BLPRECH{unused}N_{port}"]
+                    + [f"YSEL{unused}_{port}[{i}]" for i in range(MUX_ROWS)]),
+            ("VDD", [f"YSEL{unused}N_{port}[{i}]" for i in range(MUX_ROWS)]),
+        ):
+            want = sorted((round(shift + float(direct_label(wrapper_cell, pin).origin[0]) - wx0, 6),
+                           round(float(direct_label(wrapper_cell, pin).origin[1]) - wy0, 6))
+                          for pin in pins)
+            have = sorted((round(float(label.origin[0]), 6), round(float(label.origin[1]), 6))
+                          for label in ties[supply])
+            if want != have:
+                raise RuntimeError(f"{io.name}: {supply} tie-offs are not on the idle face's pins")
+        m1_geometry = io.get_polygons(layer=M1, datatype=0)
+        for supply in ("VDD", "VSS"):
+            label = direct_label(io, supply, M1)
+            x, y = map(float, label.origin)
+            if not gdstk.inside([(x, y)], m1_geometry)[0]:
+                raise RuntimeError(f"{io.name}: {supply} label misses wrapper M1")
 
     cap_array = cells["col_cap_x4_sram_8t"]
-    for mx in (False, True):
-        cap = cells["col_cap_x4_sram_8t" + ("_lr" if mx else "")]
-        expected_caps = ["FILLER_cgedge_8t"] + [topbot_name(mx, bool(row % 2)) for row in range(MUX_ROWS)]
-        if [ref.cell_name for ref in cap.references] != expected_caps:
-            raise RuntimeError(f"{cap.name}: expected filler and four oriented cap masters")
-        if any(ref.rotation or ref.x_reflection for ref in cap.references):
-            raise RuntimeError(f"{cap.name}: edge masters must only be translated")
+    expected_caps = ["FILLER_cgedge_8t"] + [topbot_name(False, bool(row % 2)) for row in range(MUX_ROWS)]
+    if [ref.cell_name for ref in cap_array.references] != expected_caps:
+        raise RuntimeError(f"{cap_array.name}: expected filler and four oriented cap masters")
+    if any(ref.rotation or ref.x_reflection for ref in cap_array.references):
+        raise RuntimeError(f"{cap_array.name}: edge masters must only be translated")
+    cap_box = boundary_box(cap_array)
     for count in wordline_counts:
         array = cells[f"array_x{count}x4_sram_8t"]
         colgrp = cells[colgrp_name(count)]
         array_box = boundary_box(array)
         colgrp_box = boundary_box(colgrp)
-        cap_box = boundary_box(cap_array)
         expected_width = (
-            2 * (array_box[2] - array_box[0])
-            + (io_box[2] - io_box[0])
-            + 2 * (cap_box[2] - cap_box[0])
+            (array_box[2] - array_box[0]) + (cap_box[2] - cap_box[0])
+            + sum(box[2] - box[0] for box in io_boxes.values())
         )
-        assert_close(colgrp_box[2] - colgrp_box[0], expected_width,
-                     f"{colgrp.name}: width")
-        assert_close(colgrp_box[3] - colgrp_box[1], 2.376,
-                     f"{colgrp.name}: height")
-        if len(colgrp.references) != 5:
-            raise RuntimeError(f"{colgrp.name}: expected cap/array/IO/array/cap")
+        assert_close(colgrp_box[2] - colgrp_box[0], expected_width, f"{colgrp.name}: width")
+        assert_close(colgrp_box[3] - colgrp_box[1], 2.376, f"{colgrp.name}: height")
         expected_refs = [
-            "col_cap_x4_sram_8t", f"array_x{count}x4_sram_8t",
-            "iocolgrp_sram_8t", f"array_x{count}x4_sram_8t",
-            "col_cap_x4_sram_8t_lr",
+            port_io_name("A"), "col_cap_x4_sram_8t",
+            f"array_x{count}x4_sram_8t", port_io_name("B"),
         ]
         if [reference.cell_name for reference in colgrp.references] != expected_refs:
-            raise RuntimeError(f"{colgrp.name}: wrong placement hierarchy")
-        for prefix, layer in (
-            ("WLTA", M3), ("WLTB", M5), ("WLBA", M3), ("WLBB", M5),
-        ):
+            raise RuntimeError(f"{colgrp.name}: expected iocol A / cap / array / iocol B")
+        if any(ref.rotation or ref.x_reflection for ref in colgrp.references):
+            raise RuntimeError(f"{colgrp.name}: one unsplit array, nothing mirrored")
+        xs = [float(reference.origin[0]) for reference in colgrp.references]
+        if xs != sorted(xs):
+            raise RuntimeError(f"{colgrp.name}: port A must be left of the array, port B right")
+        for prefix, layer in (("WLA", M3), ("WLB", M5)):
             labels = indexed_labels(colgrp, prefix)
             if set(labels) != set(range(count)):
                 raise RuntimeError(f"{colgrp.name}: incomplete {prefix} bus")
             if any(label.layer != layer for label in labels.values()):
                 raise RuntimeError(f"{colgrp.name}: {prefix} is on wrong layer")
+        # Port A's bitlines are strapped across the metal-free filler.
+        straps = [bbox(poly) for poly in colgrp.polygons if poly.layer == M2]
+        if len(straps) != 2 * MUX_ROWS:
+            raise RuntimeError(f"{colgrp.name}: expected eight port-A bitline straps")
         required_colgrp = {
             "DA", "QA", "DB", "QB",
             "wrenaA", "wrenanA", "wrenaB", "wrenanB",
             "oeb_outA", "oe_outA", "oeb_outB", "oe_outB",
-            "blprechtnA", "blprechbnA", "blprechtnB", "blprechbnB",
-            "sae_A", "sae_B", "VDD", "VSS",
+            "blprechnA", "blprechnB", "sae_A", "sae_B", "VDD", "VSS",
         }
         required_colgrp.update(
             f"{prefix}{port}[{index}]"
-            for prefix in ("yseltn", "yselt", "yselbn", "yselb")
+            for prefix in ("yseln", "ysel")
             for port in ("A", "B") for index in range(MUX_ROWS)
         )
         names = {label.text for label in colgrp.labels}
@@ -711,10 +597,14 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
             raise RuntimeError(
                 f"{colgrp.name}: missing pins {sorted(required_colgrp - names)}"
             )
+        split_era = sorted(name for name in names
+                           if re.match(r"(WLT|WLBA|WLBB|yselt|yselb|blprecht|blprechb)", name))
+        if split_era:
+            raise RuntimeError(f"{colgrp.name}: split-era pins remain: {split_era}")
 
     digests: dict[str, str] = {}
     for name in sorted(cells):
-        if not name.startswith(("iocolgrp_", "colgrp_", "col_cap_")):
+        if not name.startswith(("iocol_", "colgrp_", "col_cap_")):
             continue
         records: list[str] = []
         cell = cells[name]
@@ -756,7 +646,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--word-lines", type=parse_wordlines,
         default=parse_wordlines("2,32,64,128"),
-        help="comma-separated half-array wordline counts (default: 2,32,64,128)",
+        help="comma-separated array wordline counts (default: 2,32,64,128)",
     )
     parser.add_argument(
         "--arrays-gds", type=Path,
