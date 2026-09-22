@@ -317,19 +317,28 @@ def add_gate_to_m5(
 
 def add_wla_routes(cell: gdstk.Cell) -> None:
     """Add the two WLA gate contacts and their common M3 route."""
-    # Bottom WLA contact: moved left of the Q strap.  The 0.5 nm south shift
-    # gives the required 15 nm corner spacing to the LISD above.
-    rect(cell, (0.000, -0.0115, 0.037, 0.0045), LIG)
-    rect(cell, (0.006, -0.0125, 0.024, 0.0055), V0)
-    rect(cell, (0.006, -0.017, 0.024, 0.011), M1)
-    rect(cell, (0.006, -0.012, 0.024, 0.006), V1)
-    rect(cell, (0.004, -0.012, 0.072, 0.006), M2)
+    # Bottom WLA contact: on gate A, 16 nm clear of the west placement seam,
+    # the mirror image of the top contact on gate B.  It used to start on the
+    # seam (LIG 0..37 nm, V0 on the overhang at 6..24 nm).  Columns are placed
+    # mirrored about that seam, so two such contacts met edge to edge and their
+    # LIG was one strap: adjacent WLA wordlines were shorted in pairs in every
+    # row, and the last before a tap or corner to the corner's vss! track.
+    # The lower storage strap jogs east around this M1 landing below.  The
+    # 0.5 nm south shift gives the required 15 nm corner spacing to the LISD
+    # above.  With the V0 on the gate the LIG needs only its 1 nm extension
+    # past GATE (LIG.GATE.EX.1), which leaves 32 nm between mirrored
+    # neighbours, over the 31 nm LIG.S.4-5 asks of two short edges.
+    rect(cell, (0.016, -0.0115, 0.037, 0.0045), LIG)
+    rect(cell, (0.018, -0.0125, 0.036, 0.0055), V0)
+    rect(cell, (0.018, -0.017, 0.036, 0.011), M1)
+    rect(cell, (0.018, -0.012, 0.036, 0.006), V1)
+    rect(cell, (0.016, -0.012, 0.072, 0.006), M2)
     rect(cell, (0.045, -0.012, 0.063, 0.006), V2)
 
     # Keep the top WLA landing away from the east/west placement seam.  The
     # upper storage strap jogs around this M1 landing below.
     # The 1 nm north shift gives 15 nm corner spacing to the LISD below.
-    rect(cell, (0.071, 0.2655, 0.096, 0.2815), LIG)
+    rect(cell, (0.071, 0.2655, 0.092, 0.2815), LIG)
     rect(cell, (0.072, 0.2645, 0.090, 0.2825), V0)
     rect(cell, (0.072, 0.2585, 0.090, 0.2865), M1)
     rect(cell, (0.072, 0.2635, 0.090, 0.2815), V1)
@@ -350,7 +359,23 @@ def add_storage_straps(cell: gdstk.Cell) -> None:
     # required diagonal V0 spacing to the adjacent WLA landing.
     for cy in (-0.0675, 0.052, 0.2285, 0.3375):
         rect(cell, (0.045, cy - 0.009, 0.063, cy + 0.009), V0)
-    rect(cell, (0.045, -0.0815, 0.063, 0.066), M1)
+    # The lower M1 jogs right while passing the bottom WLA landing (x=18..36),
+    # as the upper one jogs left past the top landing: 18 nm to the landing,
+    # 27 nm to the bitline M1 at x=99, landings unmoved under both storage V0.
+    cell.add(
+        gdstk.Polygon(
+            (
+                (0.045, -0.0815), (0.063, -0.0815),
+                (0.063, -0.0715), (0.072, -0.0715),
+                (0.072, 0.056), (0.063, 0.056),
+                (0.063, 0.066), (0.045, 0.066),
+                (0.045, 0.038), (0.054, 0.038),
+                (0.054, -0.0535), (0.045, -0.0535),
+            ),
+            layer=M1,
+            datatype=0,
+        )
+    )
     # The upper M1 is one polygon with 18 nm-wide landing/bypass sections.  It
     # jogs left only while passing the top WLA landing, preserving the prior
     # 18 nm clearance without displacing either storage V0 toward GATE.
@@ -1400,11 +1425,19 @@ def verify_rules(cell: gdstk.Cell) -> None:
                     "LISD contains redundant overlapping polygons")
     if cell.name == CELL_NAME:
         wla_lig = {
-            (0.000, -0.0115, 0.037, 0.0045),
-            (0.071, 0.2655, 0.096, 0.2815),
+            (0.016, -0.0115, 0.037, 0.0045),
+            (0.071, 0.2655, 0.092, 0.2815),
         }
         _assert(wla_lig <= {bbox(poly) for poly in _layer_polygons(cell, LIG)},
                 "WLA LIG landings do not preserve 15 nm LISD spacing")
+        # Columns are placed mirrored about both placement seams, so a gate
+        # contact that reached one would meet its neighbour's and short two
+        # wordlines.  Both WLA landings keep 16 nm: 32 nm between neighbours,
+        # which also clears LIG.S.4-5 (31 nm between two short LIG edges).
+        x_lo, _, x_hi, _ = edge_boundary(cell)
+        for x0, _y0, x1, _y1 in wla_lig:
+            _assert(x0 - x_lo >= 0.016 - 1e-9 and x_hi - x1 >= 0.016 - 1e-9,
+                    "a WLA LIG landing is within 16 nm of a placement seam")
         storage_lisd = {
             (0.042, -0.0945, 0.066, -0.0405),
             (0.042, 0.0235, 0.066, 0.118),

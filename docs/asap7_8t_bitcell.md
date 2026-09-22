@@ -372,10 +372,25 @@ centered at x=54 nm between the two GATE columns, giving 3 nm of LISD enclosure
 on both sides and no LISD-to-GATE overlap. The upper core V0 is shifted 1 nm
 south within its LISD solely to preserve diagonal V0 spacing to WLA; it remains
 x-centered. The upper storage M1 strap jogs left between its two centered
-landings to pass the existing WLA contact without moving that contact toward
-an east/west placement seam. Verification rejects
+landings to pass the top WLA contact without moving that contact toward
+an east/west placement seam, and the lower strap jogs right past the bottom
+one for the same reason. Verification rejects
 same-layer LISD overlap, off-center storage V0 landings, or any LISD-to-GATE
 intersection.
+
+Both WLA gate contacts sit on their gate, V0 included, with the LIG reaching
+only its 1 nm past GATE: x=16..37 nm on gate A at the bottom, x=71..92 nm on
+gate B at the top, each 16 nm from its placement seam. Columns are placed
+mirrored about both seams, so that is 32 nm between neighbouring contacts,
+which clears the 31 nm the deck asks of two short LIG edges. The bottom contact
+used to start *on* the west seam (LIG 0..37 nm, its V0 on the overhang at
+6..24 nm, to keep its M1 landing clear of the straight Q strap). Two mirrored
+copies then met edge to edge and their LIG was one strap: adjacent WLA
+wordlines were shorted in pairs in every row, live and dummy, and the last
+before a tap or a corner to the corner cell's `vss!` track
+(`docs/macro_verification.md`). Verification now rejects a WLA landing within
+16 nm of a seam. Moving it also removed the V0, V1 and M1 spacing violations
+the seam-hugging stack made with its own mirror image.
 
 The lower and upper WLA LIG landings are displaced 0.5 nm south and 1 nm north,
 respectively, to maintain the public deck's 15 nm LIG-to-LISD corner spacing.
