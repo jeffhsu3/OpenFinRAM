@@ -38,15 +38,20 @@ INPUT_PINS = ("SEL", "B0", "B1", "B2", "B3")
 WL_PINS = ("WL0", "WL1", "WL2", "WL3")
 
 #: Every candidate is judged on all of these, so it cannot overfit one size.
+#: The drivers keep their full input straps: `DriverSliceSpec` would otherwise
+#: trim them to where *its* router lands, and a candidate may land anywhere.
 SPECS: dict[str, DriverSliceSpec] = {
     "small": DriverSliceSpec(
-        nand=NandSpec(rows=((6, 4),)), inverter=InverterSpec(rows=((8, 8), (4, 4)))
+        nand=NandSpec(rows=((6, 4),)),
+        inverter=InverterSpec(rows=((8, 8), (4, 4))),
+        trim_driver_input=False,
     ),
     "one_row": DriverSliceSpec(
         nand=NandSpec(rows=((4, 2),), vt="lvt"),
         inverter=InverterSpec(rows=((6, 6),), vt="lvt"),
+        trim_driver_input=False,
     ),
-    "released": DriverSliceSpec(),
+    "released": DriverSliceSpec(trim_driver_input=False),
 }
 
 

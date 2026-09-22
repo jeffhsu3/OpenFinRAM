@@ -84,6 +84,49 @@ python3 scripts/gen_table3_report.py \
     -o reports/table3_timing_comparison.md
 ```
 
+## `verify_macro.py` — transistor LVS and device DRC of an assembled macro
+
+```bash
+.venv/bin/python scripts/verify_macro.py results/sram_x4x2x1_<stamp> \
+    --baseline tests/golden/asap7_2rw_macro_verification.json
+```
+
+KLayout LVS (chipforge_asap7's ASAP7 deck) of the macro GDS against the `.sp`
+written beside it, then the public ASAP7 DRC runset over the whole macro; about
+40 s for 4x2. This is the `signoff_lvs` and `device_drc` that
+`compile_asap7_2rw.py` records as `not_run`. Everything below the top level
+matches; the top does not, because of two shorts to VSS that the metal-graph
+check cannot see. Method, findings and limits are in
+`docs/macro_verification.md`; `tests/test_macro_verification.py` holds the
+result against the baseline.
+
+## `simulate_macro.py` — whole-macro read/write simulation
+
+```bash
+.venv/bin/python scripts/simulate_macro.py results/sram_x4x2x1_<stamp> [--spaced] [--period 1e-9] [--corner SS]
+```
+
+Every transistor of the compiler's `.sp`, driven only at its pins, in Xyce:
+cells preloaded through `.IC`, a two-port program checked against a software
+memory model, the final state of every cell compared, timing from the clock
+edge, and two hazards reported by name. Five to six minutes. With an idle cycle
+after each write everything works; back to back, a read straight after a write
+to the same column is overwritten with the D pins, because `wrena = clk`
+glitches for one clock-to-Q. Works down to a 0.7 ns clock, against a Liberty
+`min_period` of 0.157. See `docs/macro_simulation.md`.
+
+## `characterize_wl_driver.py` — what should drive a wordline
+
+```bash
+.venv/bin/python scripts/characterize_wl_driver.py [--cells 16,32,64,128,256] [--wire xact|setrc] [--corner SS]
+```
+
+Xyce, fifteen seconds: an RC-ladder wordline of real preloaded 8T cells, driven
+by an ideal source, by the compiler's `AND2x2` + `BUFx4`/`x8`/`x24`, and by
+chipforge_asap7's `DriverSliceSpec` sized by `size_decoder`. The slice is 12 to
+36 ps faster at every length; past 64 cells the wire sets the delay, and the two
+M3 resistances in the repo differ by 5.4. See `docs/wordline_driver_study.md`.
+
 ## Periphery status and remaining signoff
 
 The open-source `ctrl_decode` flow now preserves and checks its 108 physical
