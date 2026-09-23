@@ -1,6 +1,8 @@
 """Fast physical compiler contract tests; no router or simulator required."""
 
 import json
+from collections import defaultdict
+import re
 from pathlib import Path
 import sys
 import tempfile
@@ -10,7 +12,8 @@ import gdstk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from asap7_connectivity import MetalGraph
-from compile_asap7_2rw import abstract, build_leaf, check_route_drc, leaf_net, strip_net, verify
+from compile_asap7_2rw import abstract, build_leaf, check_route_drc, leaf_net, strip_net, supply, verify
+from asap7_connectivity import METALS
 from mapped_verilog_to_spice import convert
 
 
@@ -177,6 +180,49 @@ class PhysicalMacroTests(unittest.TestCase):
         self.assertEqual(strip_net("vss", 0, "hi", 4), "vss")
         with self.assertRaisesRegex(RuntimeError, "unmapped"):
             strip_net("ysel_A[0]", 0, "hi", 4)
+
+    def test_tiles_between_a_stacks_ends_carry_no_dummy_rows(self):
+        import generate_asap7_8t_iocolumn as columns
+        from asap7_connectivity import MetalGraph
+
+        heights = {}
+        for bottom in (False, True):
+            for top in (False, True):
+                tile = build_leaf(8, 8, bottom=bottom, top=top)
+                _, y0, _, y1 = columns.boundary_box(tile)
+                heights[(bottom, top)] = round(y1 - y0, 4)
+        self.assertEqual(heights, {(False, False): 2.376, (True, False): 2.97,
+                                   (False, True): 2.97, (True, True): 3.564})  # fmt: skip
+        # Three tiles abutted: nothing a tile does not name crosses a seam
+        # (a bit's sense lines once did, and a write driver's D reached the
+        # next bit's), and no two per-bit nets meet.
+        tiles = [build_leaf(8, 8, bottom=True, top=False), build_leaf(8, 8, bottom=False, top=False),
+                 build_leaf(8, 8, bottom=False, top=True)]  # fmt: skip
+        stack, y, seams, labels = gdstk.Cell("stack"), 0.0, [], []
+        shared = re.compile(r"(ysel|yseln|blprechn|wrena|wrenan|oe_out|oeb_out)[AB](\[\d\])?|sae_[AB]|WL[AB]\[\d+\]")
+        for k, tile in enumerate(tiles):
+            _, y0, _, y1 = columns.boundary_box(tile)
+            stack.add(gdstk.Reference(tile, (0, y - y0)))
+            for lab in tile.labels:  # the tile's own pins
+                if lab.layer in METALS:
+                    text = lab.text if supply(lab.text) or shared.fullmatch(lab.text) else f"T{k}_{lab.text}"
+                    labels.append(gdstk.Label(text, (lab.origin[0], lab.origin[1] + y - y0), layer=lab.layer))
+            y += y1 - y0
+            seams.append(y)
+        graph = MetalGraph(stack)
+        nets = defaultdict(set)
+        for lab in labels:
+            nets[graph.label_root(lab)].add(supply(lab.text) or lab.text)
+        self.assertEqual([sorted(v) for v in nets.values() if len(v) > 1], [])
+        extent = defaultdict(lambda: [9.0, -9.0])
+        for i, polygon in enumerate(graph.polygons):
+            if polygon.layer in METALS:
+                (_, a), (_, b) = polygon.bounding_box()
+                e = extent[graph.root(i)]
+                e[0], e[1] = min(e[0], a), max(e[1], b)
+        crossing = [r for r, (a, b) in extent.items() if r not in nets
+                    and any(a < seam - 0.05 and b > seam + 0.05 for seam in seams[:-1])]  # fmt: skip
+        self.assertEqual(crossing, [])
 
     def test_abutted_nets_are_probed_but_not_pins(self):
         cell = gdstk.Cell("abutted")

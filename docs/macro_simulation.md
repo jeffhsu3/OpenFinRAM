@@ -280,3 +280,10 @@ ps spaced, 228-233 back to back; 1934 / 1993 fJ. Xyce takes about 80 min
 per program at this size. The testbench now finds each column group's data
 bit by following its `DA` pin to the top-level `D_A` (it had assumed one bit
 per datapath half, true only for 2-bit macros).
+
+## Dummy rows only at each stack's ends (2026-09-23)
+
+x4x2: both programs pass (the slow test). x8x8 on the 33.22 um floorplan:
+spaced program PASS, all 256 cells, no hazards, clk to wordline 114 / 182 ps,
+to Q 228-305 ps, 1934 fJ: the same numbers as before, which is what a
+schematic says about a floorplan change.

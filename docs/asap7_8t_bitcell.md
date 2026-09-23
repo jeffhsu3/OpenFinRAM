@@ -237,6 +237,36 @@ of 3.89, the macro reads 15 to 29 ps sooner at Q, the spaced program's energy
 is 8 % lower, and every read and cell is right. The write-enable glitch is
 unchanged.
 
+### Dummy rows only at a stack's ends (2026-09-23)
+
+A tile used to carry a dummy row above and below its four array rows, a
+leftover from when every bit stood alone in a routing channel; abutted, two
+dummy rows sat between every pair of bits, a third of each stack's height.
+Now only a stack's first tile carries the bottom one and its last the top one
+(`build_leaf(..., bottom=, top=)`; the assembler abstracts the variants it
+needs as `dp_column`, `dp_column_endb`, `_endt` and `_noend`), and the tiles
+between abut array row to array row, cap to cap and IO block to IO block,
+rail on rail (both block edges are VSS). The array rows keep alternating,
+since a tile holds an even count, and the blocks' half-fin-pitch overhang
+makes one block end exactly where the next begins.
+
+Abutting the IO blocks exposed two ways a bit's metal reached the next bit's:
+the write driver's `D` column ran to the block's top edge, onto the next
+block's `SA` stub; and the mux group's `SA`/`SAN` tracks ran the group's full
+height into the next bit's. chipforge now stops the write driver's control
+columns an M3 tip-to-tip space (31 nm) short of the top edge, and draws the
+sense lines in the leaf so a group opens them 16 nm short of its outer ends;
+the select and precharge tracks still run on, one net per bank, so a stack's
+selects become one continuous track. The public deck on three abutted tiles:
+307 markers against 571 for the same tiles apart, no new rule at the seams.
+`tests/tools/test_2rw_physical.py` checks that no per-bit net or unnamed
+component crosses a seam. x8x8 goes from 40.35 to 33.22 um tall.
+
+A block's abstract carries two sizes: the LEF SIZE is its bounding box,
+overhangs included, which the router must see; its GDS boundary is the cell's
+own placement boundary, so abutted tiles meet on one clean outline instead of
+overlapping bounding boxes.
+
 ### The dummy rows' stubs are tied in the tile (2026-09-22)
 
 The corner and tap-slot cells of a tile's two dummy rows keep bitline and

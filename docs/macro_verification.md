@@ -302,3 +302,13 @@ spacing. Getting there found two things the 2-bit macro could not:
   controller's pins at the macro edge). The assembler now doubles the margin
   on a routing failure, up to `--max-margin` (1.2 um), and records the one
   it used (`margin_um`); x8x8 took 0.6.
+
+## Dummy rows only at each stack's ends (2026-09-23)
+
+With the interior dummy rows removed (`asap7_8t_bitcell.md`, "Dummy rows only
+at a stack's ends"), strict LVS matches all three sizes: `sram_x4x2x1` 4.70 x
+17.93 um (unchanged: one tile per stack keeps both rows), `sram_x8x8x1` 5.74 x
+33.22 (was 40.35), `sram_x16x16x1` 6.00 x 52.71 (was 69.34). DRC 403 / 697 /
+1053; the changes are all in the top-level M8/M9 routing, which now carries
+each tile's nets over the blocks rather than beside its dummy rows, with no
+gate, fin or local-interconnect rule moving. Baseline rewritten from x4x2.

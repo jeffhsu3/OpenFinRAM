@@ -206,7 +206,21 @@ def abstract(cell, name, signal_labels, abutted=None):
             "point": point,
             "private": True,
         }
-    master.add(gdstk.rectangle((0, 0), (width, height), layer=100))
+    # The GDS boundary is the cell's own placement boundary where it has one,
+    # so abutted blocks show one clean outline; the LEF SIZE above stays the
+    # bounding box, overhangs included, which is what the router must see.
+    own = [
+        p.bounding_box() for p in cell.polygons if p.layer == 100 and p.datatype == 0
+    ]
+    if own:
+        (bx0, by0), (bx1, by1) = max(
+            own, key=lambda b: (b[1][0] - b[0][0]) * (b[1][1] - b[0][1])
+        )
+        master.add(
+            gdstk.rectangle((bx0 - ox, by0 - oy), (bx1 - ox, by1 - oy), layer=100)
+        )
+    else:
+        master.add(gdstk.rectangle((0, 0), (width, height), layer=100))
     return master, terminals, "\n".join(lef), (width, height)
 
 
@@ -442,8 +456,22 @@ def build_wordline_strips(lib, leaf, wordlines, bits):
     return pairs, load
 
 
-def build_leaf(wordlines, tap_pitch):
-    """``iocol A | cap | array of `wordlines` | iocol B`` with its dummy end rows."""
+def ends_tag(bottom, top):
+    return {
+        (True, True): "",
+        (True, False): "_endb",
+        (False, True): "_endt",
+        (False, False): "_noend",
+    }[(bottom, top)]
+
+
+def build_leaf(wordlines, tap_pitch, bottom=True, top=True):
+    """``iocol A | cap | array of `wordlines` | iocol B``, with a dummy row below and/or above.
+
+    In a stack of abutted tiles only the stack's two ends need a dummy row
+    (its outer end and the end facing its driver strip); the tiles between
+    abut array row to array row, their IO blocks rail to rail.
+    """
     gds = REPO / "tech/gds"
     lib = arrays.build_library(
         gds / "sram_cell_8t.gds",
@@ -469,7 +497,7 @@ def build_leaf(wordlines, tap_pitch):
     caps = columns.build_cap_array(lib, edges)
     array = cells[f"array_x{wordlines}x4_tap{tap_pitch}_sram_8t"]
     leaf = columns.build_colgrp(lib, array, io_a, io_b, caps, wordlines)
-    capped = lib.new_cell("capped_" + leaf.name)
+    capped = lib.new_cell("capped_" + leaf.name + ends_tag(bottom, top))
     capped.add(gdstk.Reference(leaf))
     for label in leaf.labels:
         capped.add(columns.clone_label(label, label.text, tuple(label.origin)))
@@ -481,7 +509,7 @@ def build_leaf(wordlines, tap_pitch):
     blank = edges["FILLER_BLANK_8t"]
     fx0, fy0, fx1, fy1 = columns.boundary_box(blank)
     half_width = fx1 - fx0
-    ends = lib.new_cell("dp_array_end_rows")
+    ends = lib.new_cell("dp_array_end_rows" + ends_tag(bottom, top))
     # The array has one capped end, port A's; a dummy row runs above and below
     # it from there, with a corner over the cap and blanks over the filler.
     # Port B's end meets its IO on the array's last tap, as an IO face always
@@ -489,7 +517,7 @@ def build_leaf(wordlines, tap_pitch):
     array_x = io_a_width + cap_width
     corner_x = array_x - slot_width
     filler_x = io_a_width
-    for bottom in (False, True):
+    for bottom in [b for b, wanted in ((False, top), (True, bottom)) if wanted]:
         y = -pitch if bottom else 4 * pitch
         row = edge_cells.build_dummy_vertical_array(
             lib, edges, wordlines, tap_pitch, mirror_x=False, mirror_y=bottom
@@ -508,9 +536,12 @@ def build_leaf(wordlines, tap_pitch):
                     x_reflection=bottom,
                 )
             )
-    capped.add(gdstk.Reference(ends))
-    tie_end_row_stubs(capped)
-    columns.rect(capped, (0, -pitch, width, 5 * pitch), 100)
+    if ends.references:
+        capped.add(gdstk.Reference(ends))
+        tie_end_row_stubs(capped)
+    columns.rect(
+        capped, (0, -pitch if bottom else 0, width, (5 if top else 4) * pitch), 100
+    )
     return capped
 
 
@@ -745,15 +776,31 @@ def run(args):
     work.mkdir(parents=True, exist_ok=True)
     array_wordlines = 2 * args.wordlines
     tap_pitch = math.gcd(array_wordlines, 16)
-    leaf = build_leaf(array_wordlines, tap_pitch)
-    leaf_labels = [label for label in leaf.labels if not supply(label.text)]
 
     def is_wordline(net):
         return WORDLINE.fullmatch(net) is not None
 
-    hard, pins, lef, size = abstract(
-        leaf, "dp_column", leaf_labels, abutted=is_wordline
-    )
+    # Only a stack's two ends carry a dummy row: its first tile the bottom
+    # one, its last the top one, the tiles between none, so they abut array
+    # row to array row and IO block to IO block.
+    half_bits = args.bits // 2
+
+    def ends_of(index):
+        return (index == 0, index == half_bits - 1)
+
+    variants = {}
+    for index in range(half_bits):
+        bottom, top = ends_of(index)
+        if (bottom, top) in variants:
+            continue
+        cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top)
+        labels = [label for label in cell.labels if not supply(label.text)]
+        variants[(bottom, top)] = (cell, *abstract(
+            cell, "dp_column" + ends_tag(bottom, top), labels, abutted=is_wordline
+        ))  # fmt: skip
+    leaf = next(iter(variants.values()))[0]
+    size = next(iter(variants.values()))[4]
+    lef = "\n".join(v[3] for v in variants.values())
     strip_lib = gdstk.Library(unit=1e-6, precision=1e-10)
     strip_pairs, slice_load = build_wordline_strips(
         strip_lib, leaf, args.wordlines, args.bits
@@ -775,7 +822,8 @@ def run(args):
     controller, ctrl_pins, ctrl_lef, ctrl_size = abstract(
         ctrl, "dp_controller", ctrl_labels
     )
-    masters = {"dp_column": (hard, pins), "dp_controller": (controller, ctrl_pins)}
+    masters = {v[1].name: (v[1], v[2]) for v in variants.values()}
+    masters["dp_controller"] = (controller, ctrl_pins)
     masters.update({name: (cell, cell_pins) for name, (cell, cell_pins, _, _) in
                     ((m[0].name, m) for m in pair_masters.values())})  # fmt: skip
     (work / "blocks.lef").write_text(
@@ -788,7 +836,11 @@ def run(args):
         + "\nEND LIBRARY\n"
     )
     library = gdstk.Library(unit=1e-6, precision=1e-10)
-    for c in (hard, controller, *(m[0] for m in pair_masters.values())):
+    for c in (
+        *(v[1] for v in variants.values()),
+        controller,
+        *(m[0] for m in pair_masters.values()),
+    ):
         for dep in [c, *c.dependencies(True)]:
             if dep.name not in {p.name for p in library.cells}:
                 library.add(dep)
@@ -817,17 +869,19 @@ def run(args):
     width = max(
         (args.banks - 1) * bank_stride + size[0] + 2 * margin, ctrl_size[0] + 2 * margin
     )
+
     # Bottom to top: the lower stack of tiles, abutted at the tile's boundary
     # pitch; its strip pair facing down into it; a channel; the controller; a
     # channel; the upper stack's pair facing up; the upper stack.  A tile's
     # IO columns are shorter than its array, so the stacks keep a channel per
     # tile on each IO side for the controls and data.
-    bx0, by0, bx1, by1 = columns.boundary_box(leaf)
-    tile_pitch = by1 - by0
-    tile_ox, tile_oy = bbox_origin(leaf)
+    def tile_height(index):
+        _, y0, _, y1 = columns.boundary_box(variants[ends_of(index)][0])
+        return y1 - y0
+
+    offsets = [sum(tile_height(k) for k in range(index)) for index in range(half_bits)]
     pair_height = columns.boundary_box(strip_pairs["hi"])[3]
-    half_bits = args.bits // 2
-    stack = half_bits * tile_pitch
+    stack = offsets[-1] + tile_height(half_bits - 1)
     y_lo_tiles = margin_y
     y_lo_strips = y_lo_tiles + stack
     y_ctrl = y_lo_strips + pair_height + channel
@@ -846,13 +900,16 @@ def run(args):
         x_bank = margin + bank * bank_stride
         for bit in range(args.bits):
             inst = f"COL_{bank}_{bit}"
-            y_tile = (y_lo_tiles + bit * tile_pitch if bit < half_bits
-                      else y_hi_tiles + (bit - half_bits) * tile_pitch)  # fmt: skip
+            index = bit % half_bits
+            tile, hard, pins = variants[ends_of(index)][:3]
+            bx0, by0, _, _ = columns.boundary_box(tile)
+            tile_ox, tile_oy = bbox_origin(tile)
+            y_tile = (y_lo_tiles if bit < half_bits else y_hi_tiles) + offsets[index]
             origin = (x_bank - (bx0 - tile_ox), y_tile - (by0 - tile_oy))
             resolve = functools.partial(
                 leaf_net, bank=bank, bit=bit, wordlines=args.wordlines, bits=args.bits
             )
-            instances.append((inst, "dp_column", origin, resolve))
+            instances.append((inst, hard.name, origin, resolve))
             for pin, info in pins.items():
                 if info.get("private") or info.get("abutted"):
                     continue
