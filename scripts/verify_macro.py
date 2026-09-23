@@ -47,7 +47,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # devices the generator splits across cells, and the parametric IO block's
 # cells, which the compiler's deck carries as one flat subcircuit per port.
 BITCELLS = ("sram_cell_*", "blmux_*", "sarow_*", "wrdrv_*", "outlatch_*", "filler_fin_*", "tap_fin_*",
-            "wl_slice_*", "nand2_fin_*", "inv_fin_*", "wl_via*")  # fmt: skip
+            "wl_slice_*", "nand2_fin_*", "inv_fin_*", "wl_via*",
+            # A strip's slices take their predecode inputs from the top-level
+            # routing, one pin per slice, so the strip is compared in place.
+            "wl_strip_*", "wl_strips_*")  # fmt: skip
 
 
 def _lvs_findings(result) -> dict:

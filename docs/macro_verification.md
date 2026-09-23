@@ -284,3 +284,21 @@ alone goes 220 -> 215, with one new `LIG.S.4-5` where the last dummy-row
 corner meets the port-B IO block, which overhangs the column by half a fin
 pitch (an unmirrored corner there clears it but breaks the gate pitch, +48
 `GATE.S.1`). The test now asserts the strict match.
+
+## Larger macros: x8x8 and x16x16 (2026-09-23)
+
+`sram_x8x8x1` (5.74 x 40.35 um, c16 slices, two per strip) and
+`sram_x16x16x1` (6.00 x 69.34 um, c32, four per strip) both build, route
+and pass **strict LVS**; DRC 660 and 1034 markers, led by M4/M8 routing
+spacing. Getting there found two things the 2-bit macro could not:
+
+* A strip's slices do not share their predecode inputs: each slice's
+  `B0..B3` is its own metal, and the strip had labelled them once, so every
+  slice after the first had floating inputs (LVS: `wl_strip_c16_x2`
+  nomatch). Every slice's `B<j>` is now a pin the router ties to `sel_lo<j>`,
+  and `verify_macro.py` flattens the strips so that top-level wiring is in the
+  comparison. (chipforge's two-butted-slice test checks DRC only.)
+* x8x8 does not route at a 0.3 um margin (maze failures beside the
+  controller's pins at the macro edge). The assembler now doubles the margin
+  on a routing failure, up to `--max-margin` (1.2 um), and records the one
+  it used (`margin_um`); x8x8 took 0.6.

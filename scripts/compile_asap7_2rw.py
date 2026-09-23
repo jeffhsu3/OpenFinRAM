@@ -341,11 +341,15 @@ def build_wordline_strips(lib, leaf, wordlines, bits):
             strip.add(
                 gdstk.Label(f"WL[{4 * k + j}]", (x0 + x, y), layer=layer, texttype=251)
             )
-    for j in range(
-        4
-    ):  # B<j> is every slice's; label it once, the abstract joins the rest by metal
-        x, y, layer = pins[f"B{j}"]
-        strip.add(gdstk.Label(f"B[{j}]", (starts[0] + x, y), layer=layer, texttype=251))
+    # Every slice's B<j> is its own metal: the slices' predecode inputs do
+    # not join across a slice boundary, so each is a pin and the router ties
+    # them to the controller's sel_lo<j>.
+    for x0_slice in starts:
+        for j in range(4):
+            x, y, layer = pins[f"B{j}"]
+            strip.add(
+                gdstk.Label(f"B[{j}]", (x0_slice + x, y), layer=layer, texttype=251)
+            )
     spans = [(x0, x0 + SLICE_WIDTH) for x0 in starts]
     gaps = [
         (spans[0][0] - WORDLINE_PITCH, spans[0][0]),
@@ -418,9 +422,10 @@ def build_wordline_strips(lib, leaf, wordlines, bits):
             for k in range(rows // 4):
                 sx, sy, layer = pins["SEL"]
                 label(f"SEL_{port}[{k}]", starts[k] + sx, seam + sign * sy, layer)
-            for j in range(4):
-                x, y, layer = pins[f"B{j}"]
-                label(f"B_{port}[{j}]", starts[0] + x, seam + sign * y, layer)
+            for x0_slice in starts:  # every slice's, as in the strip
+                for j in range(4):
+                    x, y, layer = pins[f"B{j}"]
+                    label(f"B_{port}[{j}]", x0_slice + x, seam + sign * y, layer)
         for i in range(rows):
             x, x5 = tracks[("A", i)], tracks[("B", i)]
             rect(x - 0.009, seam + height, x + 0.009, pair_height, 30)
@@ -961,7 +966,7 @@ def run(args):
             timeout=args.route_timeout,
         )
     if result.returncode:
-        raise RuntimeError(f"macro routing failed; see {work}/route.log")
+        raise RoutingFailed(f"macro routing failed; see {work}/route.log")
     # Distribution KLayout bindings may target system Python, while gdstk is
     # installed in a virtual environment with a different Python ABI.
     subprocess.run(
@@ -1001,6 +1006,7 @@ def run(args):
         "size_um": [width, height],
         "banks": args.banks,
         "bits": args.bits,
+        "margin_um": args.margin,
         "floorplan": "controller band between two stacks of abutted column tiles "
         "(port A IO | array | port B IO), a wordline driver strip pair on each side",
         "wordlines_per_half": args.wordlines,
@@ -1091,7 +1097,34 @@ def main():
         default=None,
         help="top/bottom margin, if not --margin",
     )
-    run(parser.parse_args())
+    parser.add_argument(
+        "--max-margin",
+        type=float,
+        default=1.2,
+        help="widen the margin (doubling) up to this if routing fails",
+    )
+    args = parser.parse_args()
+    # The margin is where the macro pins land and the controller's outputs
+    # turn; how much the router needs depends on where it put the pins,
+    # which is not known before routing.  Start tight, widen on failure.
+    while True:
+        try:
+            run(args)
+            return
+        except RoutingFailed as error:
+            wider = round(args.margin * 2, 3)
+            if wider > args.max_margin:
+                raise RuntimeError(
+                    f"{error}; margin {args.margin} um is the widest tried"
+                ) from error
+            print(
+                f"routing failed at a {args.margin} um margin; retrying at {wider} um"
+            )
+            args.margin = wider
+
+
+class RoutingFailed(RuntimeError):
+    """OpenROAD could not route the assembled macro."""
 
 
 if __name__ == "__main__":

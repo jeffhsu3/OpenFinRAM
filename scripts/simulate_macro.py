@@ -64,7 +64,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BITCELL = "sram_cell_8t"
-XYCE_CANDIDATES = (os.environ.get("XYCE"), "/home/jeff/iv4/local/xyce-14.4/bin/Xyce", shutil.which("Xyce"))
+XYCE_CANDIDATES = (
+    os.environ.get("XYCE"),
+    "/home/jeff/iv4/local/xyce-14.4/bin/Xyce",
+    shutil.which("Xyce"),
+)
 
 
 # ── Netlist ──────────────────────────────────────────────────────────────────
@@ -90,7 +94,9 @@ def for_xyce(text: str) -> str:
     for line in text.splitlines():
         if line[:1] in "Mm":
             copies = 1
-            for match in re.finditer(r"\b(?:nf|m)\s*=\s*(\d+)\b", line, flags=re.IGNORECASE):
+            for match in re.finditer(
+                r"\b(?:nf|m)\s*=\s*(\d+)\b", line, flags=re.IGNORECASE
+            ):
                 copies *= int(match[1])
             line = re.sub(r"\s+(?:w|nf|m)\s*=\s*\S+", "", line, flags=re.IGNORECASE)
             if copies > 1:
@@ -133,7 +139,10 @@ def bitcells(subckts: dict[str, Subckt], top: str) -> list[dict]:
             if child is None:
                 continue
             here = [*path, inst]
-            local = {pin.lower(): bound.get(net.lower(), ":".join([*path, net])) for pin, net in zip(child.pins, nets)}
+            local = {
+                pin.lower(): bound.get(net.lower(), ":".join([*path, net]))
+                for pin, net in zip(child.pins, nets)
+            }
             if ref.lower() == BITCELL:
                 found.append({"path": ":".join(here), "nets": local})
             else:
@@ -143,10 +152,41 @@ def bitcells(subckts: dict[str, Subckt], top: str) -> list[dict]:
     return found
 
 
+def top_level_net(
+    subckts: dict[str, Subckt], top: str, path: str, pin: str
+) -> str | None:
+    """The top-level net the instance at `path` (``Xa:Xb``) has on its `pin`, or None if internal."""
+    names = path.split(":")
+    cell, trail = top.lower(), []
+    for name in names:
+        inst = next(
+            (i for i in subckts[cell].instances if i[0].lower() == name.lower()), None
+        )
+        if inst is None:
+            return None
+        trail.append((subckts[cell], inst))
+        cell = inst[2].lower()
+    pins = [p.lower() for p in subckts[cell].pins]
+    if pin.lower() not in pins:
+        return None
+    net = pin.lower()
+    for parent, (_, nets, ref) in reversed(trail):
+        child_pins = [p.lower() for p in subckts[ref.lower()].pins]
+        net = nets[child_pins.index(net)].lower()
+        parent_pins = [p.lower() for p in parent.pins]
+        if parent is subckts[top.lower()]:
+            return net
+        if net not in parent_pins:
+            return None
+    return net
+
+
 # ── Address map ──────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class Geometry:
-    wordlines: int  # NUM_WL: rows one row-select field covers, half the array's wordlines
+    wordlines: (
+        int  # NUM_WL: rows one row-select field covers, half the array's wordlines
+    )
     mux: int
     bits: int
 
@@ -189,9 +229,15 @@ def locate(cells: list[dict], wordlines: int) -> None:
     checked: a cell on ``wl_a_lo[i]`` has to be on ``wl_b_lo[i]``.
     """
     for cell in cells:
-        wordline = re.fullmatch(r"(?:.*:)?wl_a_(lo|hi)\[(\d+)\]", cell["nets"]["wla"], re.IGNORECASE)
-        other = re.fullmatch(r"(?:.*:)?wl_b_(lo|hi)\[(\d+)\]", cell["nets"]["wlb"], re.IGNORECASE)
-        bitline = re.fullmatch(r"(.*):bl_a\[(\d+)\]", cell["nets"]["bla"], re.IGNORECASE)
+        wordline = re.fullmatch(
+            r"(?:.*:)?wl_a_(lo|hi)\[(\d+)\]", cell["nets"]["wla"], re.IGNORECASE
+        )
+        other = re.fullmatch(
+            r"(?:.*:)?wl_b_(lo|hi)\[(\d+)\]", cell["nets"]["wlb"], re.IGNORECASE
+        )
+        bitline = re.fullmatch(
+            r"(.*):bl_a\[(\d+)\]", cell["nets"]["bla"], re.IGNORECASE
+        )
         if (not wordline or not bitline or not other or other[2] != wordline[2]
                 or other[1].lower() != wordline[1].lower()):  # fmt: skip
             raise ValueError(f"cannot place {cell['path']}: {cell['nets']}")
@@ -212,7 +258,9 @@ def pattern_of(address: int) -> str:
 
 
 def background(address: int, bit: int) -> int:
-    return {"zeros": 0, "ones": 1, "0101": (bit + 1) & 1, "1010": bit & 1}[pattern_of(address)]
+    return {"zeros": 0, "ones": 1, "0101": (bit + 1) & 1, "1010": bit & 1}[
+        pattern_of(address)
+    ]
 
 
 @dataclass(frozen=True)
@@ -223,33 +271,54 @@ class Op:
 
 
 def col0_top_hint(g: Geometry) -> int:
-    return next(addr for addr in range(g.words) if g.split(addr)[:2] == (1, 0) and pattern_of(addr) != "zeros")
+    return next(
+        addr
+        for addr in range(g.words)
+        if g.split(addr)[:2] == (1, 0) and pattern_of(addr) != "zeros"
+    )
 
 
 def default_program(g: Geometry, *, spaced: bool = False) -> list[tuple[Op, Op]]:
     mask = (1 << g.bits) - 1
     alternating = sum(1 << bit for bit in range(1, g.bits, 2))  # 1010..
 
-    def find(pattern: str, half: int, *, col: int | None = None, avoid: tuple[int, ...] = ()) -> int:
+    def find(
+        pattern: str, half: int, *, col: int | None = None, avoid: tuple[int, ...] = ()
+    ) -> int:
         for address in range(g.words):
             where = g.split(address)
             if (pattern_of(address) == pattern and where[0] == half and address not in avoid
                     and (col is None or where[1] == col)):  # fmt: skip
                 return address
-        raise ValueError(f"no {pattern} word in half {half}; change the background hash")
+        raise ValueError(
+            f"no {pattern} word in half {half}; change the background hash"
+        )
 
     ones_top, ones_bottom = find("ones", 1), find("ones", 0)
     a, b = find("ones", 0, avoid=(ones_bottom,)), find("ones", 1, avoid=(ones_top,))
     zeros = find("zeros", 1)
-    col0_bottom = next(addr for addr in range(g.words) if g.split(addr)[:2] == (0, 0) and pattern_of(addr) != "zeros")
-    last = g.mux - 1  # ... and the last column, the other way round, on a word that is not what Q holds
+    col0_bottom = next(
+        addr
+        for addr in range(g.words)
+        if g.split(addr)[:2] == (0, 0) and pattern_of(addr) != "zeros"
+    )
+    last = (
+        g.mux - 1
+    )  # ... and the last column, the other way round, on a word that is not what Q holds
     last_bottom = next(addr for addr in range(g.words)
                        if g.split(addr)[:2] == (0, last) and pattern_of(addr) != pattern_of(col0_top_hint(g)))  # fmt: skip
     last_top = next(addr for addr in range(g.words)
                     if g.split(addr)[:2] == (1, last) and pattern_of(addr) != pattern_of(col0_bottom))  # fmt: skip
-    col0_top = next(addr for addr in range(g.words) if g.split(addr)[:2] == (1, 0) and pattern_of(addr) != "zeros")
+    col0_top = next(
+        addr
+        for addr in range(g.words)
+        if g.split(addr)[:2] == (1, 0) and pattern_of(addr) != "zeros"
+    )
     program = [
-        (Op("R", zeros), Op("R", zeros)),  # whatever the latches woke up holding, this settles it
+        (
+            Op("R", zeros),
+            Op("R", zeros),
+        ),  # whatever the latches woke up holding, this settles it
         (Op("R", ones_top), Op("R", ones_bottom)),
         (Op("W", a, 0), Op("W", b, 0)),
         (Op("R", b), Op("R", a)),
@@ -270,7 +339,15 @@ def pwl(points: list[tuple[float, float]]) -> str:
     return "PWL(" + " ".join(f"{t:.6g} {v:.4g}" for t, v in points) + ")"
 
 
-def stimulus(name: str, levels: list[int], *, period: float, vdd: float, edge: float, first: float) -> str:
+def stimulus(
+    name: str,
+    levels: list[int],
+    *,
+    period: float,
+    vdd: float,
+    edge: float,
+    first: float,
+) -> str:
     """One input: ``levels[k]`` holds around rising edge k, changing on the falling edge before it."""
     points, last = [(0.0, levels[0] * vdd)], levels[0]
     for k, level in enumerate(levels[1:], start=1):
@@ -284,7 +361,10 @@ def stimulus(name: str, levels: list[int], *, period: float, vdd: float, edge: f
 def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cells: list[dict], g: Geometry,
                program: list[tuple[Op, Op]], *, period: float, vdd: float, load: float,
                probes: tuple[str, ...] = ()) -> tuple[str, dict]:  # fmt: skip
-    edge, first = min(20e-12, period / 50), period  # first rising edge after one period of reset
+    edge, first = (
+        min(20e-12, period / 50),
+        period,
+    )  # first rising edge after one period of reset
     cycles = len(program) + 2  # an idle cycle either side
     levels: dict[str, list[int]] = {}
     address_bits = sum(1 for p in pins if p.lower().startswith("a_a["))
@@ -320,19 +400,28 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         f"Vclk clk 0 PULSE(0 {vdd} {first - edge / 2:.6g} {edge:.6g} {edge:.6g} {period / 2 - edge:.6g} {period:.6g})",
         f"Vrst rst_n 0 {pwl([(0, 0), (period / 4, 0), (period / 4 + edge, vdd)])}",
     ]
-    lines += [stimulus(name, series, period=period, vdd=vdd, edge=edge, first=first) for name, series in levels.items()]
+    lines += [
+        stimulus(name, series, period=period, vdd=vdd, edge=edge, first=first)
+        for name, series in levels.items()
+    ]
     outputs = [p for p in pins if p.lower().startswith("q_")]
-    for q in outputs:  # Q is tri-stated between reads: a load to hold it, a bleed so DC has a solution
+    for q in (
+        outputs
+    ):  # Q is tri-stated between reads: a load to hold it, a bleed so DC has a solution
         tag = q.replace("[", "_").replace("]", "")
         lines += [f"C{tag} {q} 0 {load:g}", f"R{tag} {q} 0 1T"]
     lines.append("Xdut " + " ".join(pins) + f" {top}")
     for cell in cells:
         value = background(cell["address"], cell["bit"])
-        lines.append(f".IC V(Xdut:{cell['path']}:Q)={vdd * value:g} V(Xdut:{cell['path']}:QB)={vdd * (1 - value):g}")
+        lines.append(
+            f".IC V(Xdut:{cell['path']}:Q)={vdd * value:g} V(Xdut:{cell['path']}:QB)={vdd * (1 - value):g}"
+        )
     watched = ["clk", *outputs]
     watched += [f"Xdut:wl_{port}_{stack}[{index}]" for port in "ab" for stack in STACKS
                 for index in range(2 * g.wordlines)]  # fmt: skip
-    watched += [f"Xdut:{net}" for net in ("sae_A[0]", "sae_B[0]", "wrena_A[0]", "wrena_B[0]")]
+    watched += [
+        f"Xdut:{net}" for net in ("sae_A[0]", "sae_B[0]", "wrena_A[0]", "wrena_B[0]")
+    ]
     watched += [f"Xdut:{cell['path']}:Q" for cell in cells]
     watched += [f"Xdut:{node}" for node in probes]
     lines += [
@@ -342,10 +431,18 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         f".tran {period / 2000:.4g} {stop:.6g} NOOP",
         ".options timeint reltol=1e-3 abstol=1e-9",
         ".options output initial_interval=" + f"{period / 400:.4g}",
-        ".print tran format=csv " + " ".join(f"V({node})" for node in watched) + " I(VVDD)",
+        ".print tran format=csv "
+        + " ".join(f"V({node})" for node in watched)
+        + " I(VVDD)",
         ".end",
     ]
-    plan = {"first_edge": first, "period": period, "stop": stop, "edge": edge, "outputs": outputs}
+    plan = {
+        "first_edge": first,
+        "period": period,
+        "stop": stop,
+        "edge": edge,
+        "outputs": outputs,
+    }
     return "\n".join(lines) + "\n", plan
 
 
@@ -366,31 +463,48 @@ def at(time_axis: list[float], values: list[float], when: float) -> float:
     for i in range(1, len(time_axis)):
         if time_axis[i] >= when:
             t0, t1 = time_axis[i - 1], time_axis[i]
-            return values[i - 1] + (values[i] - values[i - 1]) * ((when - t0) / (t1 - t0) if t1 > t0 else 0)
+            return values[i - 1] + (values[i] - values[i - 1]) * (
+                (when - t0) / (t1 - t0) if t1 > t0 else 0
+            )
     return values[-1]
 
 
-def crossings(time_axis: list[float], values: list[float], level: float, start: float, stop: float) -> list[float]:
+def crossings(
+    time_axis: list[float], values: list[float], level: float, start: float, stop: float
+) -> list[float]:
     found = []
     for i in range(1, len(time_axis)):
         if start <= time_axis[i] <= stop:
             lo, hi = values[i - 1], values[i]
             if (lo - level) * (hi - level) < 0:
-                found.append(time_axis[i - 1] + (time_axis[i] - time_axis[i - 1]) * (level - lo) / (hi - lo))
+                found.append(
+                    time_axis[i - 1]
+                    + (time_axis[i] - time_axis[i - 1]) * (level - lo) / (hi - lo)
+                )
     return found
 
 
 def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, Op]], cells: list[dict],
              g: Geometry, vdd: float) -> dict:  # fmt: skip
     t = waves["TIME"]
-    memory = {(c["address"], c["bit"]): background(c["address"], c["bit"]) for c in cells}
+    memory = {
+        (c["address"], c["bit"]): background(c["address"], c["bit"]) for c in cells
+    }
     reads, writes = [], []
     first, period = plan["first_edge"], plan["period"]
-    seen = {(port, bit, to): False for port in "AB" for bit in range(g.bits) for to in (0, 1)}
+    seen = {
+        (port, bit, to): False
+        for port in "AB"
+        for bit in range(g.bits)
+        for to in (0, 1)
+    }
     hazards = []
 
     def peak(signal: str, start: float, stop: float) -> float:
-        return max((v for when, v in zip(t, waves[signal]) if start <= when <= stop), default=0.0)
+        return max(
+            (v for when, v in zip(t, waves[signal]) if start <= when <= stop),
+            default=0.0,
+        )
 
     def after_clock(signal: str, rise: float, *, last: bool = False) -> float | None:
         found = crossings(t, waves[signal], vdd / 2, rise, rise + 0.45 * period)
@@ -401,7 +515,9 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
         sample = rise + 0.45 * period
         for port, op in zip("AB", ops):
             if op.kind != "W":  # write enable has no business moving
-                lifted = peak(f"V(XDUT:WRENA_{port}[0])", rise - period / 4, rise + period / 2)
+                lifted = peak(
+                    f"V(XDUT:WRENA_{port}[0])", rise - period / 4, rise + period / 2
+                )
                 if lifted > 0.3 * vdd:
                     hazards.append({"cycle": cycle, "port": port, "what": "write enable in a cycle that is not a write",
                                     "volts": round(lifted, 3)})  # fmt: skip
@@ -412,23 +528,35 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
                 for other in range(2 * g.wordlines):
                     if other == selected:
                         continue
-                    lifted = peak(f"V(XDUT:WL_{port}_{stack.upper()}[{other}])", rise - period / 4, rise + period / 2)
+                    lifted = peak(
+                        f"V(XDUT:WL_{port}_{stack.upper()}[{other}])",
+                        rise - period / 4,
+                        rise + period / 2,
+                    )
                     if lifted > 0.3 * vdd:
                         hazards.append({"cycle": cycle, "port": port, "volts": round(lifted, 3),
                                         "what": f"unselected wordline wl_{port.lower()}_{stack}[{other}]"})  # fmt: skip
             # Both stacks' strips decode the same address; the later one is the wordline time.
-            fired_each = [after_clock(f"V(XDUT:WL_{port}_{stack.upper()}[{selected}])", rise) for stack in STACKS]
+            fired_each = [
+                after_clock(f"V(XDUT:WL_{port}_{stack.upper()}[{selected}])", rise)
+                for stack in STACKS
+            ]
             fired = None if any(f is None for f in fired_each) else max(fired_each)
             if op.kind == "W":
                 writes.append({"cycle": cycle, "port": port, "address": op.address, "data": op.data,
                                "clk_to_wl_ps": ps(fired)})  # fmt: skip
                 continue
             expected = [memory[(op.address, bit)] for bit in range(g.bits)]
-            volts = [at(t, waves[f"V(Q_{port}[{bit}])"], sample) for bit in range(g.bits)]
+            volts = [
+                at(t, waves[f"V(Q_{port}[{bit}])"], sample) for bit in range(g.bits)
+            ]
             clean = all(v < 0.2 * vdd or v > 0.8 * vdd for v in volts)
             got = [int(v > vdd / 2) for v in volts]
             sensed = after_clock(f"V(XDUT:SAE_{port}[0])", rise)
-            arrivals = [after_clock(f"V(Q_{port}[{bit}])", rise, last=True) for bit in range(g.bits)]
+            arrivals = [
+                after_clock(f"V(Q_{port}[{bit}])", rise, last=True)
+                for bit in range(g.bits)
+            ]
             # Proven: Q moved after sense enable, to the right value.  Before it, Q is the latch's memory.
             flipped = [bit for bit, when in enumerate(arrivals)
                        if when is not None and sensed is not None and when > sensed]  # fmt: skip
@@ -456,8 +584,19 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             wrong.append({"address": cell["address"], "bit": cell["bit"], "path": cell["path"],
                           "expected": want, "volts": round(volts, 4)})  # fmt: skip
     supply = waves.get("I(VVDD)", [])
-    charge = sum((t[i] - t[i - 1]) * -(supply[i] + supply[i - 1]) / 2 for i in range(1, len(t))) if supply else 0.0
-    unproven = sorted(f"Q_{port}[{bit}] to {to}" for (port, bit, to), proven in seen.items() if not proven)
+    charge = (
+        sum(
+            (t[i] - t[i - 1]) * -(supply[i] + supply[i - 1]) / 2
+            for i in range(1, len(t))
+        )
+        if supply
+        else 0.0
+    )
+    unproven = sorted(
+        f"Q_{port}[{bit}] to {to}"
+        for (port, bit, to), proven in seen.items()
+        if not proven
+    )
     return {"reads": reads, "writes": writes, "cells_checked": len(cells), "cells_wrong": wrong,
             "unproven": unproven, "hazards": hazards, "energy_fJ": round(charge * vdd * 1e15, 2),
             "passed": all(r["ok"] for r in reads) and not wrong and not unproven and not hazards}  # fmt: skip
@@ -481,7 +620,9 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     result_dir = result_dir.resolve()
     described = json.loads(next(result_dir.glob("*.physical.json")).read_text())
     top = described["cell"]
-    g = Geometry(wordlines=described["wordlines_per_half"], mux=4, bits=described["bits"])
+    g = Geometry(
+        wordlines=described["wordlines_per_half"], mux=4, bits=described["bits"]
+    )
     if described.get("banks", 1) != 1:
         raise NotImplementedError("the address map here covers one bank")
     source = (netlist or result_dir / f"{top}.sp").read_text()
@@ -490,16 +631,27 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     cells = bitcells(subckts, top)
     locate(cells, g.wordlines)
     groups = sorted({cell["group"] for cell in cells})
-    data_pin = {}  # column group -> data bit, from the D_A pin its instance is bound to
-    for inst, nets, _ in subckts[top.lower()].instances:
-        bound = [re.fullmatch(r"d_a\[(\d+)\]", n, re.IGNORECASE) for n in nets]
-        if any(bound):
-            data_pin[inst.lower()] = int(next(m for m in bound if m)[1])
-    for cell in cells:
-        cell["bit"] = data_pin[cell["path"].split(":")[0].lower()]
-        cell["address"] = (cell["half"] << (g.row_bits + g.col_bits)) | (cell["col"] << g.row_bits) | cell["row"]
-    if len(cells) != g.words * g.bits or len({(c["address"], c["bit"]) for c in cells}) != len(cells):
-        raise ValueError(f"expected {g.words * g.bits} distinct cells, placed {len(cells)} in {len(groups)} groups")
+    for (
+        cell
+    ) in cells:  # a column group's data bit is the top-level D_A its DA pin reaches
+        net = top_level_net(subckts, top, cell["group"], "da")
+        bit = re.fullmatch(r"d_a\[(\d+)\]", net or "", re.IGNORECASE)
+        if not bit:
+            raise ValueError(
+                f"column group {cell['group']}: DA reaches {net}, not a D_A bit"
+            )
+        cell["bit"] = int(bit[1])
+        cell["address"] = (
+            (cell["half"] << (g.row_bits + g.col_bits))
+            | (cell["col"] << g.row_bits)
+            | cell["row"]
+        )
+    if len(cells) != g.words * g.bits or len(
+        {(c["address"], c["bit"]) for c in cells}
+    ) != len(cells):
+        raise ValueError(
+            f"expected {g.words * g.bits} distinct cells, placed {len(cells)} in {len(groups)} groups"
+        )
 
     out = out.resolve()  # the deck includes by path, and Xyce runs from there
     out.mkdir(parents=True, exist_ok=True)
@@ -520,7 +672,9 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     waves_path = out / "macro_rw.cir.csv"
     if completed.returncode != 0 or not waves_path.is_file():
         tail = (out / "xyce.log").read_text()[-1500:]
-        raise RuntimeError(f"Xyce failed (exit {completed.returncode}); see {out / 'xyce.log'}\n{tail}")
+        raise RuntimeError(
+            f"Xyce failed (exit {completed.returncode}); see {out / 'xyce.log'}\n{tail}"
+        )
     verdict = evaluate(read_csv(waves_path), plan, program, cells, g, vdd)
     verdict.update(cell=top, period_ns=period * 1e9, vdd=vdd, corner=corner, spaced=spaced,
                    program=[[f"{op.kind}{op.address}" + (f"={op.data:0{g.bits}b}" if op.kind == "W" else "")
@@ -542,28 +696,44 @@ def describe(verdict: dict) -> str:
     for write in verdict["writes"]:
         lines.append(f"  cycle {write['cycle']} {write['port']} write {write['address']:>3} = {write['data']:b}  "
                      f"clk->WL {write['clk_to_wl_ps']} ps")  # fmt: skip
-    lines.append(f"  final state of {verdict['cells_checked']} cells: {len(verdict['cells_wrong'])} wrong")
+    lines.append(
+        f"  final state of {verdict['cells_checked']} cells: {len(verdict['cells_wrong'])} wrong"
+    )
     lines += [f"      address {w['address']} bit {w['bit']}: {w['volts']} V, expected {w['expected']}"
               for w in verdict["cells_wrong"][:8]]  # fmt: skip
     if verdict["unproven"]:
         lines.append("  never proven: " + ", ".join(verdict["unproven"]))
     for hazard in verdict["hazards"]:
-        lines.append(f"  HAZARD cycle {hazard['cycle']} port {hazard['port']}: {hazard['what']} ({hazard['volts']} V)")
+        lines.append(
+            f"  HAZARD cycle {hazard['cycle']} port {hazard['port']}: {hazard['what']} ({hazard['volts']} V)"
+        )
     return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("result_dir", type=Path)
-    parser.add_argument("--period", type=float, default=2e-9, help="Clock period in seconds.")
+    parser.add_argument(
+        "--period", type=float, default=2e-9, help="Clock period in seconds."
+    )
     parser.add_argument("--vdd", type=float, default=0.7)
     parser.add_argument("--corner", choices=("TT", "SS", "FF"), default="TT")
-    parser.add_argument("--netlist", type=Path, default=None, help="Simulate this netlist instead of <cell>.sp.")
+    parser.add_argument(
+        "--netlist",
+        type=Path,
+        default=None,
+        help="Simulate this netlist instead of <cell>.sp.",
+    )
     parser.add_argument("--out", type=Path, default=None)
-    parser.add_argument("--spaced", action="store_true", help="An idle cycle after every write.")
+    parser.add_argument(
+        "--spaced", action="store_true", help="An idle cycle after every write."
+    )
     args = parser.parse_args(argv)
     tag = "_spaced" if args.spaced else ""
-    out = args.out or REPO_ROOT / "tmp" / f"simulate_{args.result_dir.resolve().name}{tag}"
+    out = (
+        args.out
+        or REPO_ROOT / "tmp" / f"simulate_{args.result_dir.resolve().name}{tag}"
+    )
     verdict = simulate(args.result_dir, out, period=args.period, vdd=args.vdd, corner=args.corner,
                        netlist=args.netlist, spaced=args.spaced)  # fmt: skip
     print(describe(verdict))

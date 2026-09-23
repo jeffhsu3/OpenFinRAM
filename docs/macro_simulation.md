@@ -271,3 +271,12 @@ about 100 ps into the cycle instead of at the edge; the writes still land.
 (The wordline times move with each controller place-and-route; this run's
 after-idle case is slower than the last one's 148 ps.) The slow test
 asserts both passes.
+
+## x8x8 (2026-09-23)
+
+256 cells, both programs PASS at TT 0.7 V, 2 ns: every read right and proven,
+all 256 cells intact, no hazards. clk to wordline 114 / 182 ps, to Q 228-305
+ps spaced, 228-233 back to back; 1934 / 1993 fJ. Xyce takes about 80 min
+per program at this size. The testbench now finds each column group's data
+bit by following its `DA` pin to the top-level `D_A` (it had assumed one bit
+per datapath half, true only for 2-bit macros).
