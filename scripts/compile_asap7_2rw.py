@@ -529,18 +529,21 @@ def tie_end_row_stubs(cell):
     graph, net_of_root, members, m3, m2 = _supply_graph(cell)
 
     def is_stub(polys):
+        """A lone bar on one layer: one track tall, however many cells long."""
         layers = {p.layer for p in polys}
         if len(layers) != 1 or next(iter(layers)) not in (20, 40):
             return False
-        x0 = min(p.bounding_box()[0][0] for p in polys)
-        x1 = max(p.bounding_box()[1][0] for p in polys)
-        return x1 - x0 < 0.2
+        y0 = min(p.bounding_box()[0][1] for p in polys)
+        y1 = max(p.bounding_box()[1][1] for p in polys)
+        return y1 - y0 < 0.03
 
     # Bridge: same net, M2, same height, nothing on M2 in between.
     stubs = {root: polys for root, polys in members.items() if is_stub(polys)}
     groups = defaultdict(list)
     for root, polys in stubs.items():
-        (x0, y0), (x1, y1) = polys[0].bounding_box()
+        x0 = min(p.bounding_box()[0][0] for p in polys)
+        x1 = max(p.bounding_box()[1][0] for p in polys)
+        (_, y0), (_, y1) = polys[0].bounding_box()
         if polys[0].layer == 20:
             groups[(net_of_root[root], round((y0 + y1) / 2, 3))].append(
                 (x0, x1, y0, y1)

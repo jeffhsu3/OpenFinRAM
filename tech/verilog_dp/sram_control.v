@@ -137,6 +137,13 @@ module ctrl_decode #(
 
     wire wl_read_fire_B  = wl_any_fire_B && read_req_B;
 
+    // Write enable follows the delayed clock, as the wordline does.  Gating
+    // the raw clock with the registered state let it pulse for a clk-to-Q on
+    // the edge after a write, while the state still read WRITE; the delayed
+    // edge arrives after the state has settled, so that pulse cannot pass.
+    wire wl_write_fire_A = wl_any_fire_A && write_req_A;
+    wire wl_write_fire_B = wl_any_fire_B && write_req_B;
+
     // Predecode once per port.  The low two bits of the wordline index pick a
     // wordline within a slice: their one-hot is static and shared by every
     // slice and bank.  The high bits pick the slice: their one-hot is gated by
@@ -272,8 +279,8 @@ module ctrl_decode #(
             end
 
             if (write_req_A) begin
-                wrena_A[slice_sel_r_A]  = clk;
-                wrenan_A[slice_sel_r_A] = ~clk;
+                wrena_A[slice_sel_r_A]  = wl_write_fire_A;
+                wrenan_A[slice_sel_r_A] = ~wl_write_fire_A;
             end
         end
 
@@ -288,8 +295,8 @@ module ctrl_decode #(
             end
 
             if (write_req_B) begin
-                wrena_B[slice_sel_r_B]  = clk;
-                wrenan_B[slice_sel_r_B] = ~clk;
+                wrena_B[slice_sel_r_B]  = wl_write_fire_B;
+                wrenan_B[slice_sel_r_B] = ~wl_write_fire_B;
             end
         end
 

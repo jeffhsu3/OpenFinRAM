@@ -258,3 +258,16 @@ each bitline should say.
 Same testbench on the 4.65 x 17.93 um macro: spaced program PASS, 16/16
 reads, all 32 cells, no hazards; clk to wordline 113 / 148 ps, to Q 218-258
 ps, 953 fJ. Shorter top-level wires change nothing a schematic can see.
+
+## Write enable fixed: back to back passes (2026-09-22)
+
+`sram_control.v` now drives `wrena`/`wrenan` from the delayed clock
+(`wl_any_fire && write_req`) instead of `clk`, so on the edge after a write
+the state has settled before the delayed edge arrives and write enable
+cannot pulse. Both programs PASS on `sram_x4x2x1`, no hazards, all 32 cells:
+spaced clk to wordline 103 / 172 ps, to Q 212-285 ps, 1031 fJ; back to back
+103 ps and 212-217 ps, 1012 fJ. Write enable now opens with the wordline,
+about 100 ps into the cycle instead of at the edge; the writes still land.
+(The wordline times move with each controller place-and-route; this run's
+after-idle case is slower than the last one's 148 ps.) The slow test
+asserts both passes.

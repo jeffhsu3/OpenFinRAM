@@ -26,6 +26,8 @@ from pathlib import Path
 
 import gdstk
 
+from generate_asap7_8t_bitcell import TAP_SLOTS  # bitcell slots a tap takes
+
 
 BOUNDARY = 100
 TAP_CELL_NAME = "tapcell_sram_8t"
@@ -137,11 +139,22 @@ def transformed_point(
 
 
 def slot_layout(wordlines: int, tap_pitch: int) -> tuple[int, list[int]]:
-    """Physical slot count, and the slot each wordline's bitcell occupies."""
+    """Physical slot count, and the slot each wordline's bitcell occupies.
+
+    A tap takes `TAP_SLOTS` bitcell slots after every `tap_pitch` cells.
+    """
     if not tap_pitch:
         return wordlines, list(range(wordlines))
-    slot_of = [index + index // tap_pitch for index in range(wordlines)]
-    return wordlines + wordlines // tap_pitch, slot_of
+    slot_of = [index + TAP_SLOTS * (index // tap_pitch) for index in range(wordlines)]
+    return wordlines + TAP_SLOTS * (wordlines // tap_pitch), slot_of
+
+
+def tap_slots(wordlines: int, tap_pitch: int) -> list[int]:
+    """The first slot of every tap in a row."""
+    if not tap_pitch:
+        return []
+    return [index + 1 + TAP_SLOTS * (index // tap_pitch)
+            for index in range(wordlines) if (index + 1) % tap_pitch == 0]
 
 
 def tap_tag(tap_pitch: int, strap_pitch: int = 0) -> str:
@@ -151,12 +164,10 @@ def tap_tag(tap_pitch: int, strap_pitch: int = 0) -> str:
 
 
 def strap_slots(wordlines: int, tap_pitch: int, strap_pitch: int) -> set[int]:
-    """Physical slots whose tap is upgraded to a supply strap."""
+    """Physical slots (a tap's first) whose tap is upgraded to a supply strap."""
     if not tap_pitch or not strap_pitch:
         return set()
-    slots, slot_of = slot_layout(wordlines, tap_pitch)
-    taps = sorted(set(range(slots)) - set(slot_of))
-    return {slot for index, slot in enumerate(taps)
+    return {slot for index, slot in enumerate(tap_slots(wordlines, tap_pitch))
             if index % strap_pitch == 0}
 
 
@@ -189,8 +200,8 @@ def build_row(
         if tap_cell is None:
             raise RuntimeError("a tap pitch needs a tap cell")
         tx0, ty0, tx1, ty1 = boundary_box(tap_cell)
-        if abs((tx1 - tx0) - width) > 1e-6 or abs((ty1 - ty0) - height) > 1e-6:
-            raise RuntimeError("tap cell does not share the bitcell boundary")
+        if abs((tx1 - tx0) - TAP_SLOTS * width) > 1e-6 or abs((ty1 - ty0) - height) > 1e-6:
+            raise RuntimeError(f"tap cell is not {TAP_SLOTS} bitcell slots on the bitcell's row")
         if strap_pitch:
             if strap_cell is None:
                 raise RuntimeError("a strap pitch needs a strap cell")
@@ -234,7 +245,7 @@ def build_row(
             row.add(gdstk.Reference(
                 master, origin=(slot * width - tx0, -ty0)
             ))
-            slot += 1
+            slot += TAP_SLOTS
 
     # As in the academic sramcol hierarchy, expose each shared bitline at the
     # terminal bitcell.  Mirroring the row later moves these pins to the
@@ -536,8 +547,9 @@ def verify_contract(
     ):
         assert_close(actual, expected, f"{array.name}: {description}")
 
-    if len(row.references) != slots:
-        raise RuntimeError(f"{row.name}: expected {slots} cell references")
+    first_tap_slots = tap_slots(wordlines, tap_pitch)
+    if len(row.references) != wordlines + len(first_tap_slots):
+        raise RuntimeError(f"{row.name}: expected {wordlines + len(first_tap_slots)} cell references")
     allowed = {contract.bitcell_name}
     if tap_pitch:
         allowed |= {TAP_CELL_NAME, STRAP_CELL_NAME}
@@ -550,9 +562,10 @@ def verify_contract(
     taps = sorted(float(reference.origin[0]) - rx0
                   for reference in row.references
                   if reference.cell_name in (TAP_CELL_NAME, STRAP_CELL_NAME))
-    expected_taps = sorted(
-        set(range(slots)) - {slot_of[index] for index in range(wordlines)}
-    )
+    expected_taps = first_tap_slots
+    free = sorted(set(range(slots)) - {slot_of[index] for index in range(wordlines)})
+    if free != sorted(t + k for t in first_tap_slots for k in range(TAP_SLOTS)):
+        raise RuntimeError(f"{row.name}: the bitcells leave slots {free}, not {TAP_SLOTS} per tap")
     if len(taps) != len(expected_taps):
         raise RuntimeError(
             f"{row.name}: expected {len(expected_taps)} taps, found {len(taps)}"

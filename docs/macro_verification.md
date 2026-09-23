@@ -268,3 +268,19 @@ the whole macro; strict LVS fails on the same eight tap-implant pins; DRC
 narrow margins were not routable before the stubs were tied: the router
 reached those lone bars only at some track phases, which is why the old
 floorplan kept 2 um everywhere.
+
+## The tap implant fixed: strict LVS matches (2026-09-22)
+
+Finding 1 is fixed. `tapcell_sram_8t` is now two bitcell slots wide: its
+tie implants stop 27 nm short of each seam, so they meet the neighbours'
+overhanging selects edge to edge instead of doubly implanting the
+neighbour's complement-bitline diffusion, and what is left (162 nm) clears
+the 108 nm minimum implant width that a one-slot tap could not. The fins,
+gates and rails run through both slots; the dummy rows put a corner cell
+over each slot, the second mirrored. On `sram_x4x2x1` (4.70 x 17.93 um, a
+bitcell slot wider per tap): **strict LVS matches the whole macro**, no
+supply shorts; `NSELECT.PSELECT.AUX.1` 10 -> 0; DRC 435 -> 408. The tile
+alone goes 220 -> 215, with one new `LIG.S.4-5` where the last dummy-row
+corner meets the port-B IO block, which overhangs the column by half a fin
+pitch (an unmirrored corner there clears it but breaks the gate pitch, +48
+`GATE.S.1`). The test now asserts the strict match.

@@ -136,12 +136,22 @@ RECOMMENDED_MIN_CELL_RATIO = 1.5
 # BOUNDARY so mirrored neighbors merge at the placement seam.
 MARKER = (0.000, -0.162, 0.108, 0.432)
 
-# Well/substrate tie geometry.  The tie diffusions sit between the bitcell's
-# two gate columns on its own fin grid, so no gate can cross them and the tap
-# stays device-free while keeping the array's FIN and poly pitch.
-TAP_ACTIVE_X = (0.046, 0.062)
-TAP_CONTACT_X = (0.042, 0.066)
-TAP_VIA_X = (0.045, 0.063)
+# Well/substrate tie geometry.  The tap is two bitcell slots wide.  Its tie
+# implants are the complement of its neighbours' at every band, and a
+# neighbouring bitcell's ACTIVE and select overhang the seam by 8 and 27 nm,
+# so the tap's own implants start 27 nm in: on a one-slot tap that left a
+# 54 nm implant, under the 108 nm minimum (PSELECT.W.1), and a full-width one
+# doubly implanted the neighbour's bitline diffusion into a substrate tie.
+# Two slots leave 162 nm.  The tie diffusions sit between the second slot's
+# two gate columns on the bitcell's own fin grid, so no gate can cross them
+# and the tap stays device-free while keeping the array's FIN and poly pitch.
+TAP_SLOTS = 2
+TAP_MARKER = (0.000, -0.162, TAP_SLOTS * 0.108, 0.432)
+TAP_IMPLANT_INSET = 0.027
+TAP_TIE_OFFSET = (TAP_SLOTS - 1) * 0.108 / 2
+TAP_ACTIVE_X = (0.046 + TAP_TIE_OFFSET, 0.062 + TAP_TIE_OFFSET)
+TAP_CONTACT_X = (0.042 + TAP_TIE_OFFSET, 0.066 + TAP_TIE_OFFSET)
+TAP_VIA_X = (0.045 + TAP_TIE_OFFSET, 0.063 + TAP_TIE_OFFSET)
 TAP_VIA_HEIGHT = 0.018
 TAP_BAND_INSET = 0.0135
 
@@ -151,8 +161,8 @@ TAP_BAND_INSET = 0.0135
 # clear the 9 nm neighbour overhang at both slot edges, which pins the climb to
 # the cell centre; M5 is free across the whole slot, so the two spines sit on
 # the gate-column centres.
-STRAP_CLIMB_X = 0.054
-STRAP_SPINE_X = {"vss!": 0.027, "vdd!": 0.081}
+STRAP_CLIMB_X = 0.054 + TAP_TIE_OFFSET
+STRAP_SPINE_X = {"vss!": 0.027 + TAP_TIE_OFFSET, "vdd!": 0.081 + TAP_TIE_OFFSET}
 STRAP_STEP_Y = 0.050
 STRAP_M5_HALF = 0.012
 GATE_A = (0.017, -0.181, 0.037, 0.439)
@@ -519,14 +529,16 @@ def clone_polygons(
     source: gdstk.Cell,
     target: gdstk.Cell,
     predicate,
+    dx: float = 0.0,
 ) -> None:
     for poly in source.polygons:
         if predicate(poly):
-            target.add(
-                gdstk.Polygon(
-                    poly.points.copy(), layer=poly.layer, datatype=poly.datatype
-                )
+            clone = gdstk.Polygon(
+                poly.points.copy(), layer=poly.layer, datatype=poly.datatype
             )
+            if dx:
+                clone.translate(dx, 0.0)
+            target.add(clone)
 
 
 def add_process_frame(source: gdstk.Cell, target: gdstk.Cell) -> None:
@@ -555,10 +567,9 @@ def is_full_m2_rail(poly: gdstk.Polygon) -> bool:
 def is_bitline_m4_rail(poly: gdstk.Polygon) -> bool:
     if poly.layer != M4 or poly.datatype != 0:
         return False
-    return bbox(poly) in {
-        (-0.027, -0.096, 0.135, -0.072),
-        (-0.027, 0.336, 0.135, 0.360),
-    }
+    # The bitcell's two port-B bitlines, or a tap's stretch of them.
+    x0, y0, x1, y1 = bbox(poly)
+    return x0 == -0.027 and x1 - x0 >= 0.160 and (y0, y1) in {(-0.096, -0.072), (0.336, 0.360)}
 
 
 def add_full_rails(source: gdstk.Cell, target: gdstk.Cell) -> None:
@@ -758,7 +769,7 @@ def build_dummy_vertical_array(
         raise ValueError("edge tap pitch must be zero or a positive divisor of rows")
     x0, y0, x1, y1 = edge_boundary(cells["dummy_vertical_8t"])
     width, height = x1 - x0, y1 - y0
-    slots = rows + (rows // tap_pitch if tap_pitch else 0)
+    slots = rows + (TAP_SLOTS * (rows // tap_pitch) if tap_pitch else 0)
     cell = library.new_cell(dummy_array_name(rows, tap_pitch, mirror_x, mirror_y))
     slot = 0
 
@@ -771,8 +782,14 @@ def build_dummy_vertical_array(
         place("dummy_vertical_8t", bool(index % 2))
         slot += 1
         if tap_pitch and (index + 1) % tap_pitch == 0:
-            place("sram_cell_8t_corner", False)
-            slot += 1
+            # A corner cell over each slot of the tap, the second mirrored as
+            # the bitcell after it would be.  (Unmirrored, the gate stubs
+            # break the 54 nm pitch; mirrored, the row's last one leaves one
+            # LIG.S.4-5 against the port-B IO block, which overhangs the
+            # column by half a fin pitch.)
+            for k in range(TAP_SLOTS):
+                place("sram_cell_8t_corner", bool(k % 2))
+                slot += 1
     rect(cell, (0, 0, slots * width, height), BOUNDARY)
     return cell
 
@@ -865,29 +882,38 @@ def build_tap_cell(
 ) -> gdstk.Cell:
     """Build the array tap; `strap` adds the M2-to-M5 supply climb."""
     cell = lib.new_cell(name)
-    x0, y0, x1, y1 = bbox(
+    x0, y0, bx1, y1 = bbox(
         next(p for p in bitcell.polygons if p.layer == BOUNDARY)
     )
+    slot = bx1 - x0
+    x1 = x0 + TAP_SLOTS * slot
 
-    # Fin and poly grids run through the tap column unchanged; the dummy gates
-    # are cut at the row-abutment line exactly as tapcell_sram_6t122 does.
-    clone_polygons(bitcell, cell, lambda poly: poly.layer in (FIN, GATE))
+    # Fin and poly grids run through the tap column unchanged, one bitcell
+    # frame per slot; the dummy gates are cut at the row-abutment line
+    # exactly as tapcell_sram_6t122 does.  Bitlines and supplies pass
+    # straight through, so the tap can be inserted anywhere in a row without
+    # breaking a bitline.
+    for k in range(TAP_SLOTS):
+        clone_polygons(bitcell, cell, lambda poly: poly.layer == GATE, dx=k * slot)
+    for poly in bitcell.polygons:  # fins and rails run the whole width, overhang and all
+        if poly.layer == FIN or is_full_m2_rail(poly) or is_bitline_m4_rail(poly):
+            px0, py0, px1, py1 = bbox(poly)
+            rect(cell, (px0, py0, px1 + (TAP_SLOTS - 1) * slot, py1), poly.layer)
     rect(cell, (x0, y0 - 0.0085, x1, y0 + 0.0085), GCUT)
     for layer in (SRAMDRC, BOUNDARY):
         rect(cell, (x0, y0, x1, y1), layer)
 
-    # Bitlines and supplies pass straight through, so the tap can be inserted
-    # anywhere in a row without breaking a bitline.
-    add_full_rails(bitcell, cell)
-
+    # The well runs through; the tie implants stop short of both seams so
+    # they meet the neighbours' overhanging selects edge to edge.
     bands = tie_bands(bitcell)
     rails = supply_rails(bitcell)
     well_y0, well_y1, _ = next(b for b in bands if b[2] == "vdd!")
     rect(cell, (x0, well_y0, x1, well_y1), WELL)
-    rect(cell, (x0, well_y0, x1, well_y1), NSELECT)
+    ix0, ix1 = x0 + TAP_IMPLANT_INSET, x1 - TAP_IMPLANT_INSET
+    rect(cell, (ix0, well_y0, ix1, well_y1), NSELECT)
     for band_y0, band_y1, net in bands:
         if net == "vss!":
-            rect(cell, (x0, band_y0, x1, band_y1), PSELECT)
+            rect(cell, (ix0, band_y0, ix1, band_y1), PSELECT)
 
     ax0, ax1 = TAP_ACTIVE_X
     cx0, cx1 = TAP_CONTACT_X
@@ -1278,8 +1304,8 @@ def _contains(outer: tuple, inner: tuple) -> bool:
 def verify_tap_rules(cell: gdstk.Cell) -> None:
     """Grid rules for the tap: the bitcell's frame without its devices."""
     for layer in (SRAMDRC, BOUNDARY):
-        _assert([bbox(p) for p in _layer_polygons(cell, layer)] == [MARKER],
-                f"tap layer {layer} marker is not {MARKER}")
+        _assert([bbox(p) for p in _layer_polygons(cell, layer)] == [TAP_MARKER],
+                f"tap layer {layer} marker is not {TAP_MARKER}")
     _assert(not _layer_polygons(cell, SRAMVT),
             "tap must not carry the SRAM-Vt implant")
 
@@ -1290,9 +1316,12 @@ def verify_tap_rules(cell: gdstk.Cell) -> None:
     _assert(all(round(right - left, 6) == 0.027
                 for left, right in zip(centres, centres[1:])),
             "tap FIN pitch is not exactly 27 nm")
-    _assert(sorted(bbox(p) for p in _layer_polygons(cell, GATE))
-            == sorted((GATE_A, GATE_B)),
-            "tap does not reuse the bitcell gate columns")
+    wanted = sorted(
+        (g[0] + k * 0.108, g[1], g[2] + k * 0.108, g[3])
+        for k in range(TAP_SLOTS) for g in (GATE_A, GATE_B)
+    )
+    _assert(sorted(bbox(p) for p in _layer_polygons(cell, GATE)) == wanted,
+            "tap does not reuse the bitcell gate columns in every slot")
 
 
 def verify_tap_topology(cell: gdstk.Cell, bitcell: gdstk.Cell) -> None:
@@ -1304,8 +1333,14 @@ def verify_tap_topology(cell: gdstk.Cell, bitcell: gdstk.Cell) -> None:
     nsel = [bbox(p) for p in _layer_polygons(cell, NSELECT)]
     psel = sorted(bbox(p) for p in _layer_polygons(cell, PSELECT))
     _assert(len(well) == 1, "tap must have exactly one n-well band")
-    _assert(nsel == well,
-            "tap n+ implant must cover exactly the n-well (the VDD tie)")
+    _assert(nsel == [(well[0][0] + TAP_IMPLANT_INSET, well[0][1],
+                      well[0][2] - TAP_IMPLANT_INSET, well[0][3])],
+            "tap n+ implant must span the n-well band, 27 nm in from each seam")
+    for box in psel:
+        _assert(abs(box[0] - (TAP_MARKER[0] + TAP_IMPLANT_INSET)) < 1e-9
+                and abs(box[2] - (TAP_MARKER[2] - TAP_IMPLANT_INSET)) < 1e-9,
+                "tap p+ implant must stop 27 nm short of each seam")
+        _assert(box[2] - box[0] >= 0.108 - 1e-9, "tap p+ implant is under the 108 nm minimum width")
     _assert(bool(psel), "tap has no p+ substrate tie")
     for box in psel:
         _assert(box[3] <= well[0][1] or well[0][3] <= box[1],
@@ -1357,9 +1392,17 @@ def verify_tap_topology(cell: gdstk.Cell, bitcell: gdstk.Cell) -> None:
     # through at exactly the bitcell's coordinates.
     def rail_predicate(poly):
         return is_full_m2_rail(poly) or is_bitline_m4_rail(poly)
+    stretch = (TAP_SLOTS - 1) * (MARKER[2] - MARKER[0])
+    expected_rails = sorted(
+        (p.layer, round(b[0], 6), round(b[1], 6), round(b[2] + stretch, 6), round(b[3], 6))
+        for p in bitcell.polygons if rail_predicate(p) for b in [bbox(p)]
+    )
+    drawn_rails = sorted(
+        (p.layer, round(b[0], 6), round(b[1], 6), round(b[2], 6), round(b[3], 6))
+        for p in cell.polygons if rail_predicate(p) for b in [bbox(p)]
+    )
     _assert(
-        filtered_polygon_fingerprint(cell, rail_predicate)
-        == filtered_polygon_fingerprint(bitcell, rail_predicate),
+        drawn_rails == expected_rails,
         "tap rails do not abut the bitcell's bitlines and supplies",
     )
 
@@ -1491,7 +1534,7 @@ def verify_strap_topology(strap: gdstk.Cell, tap: gdstk.Cell) -> None:
     # One full-height M5 spine per supply, inside the slot and clear of each
     # other.  Rows abut at the boundary, so a spine short of it breaks the
     # vertical rail the strap exists to provide.
-    x0, y0, x1, y1 = MARKER
+    x0, y0, x1, y1 = TAP_MARKER
     spines = sorted(bbox(p) for p in _layer_polygons(strap, M5))
     _assert(len(spines) == len(STRAP_SPINE_X),
             f"expected {len(STRAP_SPINE_X)} M5 spines, found {len(spines)}")
@@ -1510,7 +1553,7 @@ def verify_strap_topology(strap: gdstk.Cell, tap: gdstk.Cell) -> None:
     # M3 has to clear the 9 nm neighbour overhang at both slot edges.
     for poly in _layer_polygons(strap, M3):
         box = bbox(poly)
-        _assert(box[0] >= 0.027 - 1e-9 and box[2] <= 0.081 + 1e-9,
+        _assert(box[0] >= TAP_MARKER[0] + 0.027 - 1e-9 and box[2] <= TAP_MARKER[2] - 0.027 + 1e-9,
                 f"strap M3 at {box} intrudes on the neighbour overhang")
 
     # The climb's M4 must not land on a port-B bitline rail.

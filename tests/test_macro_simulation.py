@@ -35,9 +35,8 @@ X0 WLA[0] WLA[1] WLA[2] WLA[3] WLB[0] WLB[1]
 + WLB[2] WLB[3] BL_A[0] VDD VSS array
 .ENDS
 .SUBCKT top vdd vss D_A[0] D_A[1]
-Xctrl wl_a[0] wl_a[1] wl_a[2] wl_a[3] wl_b[0] wl_b[1] wl_b[2] wl_b[3] ctrl
-Xhigh wl_a[0] wl_a[1] wl_a[2] wl_a[3] wl_b[0] wl_b[1] wl_b[2] wl_b[3] D_A[1] vdd vss colgrp
-Xlow wl_a[0] wl_a[1] wl_a[2] wl_a[3] wl_b[0] wl_b[1] wl_b[2] wl_b[3] D_A[0] vdd vss colgrp
+Xhigh wl_a_hi[0] wl_a_hi[1] wl_a_hi[2] wl_a_hi[3] wl_b_hi[0] wl_b_hi[1] wl_b_hi[2] wl_b_hi[3] D_A[1] vdd vss colgrp
+Xlow wl_a_lo[0] wl_a_lo[1] wl_a_lo[2] wl_a_lo[3] wl_b_lo[0] wl_b_lo[1] wl_b_lo[2] wl_b_lo[3] D_A[0] vdd vss colgrp
 .ENDS
 """
 
@@ -56,6 +55,8 @@ def test_cells_are_placed_by_what_they_are_wired_to():
     cells = sm.bitcells(subckts, "top")
     sm.locate(cells, wordlines=2)
     placed = {c["path"]: (c["half"], c["col"], c["row"], c["group"]) for c in cells}
+    # Each stack of data bits has its own wordlines from its own driver strips.
+    assert {c["path"].split(":")[0]: c["stack"] for c in cells} == {"Xhigh": "hi", "Xlow": "lo"}
     # NUM_WL = 2: wordlines 2 and 3 of the one array are the upper address half.
     assert placed == {
         "Xhigh:X0:X0": (0, 0, 0, "Xhigh"), "Xhigh:X0:X1": (0, 0, 1, "Xhigh"),
@@ -135,23 +136,15 @@ def _result_dir() -> Path:
 
 
 @pytest.mark.skipif(os.environ.get("OPENFINRAM_SLOW_TESTS") != "1", reason="two six-minute Xyce runs")
-def test_the_macro_reads_and_writes_and_write_enable_still_glitches(tmp_path: Path):
-    """Held as found: everything works, and write enable still pulses in the read
-    that follows a write.
+def test_the_macro_reads_and_writes_back_to_back_and_spaced(tmp_path: Path):
+    """Both programs pass: every read right and proven after sense enable, every
+    cell intact, no hazard.
 
-    `sram_control.v` makes ``wrena = clk`` while the state register says WRITE.
-    On the rising edge after a write cycle the clock is already high and the
-    state is not yet anything else, so write enable pulses for one clock-to-Q
-    (about 20 ps at 0.7 V) and the write driver puts the D pins on the sense
-    lines just as precharge lets go.  On the mid-bitline floorplan that
-    overwrote the cell being read.  On the unsplit column the same pulse takes
-    the bitline to 0.15 V before the wordline opens, the cell pulls it back to
-    0.34 V against 0 V on the other side, and the read resolves: no read is
-    wrong and no cell is lost in this program, nor in same-address and
-    same-column reads tried separately.  That is margin on a four-row array at
-    TT without wires, not a fix, so the hazard keeps the back-to-back run a
-    FAIL.  When the controller is fixed the second half of this test fails, and
-    should be turned into a plain pass.
+    Until 2026-09-22 `sram_control.v` made ``wrena = clk`` while the state
+    register said WRITE, so on the rising edge after a write write enable
+    pulsed for one clock-to-Q and the back-to-back program failed on it.  Write
+    enable now follows the delayed clock (``wl_any_fire``), as the wordline
+    does, and by the time that edge arrives the state has settled.
     """
     try:
         sm.find_xyce()
@@ -165,9 +158,9 @@ def test_the_macro_reads_and_writes_and_write_enable_still_glitches(tmp_path: Pa
 
     assert spaced["passed"], sm.describe(spaced)
     assert spaced["cells_checked"] == 32 and not spaced["hazards"] and not spaced["unproven"]
-    assert max(r["clk_to_q_ps"] for r in spaced["reads"]) < 400  # 285 ps, pre-layout, TT
+    # A read whose Q already held the word has no arrival to time.
+    assert max(r["clk_to_q_ps"] for r in spaced["reads"] if r["clk_to_q_ps"] is not None) < 400  # 285 ps, TT
 
-    assert not tight["passed"]
-    assert {h["what"] for h in tight["hazards"]} == {"write enable in a cycle that is not a write"}
-    assert {(h["cycle"], h["port"]) for h in tight["hazards"]} == {(4, "A"), (4, "B"), (6, "A"), (6, "B")}
+    assert tight["passed"], sm.describe(tight)
+    assert tight["cells_checked"] == 32 and not tight["hazards"] and not tight["unproven"]
     assert tight["cells_wrong"] == [] and all(r["ok"] for r in tight["reads"])

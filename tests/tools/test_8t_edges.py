@@ -100,18 +100,29 @@ class EdgeFrameTests(unittest.TestCase):
                 lib, self.bitcell, arrays.CONTRACTS[0], count, self.tap, tap_pitch
             )
             reference_end = gdstk.Cell("expected_end")
+            width = arrays.boundary_box(self.bitcell)[2] - arrays.boundary_box(self.bitcell)[0]
             for ref in row.references:
-                master = self.cells[
-                    "sram_cell_8t_row_cap"
-                    if ref.cell_name == edges.CELL_NAME
-                    else "sram_cell_8t_corner"
-                ]
+                if ref.cell_name == edges.CELL_NAME:
+                    reference_end.add(
+                        gdstk.Reference(
+                            self.cells["sram_cell_8t_row_cap"],
+                            origin=ref.origin,
+                            rotation=ref.rotation,
+                            x_reflection=ref.x_reflection,
+                        )
+                    )
+                    continue
+                # A tap is two slots: a corner over each, the second mirrored
+                # as the bitcell after it would be.
+                corner = self.cells["sram_cell_8t_corner"]
+                x, y = ref.origin
+                reference_end.add(gdstk.Reference(corner, origin=(x, y)))
                 reference_end.add(
                     gdstk.Reference(
-                        master,
-                        origin=ref.origin,
-                        rotation=ref.rotation,
-                        x_reflection=ref.x_reflection,
+                        corner,
+                        origin=(x + edges.TAP_SLOTS * width, y),
+                        rotation=math.pi,
+                        x_reflection=True,
                     )
                 )
             boundary = arrays.boundary_box(row)
@@ -124,7 +135,7 @@ class EdgeFrameTests(unittest.TestCase):
                     self.assertEqual(edges.edge_boundary(end), boundary)
                     self.assertEqual(
                         len(end.references),
-                        count + (count // tap_pitch if tap_pitch else 0),
+                        count + (edges.TAP_SLOTS * (count // tap_pitch) if tap_pitch else 0),
                     )
                     self.assertTrue(
                         all(

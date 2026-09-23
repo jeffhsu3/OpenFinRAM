@@ -83,17 +83,16 @@ def test_macro_lvs_and_drc_hold_the_baseline(tmp_path: Path):
     assert gone == [], "known findings are gone: tighten the baseline with --write-baseline"
 
     # What the baseline says, spelled out, so that a change to it is a decision.
-    lvs, relaxed = verdict["lvs"], verdict["lvs_without_double_implant_taps"]
-    assert lvs["failing"] == ["sram_x4x2x1"]  # the controller, IO columns, driver strips and every cell below match
+    lvs = verdict["lvs"]
+    assert lvs["failing"] == []  # the whole macro, transistor for transistor
     assert lvs["series_order_cells"] == ["AO21x1_ASAP7_75t_R"]
-    # One defect is left: the array tap's implant overlap ties every complement bitline to VSS.
-    # A column is one unsplit array with a parametric IO block at each end, so that is the four
-    # complement bitlines of each port's block.
-    assert sorted(lvs["supply_shorts"]) == sorted(
-        f"VSS <- IOCOL_SRAM_8T_{port}.BLN_{port}[{i}] x2" for port in "AB" for i in range(4)
-    )
-    assert verdict["drc"]["rules"]["NSELECT.PSELECT.AUX.1"] == 10
-    # ... and with that set aside the whole macro matches, transistor for transistor: the two abutted
-    # stacks, their wordlines joined tile to tile and to the driver strips by abutment alone.  (It did
-    # not until the WLA gate contacts were taken off the placement seam: wordlines were shorted there.)
-    assert relaxed["matched"] and relaxed["failing"] == [] and relaxed["supply_shorts"] == []
+    # The array tap's implant used to overlap its neighbours' bitline diffusion and tie every
+    # complement bitline to VSS; the tap is two slots wide since 2026-09-22 and its implants
+    # stop short of the seams.
+    assert lvs["supply_shorts"] == []
+    assert verdict["drc"]["rules"].get("NSELECT.PSELECT.AUX.1", 0) == 0
+    # Wordlines are joined tile to tile and to the driver strips by abutment alone.  (They were
+    # shorted at the placement seam until the WLA gate contacts were taken off it.)
+    assert lvs["matched"]
+    # A strict match leaves nothing for the run without double-implant taps to explain.
+    assert "lvs_without_double_implant_taps" not in verdict
