@@ -29,9 +29,11 @@ not yet match it.
   address (zeros, ones, 0101.., 1010..), so reads can be checked before any
   write, and a stuck line or a swapped half does not reproduce the pattern.
   Cells are found by walking the netlist and placed by what they are wired to
-  (`wl_a[i]`, `BL_A[c]`, `D_A[i]`), not by instance name. A column is one
-  unsplit array with an IO at each end of the bitlines; "half" below means only
-  the address bit above the column select, the top bit of the wordline index.
+  (`wl_a_lo[i]` or `wl_a_hi[i]`, `BL_A[c]`, `D_A[i]`), not by instance name.
+  A column is one unsplit array with an IO at each end of the bitlines; "half"
+  below means only the address bit above the column select, the top bit of
+  the wordline index. The `lo`/`hi` is the stack of data bits the cell is in,
+  each stack having its own wordlines from its own driver strips.
 * **Inputs change on falling edges.** `sram_control.v` captures a command and
   its address on a rising edge with `ce_n` low and runs the operation in the
   clock-high phase that follows; Q is sampled at 45 % of the period.
@@ -220,3 +222,39 @@ margin on four rows at TT with no wire capacitance, not a fix: the pulse is
 still there, a cell is still exposed to a bitline at 0.15 V with its wordline
 open, and nothing here says what a taller column, a slow corner or mismatch
 does with it. The candidate fix above stands.
+
+## With the parametric IO (2026-09-22)
+
+Same testbench, the IO columns replaced by chipforge_asap7's block: spaced
+program PASS (16/16 reads, all 32 cells, no hazards), clk to Q 219-259 ps
+against 234-288 with the wrappers, 903 fJ against 986. Back to back: the
+write-enable hazard fires as before, no read wrong, no cell lost.
+
+## With the abutted stacks and driver strips (2026-09-22)
+
+Same testbench on the mid-band floorplan: the controller no longer drives
+the wordlines, it sends `sel_hi`/`sel_lo` to a pair of driver strips per
+stack, and each stack's wordlines (`wl_a_lo[i]`, `wl_a_hi[i]`, ...) are
+watched separately; a read's wordline time is the later of the two stacks'.
+Spaced program PASS: 16/16 reads, all 32 cells, no hazards on either stack's
+unselected wordlines; clk to wordline 113 / 148 ps (was 118 / 154 with the
+controller's buffer stage and the wire-less net), to sense enable 189 / 224,
+to Q 218-258 ps, 954 fJ (903 with the controller driving the wordlines
+directly: the slices add their NAND and inverter switching, and both stacks'
+strips decode every access).
+Back to back: FAIL on the write-enable hazard alone, as before (0.71 V in
+cycles 4 and 6 on both ports); every read right, all 32 cells intact, no
+wordline hazard in either stack.
+
+## With the IO block abutting the array (2026-09-22)
+
+Spaced program PASS, 16/16 reads, all 32 cells, no hazards; clk to
+wordline 113 / 148, to sense enable 189 / 224, to Q 218-258 ps, 959 fJ:
+the same macro electrically, which is what removing 144 nm of strap from
+each bitline should say.
+
+## With the floorplan tightened (2026-09-22)
+
+Same testbench on the 4.65 x 17.93 um macro: spaced program PASS, 16/16
+reads, all 32 cells, no hazards; clk to wordline 113 / 148 ps, to Q 218-258
+ps, 953 fJ. Shorter top-level wires change nothing a schematic can see.

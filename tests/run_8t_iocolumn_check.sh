@@ -21,10 +21,12 @@ scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
 generated="$scratch/sram_8t_iocolumn.gds"
-"$python_bin" "$generator" --output "$generated"
-"$python_bin" "$generator" --verify "$committed"
-if ! cmp -s "$generated" "$committed"; then
-    echo "FAIL: committed 8T IO-column GDS is stale; regenerate it with:" >&2
+generated_spice="$scratch/sram_8t_iocolumn.sp"
+committed_spice="$repo_root/tech/spice/sram_8t_iocolumn.sp"
+"$python_bin" "$generator" --output "$generated" --spice-output "$generated_spice"
+"$python_bin" "$generator" --verify "$committed" --verify-spice "$committed_spice"
+if ! cmp -s "$generated" "$committed" || ! cmp -s "$generated_spice" "$committed_spice"; then
+    echo "FAIL: committed 8T IO-column GDS or SPICE is stale; regenerate both with:" >&2
     echo "  $python_bin scripts/generate_asap7_8t_iocolumn.py" >&2
     exit 1
 fi
@@ -37,8 +39,8 @@ nonstandard_column="$scratch/sram_8t_iocolumn_x18.gds"
     --word-lines 18 --output "$nonstandard_arrays"
 "$python_bin" "$generator" \
     --word-lines 18 --arrays-gds "$nonstandard_arrays" \
-    --output "$nonstandard_column"
+    --output "$nonstandard_column" --spice-output "$scratch/x18.sp"
 "$python_bin" "$generator" \
-    --word-lines 18 --verify "$nonstandard_column"
+    --word-lines 18 --verify "$nonstandard_column" --verify-spice "$scratch/x18.sp"
 
 echo "PASS: routed dual-port 8T IO columns and non-standard x18 hierarchy"

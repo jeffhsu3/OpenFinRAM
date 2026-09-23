@@ -132,14 +132,17 @@ What does not:
 
 ## What it does not say
 
-* **It is not today's floorplan.** `compile_asap7_2rw.py` places one
-  `dp_column` macro per bit below the controller with 2 um channels, and
-  OpenROAD routes each wordline between them on upper metal. A pitch-matched
-  slice driving a continuous M3 track presumes abutting columns, as the released
-  ASU bank has. Threading the slice in is therefore a floorplan change first
-  (columns abutted along the wordline, slices on the array edge) and a driver
-  swap second. The ladder here is that abutted array; today's routed wordline
-  is longer per cell and on lower-resistance layers, and is not modelled.
+* **It was not the floorplan of the day.** When this was written,
+  `compile_asap7_2rw.py` placed one `dp_column` macro per bit below the
+  controller with 2 um channels, and OpenROAD routed each wordline between
+  them on upper metal. Since 2026-09-22 it is: the tiles abut in two stacks
+  with the controller between them, and a strip pair of these slices drives
+  each stack's wordlines from its edge (`docs/asap7_8t_bitcell.md`,
+  "Floorplan: controller band between two abutted stacks";
+  `scripts/generate_asap7_8t_wl_slices.py` writes the ladder the compiler
+  picks from). The mock-up's seam lessons carried over: the strips sit half
+  a fin pitch in from the seam, and the gate tracks are bridged across that
+  margin.
 * The schematic of both drivers, with no parasitics of their own. The slice's
   extracted resistance is available in seconds (`run_open_pex(capacitance=False)`)
   and is the obvious next refinement.

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <map>
@@ -289,147 +290,143 @@ TEST(SpiceTemplates8T, PortWrappersPreserveIndependentControls) {
 
 namespace {
 
-// The column group of a small generated deck, as one text the binding helpers
-// can search without also finding the XIO_* instances inside the wrappers.
-std::string generated_colgrp_8t() {
+// Decks are generated from the repository root: the 8T IO columns' netlist
+// is tech collateral the generator reads at run time.
+class ScopedCurrentPath {
+public:
+    explicit ScopedCurrentPath(const std::filesystem::path& path)
+        : original_(std::filesystem::current_path()) {
+        std::filesystem::current_path(path);
+    }
+    ~ScopedCurrentPath() { std::filesystem::current_path(original_); }
+
+private:
+    std::filesystem::path original_;
+};
+
+std::string generated_deck_8t() {
+    ScopedCurrentPath cwd(REPO_ROOT);
     MainCliOptions config;
     config.single_port = false;
     config.num_wls = 2;
     config.num_data_bits = 4;
     config.num_banks = 1;
-    const std::string generated =
-        OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    return OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+}
+
+// One subcircuit of a deck as its own text, so the binding helpers search
+// only it.
+std::string subckt_text(const std::string& deck, const std::string& name) {
     std::string text;
-    for (const auto& statement : subckt_body(generated, "colgrp_sram_8t")) {
+    for (const auto& statement : subckt_body(deck, name)) {
         text += statement + "\n";
     }
     return text;
 }
 
+// The column group's net for an IO column pin: ysel_A[2] -> yselA[2],
+// blprechn_A -> blprechnA, sae_A -> sae_A, DA -> DA.
+std::string colgrp_net(const std::string& pin) {
+    for (const std::string& bus : {"BL_", "BLN_"}) {
+        if (pin.rfind(bus, 0) == 0) return pin;
+    }
+    if (pin.rfind("sae_", 0) == 0 || pin == "VDD" || pin == "VSS" ||
+        pin == "DA" || pin == "DB" || pin == "QA" || pin == "QB") {
+        return pin;
+    }
+    const auto underscore = pin.rfind("_");
+    return pin.substr(0, underscore) + pin.substr(underscore + 1);
+}
+
 }  // namespace
 
-TEST(SpiceTemplates8T, ColumnGroupUsesPortWrappersAndSupportsBothWritePorts) {
-    const std::string colgrp = generated_colgrp_8t();
+TEST(SpiceTemplates8T, ColumnGroupInstantiatesBothIoColumnBlocks) {
+    const std::string deck = generated_deck_8t();
+    const std::string colgrp = subckt_text(deck, "colgrp_sram_8t");
 
-    EXPECT_EQ(count_occurrences(colgrp, "ioprech_sram_8t_a"), 1U);
-    EXPECT_EQ(count_occurrences(colgrp, "ioprech_sram_8t_b"), 1U);
+    EXPECT_EQ(count_occurrences(colgrp, "iocol_sram_8t_a"), 1U);
+    EXPECT_EQ(count_occurrences(colgrp, "iocol_sram_8t_b"), 1U);
     EXPECT_EQ(count_occurrences(colgrp, "array_sram_8t"), 1U);  // one unsplit array
-    EXPECT_NE(colgrp.find(
-        "XIO_B wrenanB wrenaB sae_B sae_B oeb_outB oe_outB DB QB"),
-        std::string::npos);
-    EXPECT_EQ(colgrp.find("XIO_B VDD VSS"), std::string::npos);
-    EXPECT_EQ(colgrp.find("iocolgrp_sram_8t"), std::string::npos);
+    EXPECT_EQ(colgrp.find("ioprech_sram_8t"), std::string::npos);
+    EXPECT_EQ(deck.find("iocolgrp_sram_6t122_v2"), std::string::npos);  // the 6T core is gone
     for (const std::string& split_era : {"WLTA", "WLBA", "yselt", "yselb", "blprecht"}) {
         EXPECT_EQ(colgrp.find(split_era), std::string::npos) << split_era;
     }
+    // The deck carries the blocks themselves: the parametric cells' devices.
+    for (const std::string& block : {"iocol_block_a", "iocol_block_b"}) {
+        const std::string text = subckt_text(deck, block);
+        EXPECT_NE(text.find("Msa_"), std::string::npos) << block;  // sense amplifier
+        EXPECT_NE(text.find("Mwd_"), std::string::npos) << block;  // write driver
+        EXPECT_NE(text.find("Mol_"), std::string::npos) << block;  // output latch
+        EXPECT_NE(text.find("M0_NT BL[0] YSEL[0] SA"), std::string::npos) << block;  // leaf 0's mux
+    }
 }
 
-TEST(SpiceTemplates8T, WrapperAndColumnGroupInstanceAritiesMatch) {
-    const std::string core = OpenFinRAM::SpiceTemplates::get_iocolgrp();
-    const std::string port_a = OpenFinRAM::SpiceTemplates::get_ioprech_8t_a();
-    const std::string port_b = OpenFinRAM::SpiceTemplates::get_ioprech_8t_b();
-    const std::string colgrp = generated_colgrp_8t();
-
-    EXPECT_EQ(instance_node_count(port_a, "XIO_A"), subckt_port_count(core));
-    EXPECT_EQ(instance_node_count(port_b, "XIO_B"), subckt_port_count(core));
-    EXPECT_EQ(instance_node_count(colgrp, "XIO_A"), subckt_port_count(port_a));
-    EXPECT_EQ(instance_node_count(colgrp, "XIO_B"), subckt_port_count(port_b));
+// The wordlines are driven at the array by strips of four-wordline slices,
+// one strip per port on each side of the controller band, sized to the cells
+// along the wordline in that half.
+TEST(SpiceTemplates8T, DeckCarriesWordlineDriverStripsPerPortAndHalf) {
+    const std::string deck = generated_deck_8t();  // NUM_WL 2 -> 4 wordlines, one slice; 4 bits -> 8 cells a half
+    EXPECT_EQ(OpenFinRAM::SpiceGenerator::wordline_slice_class(8), 8);
+    EXPECT_EQ(OpenFinRAM::SpiceGenerator::wordline_slice_class(9), 16);
+    EXPECT_THROW(OpenFinRAM::SpiceGenerator::wordline_slice_class(65), std::runtime_error);
+    const auto strip = subckt_body(deck, "wl_strip_c8_x1");
+    ASSERT_FALSE(strip.empty());
+    EXPECT_EQ(strip.front(), ".SUBCKT wl_strip_c8_x1 SEL[0] B[0] B[1] B[2] B[3] WL[0] WL[1] WL[2] WL[3] VDD VSS");
+    EXPECT_NE(subckt_text(deck, "wl_strip_c8_x1")
+                  .find("X_slice0 SEL[0] B[0] B[1] B[2] B[3] WL[0] WL[1] WL[2] WL[3] VDD VSS wl_slice_c8"),
+              std::string::npos);
+    // One pair of strips (both ports) on each side of the controller band.
+    for (const std::string& pair : {"wl_strips_lo_c8_x1", "wl_strips_hi_c8_x1"}) {
+        const auto body = subckt_body(deck, pair);
+        ASSERT_FALSE(body.empty()) << pair;
+        EXPECT_EQ(body.front(), ".SUBCKT " + pair + " SEL_A[0] B_A[0] B_A[1] B_A[2] B_A[3]"
+                                " WL_A[0] WL_A[1] WL_A[2] WL_A[3] SEL_B[0] B_B[0] B_B[1] B_B[2] B_B[3]"
+                                " WL_B[0] WL_B[1] WL_B[2] WL_B[3] VDD VSS");
+        const std::string text = subckt_text(deck, pair);
+        EXPECT_NE(text.find("X_a SEL_A[0] B_A[0] B_A[1] B_A[2] B_A[3] WL_A[0] WL_A[1] WL_A[2] WL_A[3] VDD VSS wl_strip_c8_x1"),
+                  std::string::npos) << pair;
+        EXPECT_NE(text.find("X_b SEL_B[0] B_B[0] B_B[1] B_B[2] B_B[3] WL_B[0] WL_B[1] WL_B[2] WL_B[3] VDD VSS wl_strip_c8_x1"),
+                  std::string::npos) << pair;
+    }
+    // The slice ladder itself rides along, as the IO column blocks do.
+    EXPECT_NE(subckt_text(deck, "wl_slice_c8").find("wl_slice_nand4n2p_inv2n2p"), std::string::npos);
+    EXPECT_NE(subckt_text(deck, "wl_slice_nand4n2p_inv2n2p").find("nand2_fin_4n2p_2f"), std::string::npos);
 }
 
-TEST(SpiceTemplates8T, WriteEnableBindingsFollowWrapperFormalOrder) {
-    const std::string port_a = OpenFinRAM::SpiceTemplates::get_ioprech_8t_a();
-    const std::string port_b = OpenFinRAM::SpiceTemplates::get_ioprech_8t_b();
-    const std::string colgrp = generated_colgrp_8t();
-
-    const auto a = instance_bindings(colgrp, "XIO_A", port_a);
-    const auto b = instance_bindings(colgrp, "XIO_B", port_b);
-    ASSERT_EQ(a.count("WRENAN_A"), 1U);
-    ASSERT_EQ(a.count("WRENA_A"), 1U);
-    ASSERT_EQ(b.count("WRENAN_B"), 1U);
-    ASSERT_EQ(b.count("WRENA_B"), 1U);
-    EXPECT_EQ(a.at("WRENAN_A"), "wrenanA");
-    EXPECT_EQ(a.at("WRENA_A"), "wrenaA");
-    EXPECT_EQ(b.at("WRENAN_B"), "wrenanB");
-    EXPECT_EQ(b.at("WRENA_B"), "wrenaB");
+TEST(SpiceTemplates8T, IoColumnInstanceAritiesMatchTheirBlocks) {
+    const std::string deck = generated_deck_8t();
+    const std::string colgrp = subckt_text(deck, "colgrp_sram_8t");
+    for (const std::string& port : {"a", "b"}) {
+        const std::string wrapper = subckt_text(deck, "iocol_sram_8t_" + port);
+        const std::string block = subckt_text(deck, "iocol_block_" + port);
+        ASSERT_FALSE(wrapper.empty());
+        ASSERT_FALSE(block.empty());
+        const std::string instance = port == "a" ? "XIO_A" : "XIO_B";
+        EXPECT_EQ(instance_node_count(colgrp, instance), subckt_port_count(wrapper));
+        EXPECT_EQ(instance_node_count(wrapper, "X_block"), subckt_port_count(block));
+    }
 }
 
-// One IO per end of the bitlines: port A stands left of the array and meets
-// it with the wrapper's B face, port B stands right and meets it with its T
-// face.  The face turned away idles precharged with every column deselected.
-TEST(SpiceTemplates8T, EachPortUsesTheFaceTurnedToTheArrayAndIdlesTheOther) {
-    const std::string colgrp = generated_colgrp_8t();
-    const auto a = instance_bindings(
-        colgrp, "XIO_A", OpenFinRAM::SpiceTemplates::get_ioprech_8t_a());
-    const auto b = instance_bindings(
-        colgrp, "XIO_B", OpenFinRAM::SpiceTemplates::get_ioprech_8t_b());
-    ASSERT_FALSE(a.empty());
-    ASSERT_FALSE(b.empty());
-
-    EXPECT_EQ(a.at("BLPRECHBN_A"), "blprechnA");
-    EXPECT_EQ(a.at("BLPRECHTN_A"), "VSS");
-    EXPECT_EQ(b.at("BLPRECHTN_B"), "blprechnB");
-    EXPECT_EQ(b.at("BLPRECHBN_B"), "VSS");
-    std::set<std::string> idle_stubs;
-    for (int i = 0; i < 4; ++i) {
-        const std::string n = "[" + std::to_string(i) + "]";
-        EXPECT_EQ(a.at("BLB_A" + n), "BL_A" + n);
-        EXPECT_EQ(a.at("BLBN_A" + n), "BLN_A" + n);
-        EXPECT_EQ(a.at("YSELB_A" + n), "yselA" + n);
-        EXPECT_EQ(a.at("YSELBN_A" + n), "yselnA" + n);
-        EXPECT_EQ(a.at("YSELT_A" + n), "VSS");
-        EXPECT_EQ(a.at("YSELTN_A" + n), "VDD");
-
-        EXPECT_EQ(b.at("BLT_B" + n), "BL_B" + n);
-        EXPECT_EQ(b.at("BLTN_B" + n), "BLN_B" + n);
-        EXPECT_EQ(b.at("YSELT_B" + n), "yselB" + n);
-        EXPECT_EQ(b.at("YSELTN_B" + n), "yselnB" + n);
-        EXPECT_EQ(b.at("YSELB_B" + n), "VSS");
-        EXPECT_EQ(b.at("YSELBN_B" + n), "VDD");
-
-        for (const std::string& stub : {a.at("BLT_A" + n), a.at("BLTN_A" + n),
-                                        b.at("BLB_B" + n), b.at("BLBN_B" + n)}) {
-            EXPECT_EQ(stub.rfind("idle_", 0), 0U) << stub;
-            idle_stubs.insert(stub);
+TEST(SpiceTemplates8T, ColumnGroupBindsEveryIoColumnPinByName) {
+    const std::string deck = generated_deck_8t();
+    const std::string colgrp = subckt_text(deck, "colgrp_sram_8t");
+    for (const std::string& port : {"A", "B"}) {
+        const std::string wrapper = subckt_text(deck, std::string("iocol_sram_8t_") + (port == "A" ? "a" : "b"));
+        const auto bindings = instance_bindings(colgrp, "XIO_" + port, wrapper);
+        ASSERT_FALSE(bindings.empty());
+        for (const auto& entry : bindings) {
+            EXPECT_EQ(entry.second, colgrp_net(entry.first)) << entry.first;
         }
+        EXPECT_EQ(bindings.at("wrena_" + port), "wrena" + port);
+        EXPECT_EQ(bindings.at("wrenan_" + port), "wrenan" + port);
+        EXPECT_EQ(bindings.at("D" + port), "D" + port);
+        EXPECT_EQ(bindings.at("sae_" + port), "sae_" + port);
     }
-    EXPECT_EQ(idle_stubs.size(), 16U);  // sixteen separate stubs, none shared
-
-    // The array's bitlines are exactly the ones the two used faces carry.
-    const auto array = instance_bindings(
-        colgrp, "X0", [] {
-            MainCliOptions config;
-            config.single_port = false;
-            config.num_wls = 2;
-            config.num_data_bits = 4;
-            config.num_banks = 1;
-            const std::string generated =
-                OpenFinRAM::SpiceGenerator(config).generate_spice_content();
-            std::string text;
-            for (const auto& statement : subckt_body(generated, "array_sram_8t")) {
-                text += statement + "\n";
-            }
-            return text;
-        }());
-    ASSERT_FALSE(array.empty());
-    for (int i = 0; i < 4; ++i) {
-        const std::string n = "[" + std::to_string(i) + "]";
-        EXPECT_EQ(array.at("BLA" + n), "BL_A" + n);
-        EXPECT_EQ(array.at("BLAN" + n), "BLN_A" + n);
-        EXPECT_EQ(array.at("BLB" + n), "BL_B" + n);
-        EXPECT_EQ(array.at("BLBN" + n), "BLN_B" + n);
-    }
-    EXPECT_EQ(array.count("WLA[3]"), 1U);  // NUM_WL = 2: four wordlines, one array
-    EXPECT_EQ(array.count("WLA[4]"), 0U);
 }
 
 TEST(SpiceTemplates8T, GeneratedDeckOmitsRetiredReplicaSaeScaffolding) {
-    MainCliOptions config;
-    config.single_port = false;
-    config.num_wls = 2;
-    config.num_data_bits = 4;
-    config.num_banks = 1;
-    const std::string generated =
-        OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    const std::string generated = generated_deck_8t();
 
     EXPECT_EQ(generated.find("buf_sram"), std::string::npos);
     EXPECT_EQ(generated.find("skewed_inv_sram"), std::string::npos);
@@ -440,6 +437,7 @@ TEST(SpiceTemplates8T, GeneratedDeckOmitsRetiredReplicaSaeScaffolding) {
 }
 
 TEST(SpiceTemplates, GeneratedDecksHaveNoCaseAliasedNets) {
+    ScopedCurrentPath cwd(REPO_ROOT);
     MainCliOptions config;
     config.num_wls = 2;
     config.num_data_bits = 4;
@@ -461,13 +459,7 @@ TEST(SpiceTemplates, GeneratedDecksHaveNoCaseAliasedNets) {
 }
 
 TEST(SpiceTemplates8T, GeneratedMacroHierarchyCarriesBothWritePorts) {
-    MainCliOptions config;
-    config.single_port = false;
-    config.num_wls = 2;
-    config.num_data_bits = 4;
-    config.num_banks = 1;
-    OpenFinRAM::SpiceGenerator generator(config);
-    const std::string generated = generator.generate_spice_content();
+    const std::string generated = generated_deck_8t();
 
     const auto colgrp = subckt_body(generated, "colgrp_sram_8t");
     const auto stacked = subckt_body(generated, "stacked_colgrp_x4x2x1");

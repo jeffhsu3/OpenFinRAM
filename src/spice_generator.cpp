@@ -1,7 +1,10 @@
 #include "spice_generator.hpp"
 
+#include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include <iomanip>
+#include <cctype>
 
 #include "plog/Log.h"
 
@@ -254,6 +257,110 @@ std::string SpiceGenerator::generate_stacked_colgrp_mux() {
 // The 8T column is one unsplit array with port A's IO at one end of the
 // bitlines and port B's at the other.  config_.num_wls stays NUM_WL, the rows
 // one row-select address field covers; the array has twice that.
+std::string SpiceGenerator::load_tech_netlist(const std::string& relative, const std::string& generator) {
+    // The same tech root the other tech collateral is found under: the
+    // working directory's, else the executable's.
+    const std::string names[] = {
+        join_path(get_current_dir_name(), relative),
+        join_path(get_executable_directory(), relative),
+    };
+    for (const auto& path : names) {
+        if (!file_exists(path)) continue;
+        std::ifstream in(path);
+        std::stringstream text;
+        text << in.rdbuf();
+        std::string netlist = text.str();
+        // The file ends the way a standalone deck does; the deck it joins ends itself.
+        const std::string end = ".END\n";
+        if (netlist.size() >= end.size() && netlist.compare(netlist.size() - end.size(), end.size(), end) == 0) {
+            netlist.erase(netlist.size() - end.size());
+        }
+        return netlist;
+    }
+    throw std::runtime_error(relative + " is missing; regenerate it with " + generator);
+}
+
+std::string SpiceGenerator::load_io_column_netlist() {
+    return load_tech_netlist("tech/spice/sram_8t_iocolumn.sp", "scripts/generate_asap7_8t_iocolumn.py");
+}
+
+std::string SpiceGenerator::load_wl_slice_netlist() {
+    return load_tech_netlist("tech/spice/sram_8t_wl_slices.sp", "scripts/generate_asap7_8t_wl_slices.py");
+}
+
+// The wordlines are driven at the array by four-wordline slices (WL<i> =
+// SEL . B<i>), a strip of them per port: one slice per four wordlines of a
+// bank, sized to the cells along the wordline in its half of the data bits
+// (the four mux columns of each of that half's bits).  The two ports' strips
+// are a pair on each side of the controller band, the `lo` pair facing down
+// into the bits below the band and the `hi` pair up into the bits above; the
+// assembler draws the pair as one cell, so the deck has it as one subcircuit.
+int SpiceGenerator::wordline_cells_per_half() const {
+    return 4 * (config_.num_data_bits / 2);
+}
+
+int SpiceGenerator::wordline_slice_class(int cells) {
+    // The ladder scripts/generate_asap7_8t_wl_slices.py writes; the first
+    // entry at or above the load.
+    for (int entry : {4, 8, 16, 32, 64}) {
+        if (cells <= entry) return entry;
+    }
+    throw std::runtime_error(
+        "a " + std::to_string(cells) + "-cell wordline is past the 64-cell driver slice; "
+        "fewer data bits per macro");
+}
+
+std::string SpiceGenerator::wordline_strip_pair_name(const std::string& half) const {
+    const int rows = 2 * config_.num_wls;
+    return "wl_strips_" + half + "_c" + std::to_string(wordline_slice_class(wordline_cells_per_half()))
+        + "_x" + std::to_string(rows / 4);
+}
+
+std::string SpiceGenerator::generate_wl_strips_8t() {
+    const int rows = 2 * config_.num_wls;
+    if (rows % 4 != 0) {
+        throw std::runtime_error("the array's wordlines must be a multiple of four (one driver slice each)");
+    }
+    const int slices = rows / 4;
+    const int cells = wordline_slice_class(wordline_cells_per_half());
+    const std::string strip = "wl_strip_c" + std::to_string(cells) + "_x" + std::to_string(slices);
+    std::stringstream out;
+    out << "* Wordline driver strips: " << slices << " slice(s) of wl_slice_c" << cells
+        << " for " << wordline_cells_per_half() << " cells along the wordline\n";
+    {
+        std::vector<std::string> ports;
+        append_indexed_ports(ports, "SEL[", slices, "]");
+        append_indexed_ports(ports, "B[", 4, "]");
+        append_indexed_ports(ports, "WL[", rows, "]");
+        append_ports(ports, {"VDD", "VSS"});
+        std::stringstream instances;
+        for (int k = 0; k < slices; ++k) {
+            instances << "X_slice" << k << " SEL[" << k << "] B[0] B[1] B[2] B[3]";
+            for (int j = 0; j < 4; ++j) instances << " WL[" << 4 * k + j << "]";
+            instances << " VDD VSS wl_slice_c" << cells << "\n";
+        }
+        out << create_subckt(strip, ports, instances.str()) << "\n";
+    }
+    for (const char* half : {"lo", "hi"}) {
+        std::vector<std::string> ports;
+        std::stringstream instances;
+        for (const char* port : {"A", "B"}) {
+            const std::string suffix = std::string("_") + port + "[";
+            append_indexed_ports(ports, "SEL" + suffix, slices, "]");
+            append_indexed_ports(ports, "B" + suffix, 4, "]");
+            append_indexed_ports(ports, "WL" + suffix, rows, "]");
+            instances << "X_" << static_cast<char>(std::tolower(port[0])) << " ";
+            append_indexed_tokens(instances, "SEL" + suffix, slices, "]");
+            append_indexed_tokens(instances, "B" + suffix, 4, "]");
+            append_indexed_tokens(instances, "WL" + suffix, rows, "]");
+            instances << "VDD VSS " << strip << "\n";
+        }
+        append_ports(ports, {"VDD", "VSS"});
+        out << create_subckt(wordline_strip_pair_name(half), ports, instances.str()) << "\n";
+    }
+    return out.str();
+}
+
 std::string SpiceGenerator::generate_cell_row_8t() {
     const int rows = 2 * config_.num_wls;
     std::vector<std::string> ports;
@@ -325,35 +432,24 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     append_indexed_tokens(instances, "BLN_B[", 4, "]");
     instances << " VDD VSS array_sram_8t\n";
 
-    // Each wrapper is the published two-faced core.  Only the face turned to
-    // the array carries bitlines: port A stands left of the array and uses its
-    // right (B) face, port B stands right and uses its left (T) face.  The
-    // other face idles precharged -- precharge enable and selects low,
-    // complement selects high -- on four internal stub pairs.  SAE drives
-    // SAPRECHN too: one sense phase per port precharges low and evaluates high.
-    auto io = [&](const std::string& port, bool array_on_b_face) {
-        const std::string idle = "idle_" + port;
-        auto bus = [&](const std::string& name) { append_indexed_tokens(instances, name + "[", 4, "]"); };
-        auto constant = [&](const std::string& net) { for (int i = 0; i < 4; ++i) instances << net << " "; };
-        instances << "XIO_" << port << " wrenan" << port << " wrena" << port
-                  << " sae_" << port << " sae_" << port
-                  << " oeb_out" << port << " oe_out" << port
-                  << " D" << port << " Q" << port << " ";
-        // bltn blt blbn blb
-        bus(array_on_b_face ? idle + "_bln" : "BLN_" + port);
-        bus(array_on_b_face ? idle + "_bl" : "BL_" + port);
-        bus(array_on_b_face ? "BLN_" + port : idle + "_bln");
-        bus(array_on_b_face ? "BL_" + port : idle + "_bl");
-        // blprechtn blprechbn
-        instances << (array_on_b_face ? "VSS" : "blprechn" + port) << " "
-                  << (array_on_b_face ? "blprechn" + port : "VSS") << " ";
-        // yseltn yselt yselbn yselb
-        if (array_on_b_face) { constant("VDD"); constant("VSS"); bus("yseln" + port); bus("ysel" + port); }
-        else                 { bus("yseln" + port); bus("ysel" + port); constant("VDD"); constant("VSS"); }
-        instances << "VDD VSS ioprech_sram_8t_" << (port == "A" ? "a" : "b") << "\n";
-    };
-    io("A", true);
-    io("B", false);
+    // Each port's IO is the parametric column block (chipforge_asap7's
+    // IoColumnSpec) wrapped as iocol_sram_8t_{a,b} in tech/spice/
+    // sram_8t_iocolumn.sp, in the pin order generate_asap7_8t_iocolumn.py
+    // writes: bitlines, complements, selects, complement selects, then
+    // precharge, sense enable, write enables, output enables, data in, data
+    // out, supplies.
+    for (const std::string& port : {"A", "B"}) {
+        instances << "XIO_" << port << " ";
+        append_indexed_tokens(instances, "BL_" + port + "[", 4, "]");
+        append_indexed_tokens(instances, "BLN_" + port + "[", 4, "]");
+        append_indexed_tokens(instances, "ysel" + port + "[", 4, "]");
+        append_indexed_tokens(instances, "yseln" + port + "[", 4, "]");
+        instances << "blprechn" << port << " sae_" << port
+                  << " wrena" << port << " wrenan" << port
+                  << " oe_out" << port << " oeb_out" << port
+                  << " D" << port << " Q" << port
+                  << " VDD VSS iocol_sram_8t_" << (port == "A" ? "a" : "b") << "\n";
+    }
 
     return create_subckt("colgrp_sram_8t", ports, instances.str());
 }
@@ -453,20 +549,13 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
         content << sep << SpiceTemplates::get_cell_8t() << "\n\n";
         content << sep << SpiceTemplates::get_dummy_cell_8t() << "\n\n";
 
-        // The 8T port wrappers reuse the characterized 6T differential IO
-        // core, including its four-way precharge/mux front end.
-        content << sep << SpiceTemplates::get_prech_v1() << "\n\n";
-        content << sep << SpiceTemplates::get_prech_v2() << "\n\n";
-        content << sep << SpiceTemplates::get_prech_ymux() << "\n\n";
-
-        content << sep << SpiceTemplates::get_write_driver() << "\n\n";
-        content << sep << SpiceTemplates::get_sense_amp() << "\n\n";
-        // content << sep << SpiceTemplates::get_or2() << "\n\n";
-        content << sep << SpiceTemplates::get_io_nand() << "\n\n";
-        content << sep << SpiceTemplates::get_tbuf() << "\n\n";
-        content << sep << SpiceTemplates::get_iocolgrp() << "\n\n";
-        content << sep << SpiceTemplates::get_ioprech_8t_a() << "\n\n";
-        content << sep << SpiceTemplates::get_ioprech_8t_b() << "\n\n";
+        // The IO columns are the parametric blocks, written beside their GDS
+        // by scripts/generate_asap7_8t_iocolumn.py.
+        content << sep << load_io_column_netlist() << "\n\n";
+        // So are the wordline driver slices; the strips are one per port and
+        // side of the controller band (scripts/generate_asap7_8t_wl_slices.py).
+        content << sep << load_wl_slice_netlist() << "\n\n";
+        content << sep << generate_wl_strips_8t() << "\n";
 
         content << sep << generate_cell_row_8t() << "\n";
         content << sep << generate_array_8t() << "\n";

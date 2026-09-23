@@ -9,12 +9,21 @@ A column is one unsplit array with port A's IO at one end of the bitlines and
 port B's at the other.  ``--wordlines`` is still NUM_WL, the rows one row-select
 address field covers; the array has twice that, the address bit above the
 column select being the top bit of its wordline index.
+
+The data bits are two stacks of abutted column tiles with the controller band
+between them.  Each stack's wordlines run through its tiles by abutment and
+are driven at its edge by a pair of driver strips (chipforge_asap7's
+DriverSliceSpec, four wordlines a slice): port A's strip against the array,
+port B's flipped under it sharing a VSS rail and reaching the M5 wordlines
+through a via stack and strap.  Those wordline nets are never routed: the
+connectivity gate proves them through the abutments instead.
 """
 
 from __future__ import annotations
 
 import argparse
 from collections import defaultdict
+import functools
 import json
 import math
 from pathlib import Path
@@ -26,9 +35,16 @@ from asap7_connectivity import MetalGraph, METALS
 import generate_asap7_wordline_arrays as arrays
 import generate_asap7_8t_iocolumn as columns
 import generate_asap7_8t_bitcell as edge_cells
+import generate_asap7_8t_wl_slices as wl_slices
 
 REPO = Path(__file__).resolve().parents[1]
 LAYER_NAMES = dict(zip(METALS, (f"M{i}" for i in range(1, 10))))
+#: A driver slice: four wordlines at the array's pitch, its outputs 54 nm in.
+SLICE_WIDTH, WORDLINE_PITCH = 0.432, 0.108
+#: The array centres a fin on its edge, the slices a fin space on theirs: this
+#: far apart both fin grids are on pitch.
+FIN_HALF_PITCH = 0.0135
+WORDLINE = re.compile(r"WL_?([AB])\[(\d+)\]")
 
 
 def supply(text):
@@ -44,8 +60,18 @@ def probe_point(polygon, offset):
     return tuple(float(v) - o for v, o in zip(inset[0].points[0], offset))
 
 
-def abstract(cell, name, signal_labels):
-    """Create an exact metal abstract and a pin for every named component."""
+def bbox_origin(cell):
+    """Where `abstract` puts the cell: its bounding box's corner, on the nm grid."""
+    low, _ = cell.bounding_box()
+    return tuple(math.floor(float(v) * 1000) / 1000 for v in low)
+
+
+def abstract(cell, name, signal_labels, abutted=None):
+    """Create an exact metal abstract and a pin for every named component.
+
+    Nets `abutted` names are joined by abutment, never routed: they are
+    terminals for the connectivity gate but obstructions to the router.
+    """
     graph = MetalGraph(cell)
     roots = {}
     for label in signal_labels:
@@ -104,6 +130,16 @@ def abstract(cell, name, signal_labels):
     for root, net in sorted(roots.items(), key=lambda item: (item[1], item[0])):
         pin = f"P{len(terminals)}"
         polys = groups[root]
+        if abutted is not None and abutted(net):
+            obstacles.extend(polys)
+            polygon = max(polys, key=lambda p: p.area())
+            terminals[pin] = {
+                "net": net,
+                "layer": polygon.layer,
+                "point": probe_point(polygon, (ox, oy)),
+                "abutted": True,
+            }
+            continue
         if name == "dp_controller" and net not in ("vdd", "vss"):
             labels = [label for label in signal_labels if label.text == net]
             access_layers = {label.layer for label in labels}
@@ -116,6 +152,11 @@ def abstract(cell, name, signal_labels):
                     f"{name}: no explicit physical pin landing for {net}"
                 )
             obstacles.extend(p for p in polys if p.layer not in access_layers)
+        elif net in ("vdd", "vss"):
+            # A supply component is reachable on every layer it has: the
+            # router lands on a rail or a bar, not on the top stub of a via
+            # stack squeezed between the wordlines.
+            access = polys
         else:
             access_layer = max(p.layer for p in polys)
             access = [p for p in polys if p.layer == access_layer]
@@ -129,7 +170,7 @@ def abstract(cell, name, signal_labels):
                 or (
                     name == "dp_controller"
                     and net.startswith(
-                        ("wl", "wrena", "ysel", "sae", "oe_out", "oeb_out", "blprech")
+                        ("sel_", "wrena", "ysel", "sae", "oe_out", "oeb_out", "blprech")
                     )
                 )
             )
@@ -169,15 +210,20 @@ def abstract(cell, name, signal_labels):
     return master, terminals, "\n".join(lef), (width, height)
 
 
-def leaf_net(name, bank, bit, wordlines):
+def half_of(bit, bits):
+    """Which stack a data bit is in: `lo` below the controller band, `hi` above."""
+    return "lo" if bit < bits // 2 else "hi"
+
+
+def leaf_net(name, bank, bit, wordlines, bits):
     """Macro net of a column pin; `wordlines` is NUM_WL, half the array's."""
     if name in ("vdd", "vss"):
         return name
     if name in ("DA", "DB", "QA", "QB"):
         return f"{name[0]}_{name[1]}[{bit}]"
-    wl = re.fullmatch(r"WL([AB])\[(\d+)\]", name)
+    wl = WORDLINE.fullmatch(name)
     if wl:
-        return f"wl_{wl[1]}[{bank * 2 * wordlines + int(wl[2])}]"
+        return f"wl_{wl[1]}_{half_of(bit, bits)}[{bank * 2 * wordlines + int(wl[2])}]"
     mux = re.fullmatch(r"(yseln|ysel)([AB])\[(\d+)\]", name)
     if mux:
         return f"{mux[1]}_{mux[2]}[{bank * 4 + int(mux[3])}]"
@@ -187,6 +233,208 @@ def leaf_net(name, bank, bit, wordlines):
     if name in ("sae_A", "sae_B"):
         return f"{name}[{bank}]"
     raise RuntimeError(f"unmapped column pin {name}")
+
+
+def strip_net(name, bank, half, wordlines):
+    """Macro net of a strip pair pin: the controller's predecode lines in, wordlines out."""
+    if name in ("vdd", "vss"):
+        return name
+    sel = re.fullmatch(r"SEL_([AB])\[(\d+)\]", name)
+    if sel:
+        return f"sel_hi_{sel[1]}[{bank * (2 * wordlines // 4) + int(sel[2])}]"
+    low = re.fullmatch(r"B_([AB])\[(\d+)\]", name)
+    if low:
+        return f"sel_lo_{low[1]}[{low[2]}]"
+    wl = WORDLINE.fullmatch(name)
+    if wl:
+        return f"wl_{wl[1]}_{half}[{bank * 2 * wordlines + int(wl[2])}]"
+    raise RuntimeError(f"unmapped strip pin {name}")
+
+
+def outer_boundary(cell):
+    """The cell's boundary at any depth: a ladder wrapper's is its spec cell's."""
+    boxes = [
+        poly.bounding_box()
+        for poly in cell.get_polygons(depth=None)
+        if poly.layer == 100 and poly.datatype == 0
+    ]
+    if not boxes:
+        raise RuntimeError(f"{cell.name}: no BOUNDARY polygon")
+    (x0, y0), (x1, y1) = max(
+        boxes, key=lambda b: (b[1][0] - b[0][0]) * (b[1][1] - b[0][1])
+    )
+    return tuple(round(float(v), 7) for v in (x0, y0, x1, y1))
+
+
+def wordline_tracks(cell):
+    """x of every wordline of a column tile, by port and index, from its labels."""
+    tracks = {}
+    for label in cell.labels:
+        wl = WORDLINE.fullmatch(label.text)
+        if wl:
+            tracks[(wl[1], int(wl[2]))] = round(float(label.origin[0]), 4)
+    return tracks
+
+
+def build_wordline_strips(lib, leaf, wordlines, bits):
+    """The strip pair for each side of the controller band, in the tile's x.
+
+    A strip is one slice per four of the tile's port-A wordlines, the slice's
+    outputs on them, with a filler wherever a slice has no neighbour (the
+    array's tap columns and the row's ends).  The pair puts port A's strip
+    against the array and port B's flipped under it on a shared VSS rail;
+    port B's outputs climb to the tile's M5 wordlines on a VIA34/VIA45 stack
+    and an M5 strap.  Both strips sit half a fin pitch in from the pair's
+    edges so their fins and the array's are on one grid, port A's outputs
+    bridged to the edge on M3.  Returns ``{"lo": cell, "hi": cell}`` and the
+    load class the slices were sized to.
+    """
+    cells_along = 4 * (bits // 2)
+    load = wl_slices.load_class(cells_along)
+    ladder = {
+        c.name: c
+        for c in gdstk.read_gds(str(REPO / "tech/gds/sram_8t_wl_slices.gds")).cells
+    }
+    slice_cell, filler = (
+        ladder[wl_slices.slice_name(load)],
+        ladder[wl_slices.slice_name(load) + "_filler"],
+    )
+    have = {c.name for c in lib.cells}
+    for cell in (slice_cell, filler):
+        for dep in (cell, *cell.dependencies(True)):
+            if dep.name not in have:
+                lib.add(dep)
+                have.add(dep.name)
+    rows = 2 * wordlines
+    if rows % 4:
+        raise RuntimeError(
+            "the array's wordlines must be a multiple of four, one driver slice each"
+        )
+    tracks = wordline_tracks(leaf)
+    if len(tracks) != 2 * rows:
+        raise RuntimeError(
+            f"expected {2 * rows} wordline labels on the tile, found {len(tracks)}"
+        )
+    height = outer_boundary(slice_cell)[3]
+    pins = {label.text: (float(label.origin[0]), float(label.origin[1]), label.layer)
+            for label in slice_cell.labels}  # fmt: skip
+
+    strip = lib.new_cell(f"wl_strip_c{load}_x{rows // 4}")
+    starts = []
+    for k in range(rows // 4):
+        x0 = tracks[("A", 4 * k)] - WORDLINE_PITCH / 2
+        for j in range(4):
+            want, got = (
+                tracks[("A", 4 * k + j)],
+                x0 + WORDLINE_PITCH / 2 + WORDLINE_PITCH * j,
+            )
+            if abs(want - got) > 1e-6:
+                raise RuntimeError(
+                    f"slice {k}: WL{4 * k + j} is at {want}, the slice's output at {got}"
+                )
+        strip.add(gdstk.Reference(slice_cell, (x0, 0)))
+        starts.append(x0)
+        sx, sy, layer = pins["SEL"]
+        strip.add(gdstk.Label(f"SEL[{k}]", (x0 + sx, sy), layer=layer, texttype=251))
+        for j in range(4):
+            x, y, layer = pins[f"WL{j}"]
+            strip.add(
+                gdstk.Label(f"WL[{4 * k + j}]", (x0 + x, y), layer=layer, texttype=251)
+            )
+    for j in range(
+        4
+    ):  # B<j> is every slice's; label it once, the abstract joins the rest by metal
+        x, y, layer = pins[f"B{j}"]
+        strip.add(gdstk.Label(f"B[{j}]", (starts[0] + x, y), layer=layer, texttype=251))
+    spans = [(x0, x0 + SLICE_WIDTH) for x0 in starts]
+    gaps = [
+        (spans[0][0] - WORDLINE_PITCH, spans[0][0]),
+        (spans[-1][1], spans[-1][1] + WORDLINE_PITCH),
+    ]
+    gaps += [
+        (left[1], right[0])
+        for left, right in zip(spans, spans[1:])
+        if right[0] - left[1] > 1e-6
+    ]
+    for g0, g1 in gaps:
+        count = round((g1 - g0) / WORDLINE_PITCH)
+        if abs((g1 - g0) - count * WORDLINE_PITCH) > 1e-6:
+            raise RuntimeError(
+                f"a {round((g1 - g0) * 1000)} nm gap between slices is not whole fillers"
+            )
+        for c in range(count):
+            strip.add(gdstk.Reference(filler, (g0 + c * WORDLINE_PITCH, 0)))
+    x_left, x_right = spans[0][0] - WORDLINE_PITCH, spans[-1][1] + WORDLINE_PITCH
+
+    # OpenROAD's ASAP7 default via stacks, drawn as cells so the pair is one place to look.
+    via34 = lib.new_cell("wl_via34")
+    via34.add(gdstk.rectangle((-0.020, -0.012), (0.020, 0.012), layer=40),
+              gdstk.rectangle((-0.009, -0.017), (0.009, 0.017), layer=30),
+              gdstk.rectangle((-0.009, -0.012), (0.009, 0.012), layer=35))  # fmt: skip
+    via45 = lib.new_cell("wl_via45")
+    via45.add(gdstk.rectangle((-0.012, -0.023), (0.012, 0.023), layer=50),
+              gdstk.rectangle((-0.023, -0.012), (0.023, 0.012), layer=40),
+              gdstk.rectangle((-0.012, -0.012), (0.012, 0.012), layer=45))  # fmt: skip
+
+    # The strip's gate tracks (slices and fillers share the array's 54 nm
+    # grid).  The array's gate stubs reach 7 or 19 nm past its boundary and
+    # the strip's 5 nm past its own, so the fin-grid margin would leave a
+    # short gap on a track; bridge each track across the margin, under the
+    # slice's gate cut, so the abutment reads as one poly line.
+    gate_tracks = sorted(
+        {
+            round(
+                (float(poly.bounding_box()[0][0]) + float(poly.bounding_box()[1][0]))
+                / 2,
+                4,
+            )
+            for poly in strip.get_polygons(depth=None)
+            if poly.layer == 7
+        }
+    )
+    pairs = {}
+    pair_height = 2 * height + 2 * FIN_HALF_PITCH
+    seam = height + FIN_HALF_PITCH  # the shared VSS rail
+    for half, facing_up in (("lo", False), ("hi", True)):
+        pair = lib.new_cell(f"wl_strips_{half}_c{load}_x{rows // 4}")
+
+        def at(y):  # the `hi` pair is drawn; the `lo` pair is its mirror image
+            return y if facing_up else pair_height - y
+
+        def rect(x0, y0, x1, y1, layer):
+            ys = sorted((at(y0), at(y1)))
+            pair.add(gdstk.rectangle((x0, ys[0]), (x1, ys[1]), layer=layer))
+
+        def label(text, x, y, layer):
+            pair.add(gdstk.Label(text, (x, at(y)), layer=layer, texttype=251))
+
+        for port, flipped in (("A", False), ("B", True)):
+            pair.add(
+                gdstk.Reference(
+                    strip, (0, at(seam)), x_reflection=flipped != (not facing_up)
+                )
+            )
+            sign = -1 if flipped else 1
+            for k in range(rows // 4):
+                sx, sy, layer = pins["SEL"]
+                label(f"SEL_{port}[{k}]", starts[k] + sx, seam + sign * sy, layer)
+            for j in range(4):
+                x, y, layer = pins[f"B{j}"]
+                label(f"B_{port}[{j}]", starts[0] + x, seam + sign * y, layer)
+        for i in range(rows):
+            x, x5 = tracks[("A", i)], tracks[("B", i)]
+            rect(x - 0.009, seam + height, x + 0.009, pair_height, 30)
+            label(f"WL_A[{i}]", x, pair_height - 0.005, 30)
+            y_via = seam - height + 0.025
+            for cell, vx in ((via34, x), (via45, x5)):
+                pair.add(gdstk.Reference(cell, (vx, at(y_via))))
+            rect(x5 - 0.012, y_via - 0.023, x5 + 0.012, pair_height, 50)
+            label(f"WL_B[{i}]", x5, pair_height - 0.005, 50)
+        for x in gate_tracks:
+            rect(x - 0.010, seam + height, x + 0.010, pair_height, 7)
+        pair.add(gdstk.rectangle((x_left, 0), (x_right, pair_height), layer=100))
+        pairs[half] = pair
+    return pairs, load
 
 
 def build_leaf(wordlines, tap_pitch):
@@ -201,14 +449,18 @@ def build_leaf(wordlines, tap_pitch):
         tap_pitch,
     )
     cells = {c.name: c for c in lib.cells}
-    wrappers = {
-        c.name: c for c in gdstk.read_gds(str(gds / "sram_8t_ioprech.gds")).cells
-    }
     edges = {
         c.name: c for c in gdstk.read_gds(str(gds / "sram_cell_8t_edges.gds")).cells
     }
-    io_a = columns.build_port_io(lib, wrappers["ioprech_sram_8t_a"], "A")
-    io_b = columns.build_port_io(lib, wrappers["ioprech_sram_8t_b"], "B")
+    # Each port's IO is the parametric column block, built to this bitcell.
+    specs = columns.io_block_specs(cells["sram_cell_8t"])
+    blocks, _ = columns.build_io_blocks(specs)
+    for block in blocks.values():
+        for dep in (block, *block.dependencies(True)):
+            if dep not in lib.cells:
+                lib.add(dep)
+    io_a = columns.build_port_io(lib, "A", blocks["A"], specs["A"])
+    io_b = columns.build_port_io(lib, "B", blocks["B"], specs["B"])
     caps = columns.build_cap_array(lib, edges)
     array = cells[f"array_x{wordlines}x4_tap{tap_pitch}_sram_8t"]
     leaf = columns.build_colgrp(lib, array, io_a, io_b, caps, wordlines)
@@ -241,14 +493,239 @@ def build_leaf(wordlines, tap_pitch):
         corner = edges[edge_cells.oriented_name("sram_cell_8t_corner", False, bottom)]
         ends.add(gdstk.Reference(corner, origin=(corner_x - bx0, y - by0)))
         for col in range(2):
-            ends.add(gdstk.Reference(
-                blank, origin=(filler_x + col * half_width - fx0,
-                               y + fy1 if bottom else y - fy0),
-                x_reflection=bottom,
-            ))
+            ends.add(
+                gdstk.Reference(
+                    blank,
+                    origin=(
+                        filler_x + col * half_width - fx0,
+                        y + fy1 if bottom else y - fy0,
+                    ),
+                    x_reflection=bottom,
+                )
+            )
     capped.add(gdstk.Reference(ends))
+    tie_end_row_stubs(capped)
     columns.rect(capped, (0, -pitch, width, 5 * pitch), 100)
     return capped
+
+
+def tie_end_row_stubs(cell):
+    """Join each dummy row's stray supply stubs to the row's own supply metal.
+
+    The corner and tap-slot cells of the dummy rows keep bitline and supply
+    stubs at the real cells' heights, labelled VSS or VDD but touching
+    nothing: twenty 162 nm bars a tile, on M2 and M4, that the router would
+    otherwise have to reach one by one between the M5 wordlines, which it
+    manages only at some track phases.  Stubs of one net at one height are
+    first bridged along the row on M2.  Then a VSS stub on M2 takes a strap
+    up the column to the row's VSS bar; an M4 stub, which cannot be strapped
+    on M4 (one direction only), takes a V3 onto the cell's own VSS via
+    stack, or an M3 jog to it; and the VDD bar, whose nearest VDD is the
+    neighbouring real row's M2 bar across the dummy row's VSS bars, takes a
+    V2, an M3 jog on a free track and a V2 down.  The tile then presents
+    rails.
+    """
+    HALF, HALF3, CAP3 = 0.009, 0.009, 0.014
+    graph, net_of_root, members, m3, m2 = _supply_graph(cell)
+
+    def is_stub(polys):
+        layers = {p.layer for p in polys}
+        if len(layers) != 1 or next(iter(layers)) not in (20, 40):
+            return False
+        x0 = min(p.bounding_box()[0][0] for p in polys)
+        x1 = max(p.bounding_box()[1][0] for p in polys)
+        return x1 - x0 < 0.2
+
+    # Bridge: same net, M2, same height, nothing on M2 in between.
+    stubs = {root: polys for root, polys in members.items() if is_stub(polys)}
+    groups = defaultdict(list)
+    for root, polys in stubs.items():
+        (x0, y0), (x1, y1) = polys[0].bounding_box()
+        if polys[0].layer == 20:
+            groups[(net_of_root[root], round((y0 + y1) / 2, 3))].append(
+                (x0, x1, y0, y1)
+            )
+    for (net, _), bars in groups.items():
+        bars.sort()
+        for (_, ax1, y0, y1), (bx0, _, _, _) in zip(bars, bars[1:]):
+            if any(
+                bb[0][0] < bx0
+                and bb[1][0] > ax1
+                and bb[0][1] < y1 + 0.018
+                and bb[1][1] > y0 - 0.018
+                for bb, root in m2
+                if net_of_root.get(root) != net
+            ):
+                continue
+            cell.add(gdstk.rectangle((ax1, y0), (bx0, y1), layer=20))
+
+    # Tie: everything single-layer and short is a stub, before or after bridging.
+    graph, net_of_root, members, m3, m2 = _supply_graph(cell)
+
+    def m3_is_free(x, y0, y1, own):
+        # M3 keeps 18 nm from a long edge and 25 nm from a short one (M3.S.1, .2).
+        for ((ax, ay), (bx, by)), root in m3:
+            if root in own:
+                continue
+            clear = 0.018 if by - ay > 0.036 else 0.025
+            if (
+                ax < x + HALF3 + clear
+                and bx > x - HALF3 - clear
+                and ay < y1 + clear
+                and by > y0 - clear
+            ):
+                return False
+        return True
+
+    def m2_is_free(x0, y0, x1, y1, own):
+        return not any(
+            bb[0][0] < x1 + 0.018
+            and bb[1][0] > x0 - 0.018
+            and bb[0][1] < y1 + 0.018
+            and bb[1][1] > y0 - 0.018
+            for bb, root in m2
+            if root not in own
+        )
+
+    def nearest(box, net, layer, reach, exclude, min_overlap):
+        """Closest same-net polygon on `layer` sharing `min_overlap` of x: (gap, root, bbox of its run)."""
+        (sx0, sy0), (sx1, sy1) = box
+        best = None
+        for root, polys in members.items():
+            if net_of_root[root] != net or root == exclude:
+                continue
+            for polygon in polys:
+                if polygon.layer != layer:
+                    continue
+                (ox0, oy0), (ox1, oy1) = polygon.bounding_box()
+                gap = max(oy0 - sy1, sy0 - oy1)
+                if min(sx1, ox1) - max(sx0, ox0) >= min_overlap - 1e-6 and gap < reach:
+                    if best is None or gap < best[0]:
+                        best = (gap, root, ((ox0, oy0), (ox1, oy1)))
+        if best is None:
+            return None
+        # A row's bar is a chain of overlapping cell-wide pieces: take the
+        # whole run at that height, so the jog can go anywhere along it.
+        gap, root, ((ox0, oy0), (ox1, oy1)) = best
+        for polygon in members[root]:
+            (px0, py0), (px1, py1) = polygon.bounding_box()
+            if (
+                polygon.layer == layer
+                and abs(py0 - oy0) < 0.003
+                and abs(py1 - oy1) < 0.003
+            ):
+                ox0, ox1 = min(ox0, px0), max(ox1, px1)
+        return gap, root, ((ox0, oy0), (ox1, oy1))
+
+    def m3_jog(x, y_a, y_b, own):
+        lo, hi = sorted((y_a, y_b))
+        if not m3_is_free(x, lo - CAP3, hi + CAP3, own):
+            return False
+        cell.add(
+            gdstk.rectangle((x - HALF3, lo - CAP3), (x + HALF3, hi + CAP3), layer=30)
+        )
+        m3.append((((x - HALF3, lo - CAP3), (x + HALF3, hi + CAP3)), own[0]))
+        return True
+
+    for root, polys in members.items():
+        layers = {p.layer for p in polys}
+        if len(layers) != 1 or next(iter(layers)) not in (20, 40):
+            continue
+        net, layer = net_of_root[root], next(iter(layers))
+        sx0 = min(p.bounding_box()[0][0] for p in polys)
+        sx1 = max(p.bounding_box()[1][0] for p in polys)
+        sy0 = min(p.bounding_box()[0][1] for p in polys)
+        sy1 = max(p.bounding_box()[1][1] for p in polys)
+        if sx1 - sx0 > 0.2 and sy1 - sy0 > 0.03:
+            continue  # not a stub nor a bridged run: a bar the router can reach
+        y_stub = (sy0 + sy1) / 2
+        box = ((sx0, sy0), (sx1, sy1))
+        if layer == 20:
+            found = nearest(box, net, 20, 0.7, root, 0.036)
+            if found is None:
+                raise RuntimeError(
+                    f"no {net} M2 near the stub at ({sx0:.3f}, {sy0:.3f})"
+                )
+            gap, target, ((tx0, ty0), (tx1, ty1)) = found
+            x0, x1 = max(sx0, tx0), min(sx1, tx1)
+            if gap < 0.2:  # the row's own bar, a strap away on M2
+                lo, hi = min(sy0, ty0), max(sy1, ty1)
+                for x in (
+                    x0 + 0.018 + k * 0.036 for k in range(int((x1 - x0) / 0.036))
+                ):
+                    if m2_is_free(x - HALF, lo, x + HALF, hi, (root, target)):
+                        cell.add(
+                            gdstk.rectangle((x - HALF, lo), (x + HALF, hi), layer=20)
+                        )
+                        break
+                else:
+                    raise RuntimeError(
+                        f"no room for an M2 strap from the {net} stub at ({sx0:.3f}, {sy0:.3f})"
+                    )
+                continue
+            # A V2 at each end and an M3 jog on a track (the wordlines sit at
+            # 18 mod 36 nm) inside both bars and clear of every other M3.
+            y_bar = (ty0 + ty1) / 2
+            first = math.ceil((x0 + 2 * HALF - 0.018) / 0.036) * 0.036 + 0.018
+            for x in (first + k * 0.036 for k in range(40)):
+                if x + 2 * HALF > x1:
+                    raise RuntimeError(
+                        f"no free M3 track over the {net} bar at ({x0:.3f}..{x1:.3f}, {y_stub:.3f})"
+                    )
+                if m3_jog(x, y_stub, y_bar, (root, target)):
+                    break
+            for y in (y_stub, y_bar):
+                cell.add(
+                    gdstk.rectangle(
+                        (x - HALF, y - HALF), (x + HALF, y + HALF), layer=25
+                    )
+                )
+        else:
+            found = nearest(box, net, 30, 0.2, root, 2 * HALF3)
+            if found is None:
+                raise RuntimeError(
+                    f"no {net} M3 near the M4 stub at ({sx0:.3f}, {sy0:.3f})"
+                )
+            _, target, ((tx0, ty0), (tx1, ty1)) = found
+            x = (tx0 + tx1) / 2  # the stack's own M3 column
+            if not sx0 + 0.020 <= x <= sx1 - 0.020:  # M4 past V3 by 11 nm a side
+                raise RuntimeError(
+                    f"the {net} M3 at x={x:.3f} is not under the M4 stub ({sx0:.3f}..{sx1:.3f})"
+                )
+            if (
+                not ty0 <= y_stub <= ty1
+            ):  # the stack's M3 stops short of the stub: jog to it
+                y_m3 = ty0 if ty0 > y_stub else ty1
+                if not m3_jog(x, y_stub, y_m3, (root, target)):
+                    raise RuntimeError(
+                        f"the M3 jog to the {net} M4 stub at ({x:.3f}, {y_stub:.3f}) is blocked"
+                    )
+            cell.add(
+                gdstk.rectangle(
+                    (x - HALF3, y_stub - 0.012), (x + HALF3, y_stub + 0.012), layer=35
+                )
+            )
+
+
+def _supply_graph(cell):
+    """The cell's metal graph, its supply-labelled roots, their polygons, and all M3/M2 boxes by root."""
+    graph = MetalGraph(cell)
+    net_of_root = {}
+    for label in cell.get_labels(depth=None):
+        net = supply(label.text)
+        if net is not None and label.layer in METALS:
+            net_of_root[graph.label_root(label)] = net
+    members = defaultdict(list)
+    m3, m2 = [], []
+    for i, polygon in enumerate(graph.polygons):
+        root = graph.root(i)
+        if polygon.layer == 30:
+            m3.append((polygon.bounding_box(), root))
+        if polygon.layer == 20:
+            m2.append((polygon.bounding_box(), root))
+        if polygon.layer in METALS and root in net_of_root:
+            members[root].append(polygon)
+    return graph, net_of_root, members, m3, m2
 
 
 def run(args):
@@ -262,7 +739,23 @@ def run(args):
     tap_pitch = math.gcd(array_wordlines, 16)
     leaf = build_leaf(array_wordlines, tap_pitch)
     leaf_labels = [label for label in leaf.labels if not supply(label.text)]
-    hard, pins, lef, size = abstract(leaf, "dp_column", leaf_labels)
+
+    def is_wordline(net):
+        return WORDLINE.fullmatch(net) is not None
+
+    hard, pins, lef, size = abstract(
+        leaf, "dp_column", leaf_labels, abutted=is_wordline
+    )
+    strip_lib = gdstk.Library(unit=1e-6, precision=1e-10)
+    strip_pairs, slice_load = build_wordline_strips(
+        strip_lib, leaf, args.wordlines, args.bits
+    )
+    pair_masters = {}
+    for half, pair in strip_pairs.items():
+        pair_labels = [label for label in pair.labels if not supply(label.text)]
+        pair_masters[half] = abstract(
+            pair, f"dp_wl_strips_{half}", pair_labels, abutted=is_wordline
+        )
     ctrl_lib = gdstk.read_gds(str(args.controller))
     ctrl = next(c for c in ctrl_lib.cells if c.name == "ctrl_decode")
     add_pin_conductors(ctrl)
@@ -275,53 +768,100 @@ def run(args):
         ctrl, "dp_controller", ctrl_labels
     )
     masters = {"dp_column": (hard, pins), "dp_controller": (controller, ctrl_pins)}
+    masters.update({name: (cell, cell_pins) for name, (cell, cell_pins, _, _) in
+                    ((m[0].name, m) for m in pair_masters.values())})  # fmt: skip
     (work / "blocks.lef").write_text(
         'VERSION 5.8 ;\nBUSBITCHARS "[]" ;\nDIVIDERCHAR "/" ;\n'
         + lef
         + "\n"
         + ctrl_lef
+        + "\n"
+        + "\n".join(m[2] for m in pair_masters.values())
         + "\nEND LIBRARY\n"
     )
     library = gdstk.Library(unit=1e-6, precision=1e-10)
-    for c in (hard, controller):
+    for c in (hard, controller, *(m[0] for m in pair_masters.values())):
         for dep in [c, *c.dependencies(True)]:
             if dep.name not in {p.name for p in library.cells}:
                 library.add(dep)
     library.write_gds(str(work / "blocks.gds"), timestamp=columns.FIXED_GDS_TIMESTAMP)
 
     top_name = f"sram_x{args.wordlines * 2}x{args.bits}x{args.banks}"
-    # Independent column tiles provide routing channels and avoid inheriting
-    # the 6T stack's 13.5 nm overlap. Banks share data, not wordline addresses.
-    gap = args.channel_width
-    if gap < 2.0:
-        raise RuntimeError("routing channels must be at least 2 um wide")
+    # Three kinds of empty space, each its own option: the margin between the
+    # blocks and the macro edge, where the macro's pins land (M8/M9) and turn;
+    # the channel on each side of the controller, where its outputs fan out;
+    # and the gap between banks.  Every one is routed on the top layers over
+    # the blocks as well, so none needs to hold whole buses.
+    margin, channel, bank_gap = args.margin, args.channel_width, args.bank_gap
+    margin_y = args.margin_y if args.margin_y is not None else margin
+    for name, value in (
+        ("margin", margin),
+        ("margin_y", margin_y),
+        ("channel", channel),
+        ("bank gap", bank_gap),
+    ):
+        if value < 0.2:
+            raise RuntimeError(f"the {name} must be at least 0.2 um, got {value}")
     # Preserve the validated pin-access phase in each bank. 2.88 um is the
     # least common multiple of all M1-M9 routing pitches; an arbitrary bank
     # stride can strand the small cap/tap ground terminals between tracks.
-    bank_stride = math.ceil((size[0] + gap) / 2.88) * 2.88
+    bank_stride = math.ceil((size[0] + bank_gap) / 2.88) * 2.88
     width = max(
-        (args.banks - 1) * bank_stride + size[0] + 2 * gap, ctrl_size[0] + 2 * gap
+        (args.banks - 1) * bank_stride + size[0] + 2 * margin, ctrl_size[0] + 2 * margin
     )
-    height = args.bits * (size[1] + gap) + ctrl_size[1] + 3 * gap
-    instances = [("CTRL", "dp_controller", (gap, height - ctrl_size[1] - gap))]
+    # Bottom to top: the lower stack of tiles, abutted at the tile's boundary
+    # pitch; its strip pair facing down into it; a channel; the controller; a
+    # channel; the upper stack's pair facing up; the upper stack.  A tile's
+    # IO columns are shorter than its array, so the stacks keep a channel per
+    # tile on each IO side for the controls and data.
+    bx0, by0, bx1, by1 = columns.boundary_box(leaf)
+    tile_pitch = by1 - by0
+    tile_ox, tile_oy = bbox_origin(leaf)
+    pair_height = columns.boundary_box(strip_pairs["hi"])[3]
+    half_bits = args.bits // 2
+    stack = half_bits * tile_pitch
+    y_lo_tiles = margin_y
+    y_lo_strips = y_lo_tiles + stack
+    y_ctrl = y_lo_strips + pair_height + channel
+    y_hi_strips = y_ctrl + ctrl_size[1] + channel
+    y_hi_tiles = y_hi_strips + pair_height
+    height = y_hi_tiles + stack + margin_y
+    # (instance, master, origin, pin net -> macro net)
+    instances = [("CTRL", "dp_controller", (margin, y_ctrl), lambda net: net)]
     nets = defaultdict(list)
     probes = defaultdict(list)
     for pin, info in ctrl_pins.items():
         if info.get("private"):
             continue
-        net = info["net"]
-        nets[net].append(("CTRL", pin))
+        nets[info["net"]].append(("CTRL", pin))
     for bank in range(args.banks):
+        x_bank = margin + bank * bank_stride
         for bit in range(args.bits):
             inst = f"COL_{bank}_{bit}"
-            origin = (gap + bank * bank_stride, gap + bit * (size[1] + gap))
-            instances.append((inst, "dp_column", origin))
+            y_tile = (y_lo_tiles + bit * tile_pitch if bit < half_bits
+                      else y_hi_tiles + (bit - half_bits) * tile_pitch)  # fmt: skip
+            origin = (x_bank - (bx0 - tile_ox), y_tile - (by0 - tile_oy))
+            resolve = functools.partial(
+                leaf_net, bank=bank, bit=bit, wordlines=args.wordlines, bits=args.bits
+            )
+            instances.append((inst, "dp_column", origin, resolve))
             for pin, info in pins.items():
-                if info.get("private"):
+                if info.get("private") or info.get("abutted"):
                     continue
-                nets[leaf_net(info["net"], bank, bit, args.wordlines)].append(
-                    (inst, pin)
-                )
+                nets[resolve(info["net"])].append((inst, pin))
+        for half, y_pair in (("lo", y_lo_strips), ("hi", y_hi_strips)):
+            cell, cell_pins, _, _ = pair_masters[half]
+            inst = f"WL_{half.upper()}_{bank}"
+            pox, poy = bbox_origin(strip_pairs[half])
+            origin = (x_bank + pox, y_pair + poy)  # the pair is drawn in the tile's x
+            resolve = functools.partial(
+                strip_net, bank=bank, half=half, wordlines=args.wordlines
+            )
+            instances.append((inst, cell.name, origin, resolve))
+            for pin, info in cell_pins.items():
+                if info.get("private") or info.get("abutted"):
+                    continue
+                nets[resolve(info["net"])].append((inst, pin))
 
     external = {"clk", "rst_n", "vdd", "vss"}
     external.update(f"{p}_n_{port}" for p in ("ce", "we", "oe") for port in "AB")
@@ -348,22 +888,13 @@ def run(args):
         f"DIEAREA ( 0 0 ) ( {dbu(width)} {dbu(height)} ) ;",
         f"COMPONENTS {len(instances)} ;",
     ]
-    for inst, master, (x, y) in instances:
+    for inst, master, (x, y), resolve in instances:
         d.append(f"- {inst} {master} + FIXED ( {dbu(x)} {dbu(y)} ) N ;")
         for pin, info in masters[master][1].items():
             if info.get("private"):
                 net = f"private:{inst}:{pin}"
             else:
-                net = (
-                    info["net"]
-                    if inst == "CTRL"
-                    else leaf_net(
-                        info["net"],
-                        int(inst.split("_")[1]),
-                        int(inst.split("_")[2]),
-                        args.wordlines,
-                    )
-                )
+                net = resolve(info["net"])
             probes[net].append(
                 {
                     "instance": inst,
@@ -467,11 +998,15 @@ def run(args):
         "size_um": [width, height],
         "banks": args.banks,
         "bits": args.bits,
-        "floorplan": "one IO per end of the bitlines: port A | array | port B",
+        "floorplan": "controller band between two stacks of abutted column tiles "
+        "(port A IO | array | port B IO), a wordline driver strip pair on each side",
         "wordlines_per_half": args.wordlines,
         "array_wordlines": array_wordlines,
         "tap_pitch": tap_pitch,
-        "column_tiles": len(instances) - 1,
+        "column_tiles": args.banks * args.bits,
+        "wordline_slice": wl_slices.slice_name(slice_load),
+        "cells_along_wordline": 4 * (args.bits // 2),
+        "wordline_strip_pairs": 2 * args.banks,
         "checked_net_partitions": len(probes),
         "routing_drc_violations": 0,
         "physical_connectivity": "PASS",
@@ -484,7 +1019,8 @@ def run(args):
         json.dumps(report, indent=2) + "\n"
     )
     print(
-        f"PASS: {top_name}: {len(instances) - 1} column tiles, {len(probes)} connected nets"
+        f"PASS: {top_name}: {args.banks * args.bits} column tiles, {2 * args.banks} strip pairs, "
+        f"{len(probes)} connected nets"
     )
 
 
@@ -541,7 +1077,17 @@ def main():
     parser.add_argument("--openroad", default="openroad")
     parser.add_argument("--route-iterations", type=int, default=64)
     parser.add_argument("--route-timeout", type=int, default=900)
-    parser.add_argument("--channel-width", type=float, default=2.0)
+    parser.add_argument("--channel-width", type=float, default=0.3,
+                        help="um between the controller and each strip pair")  # fmt: skip
+    parser.add_argument("--margin", type=float, default=0.3,
+                        help="um from the blocks to the macro edge, where the pins land")  # fmt: skip
+    parser.add_argument("--bank-gap", type=float, default=0.3, help="um between banks")
+    parser.add_argument(
+        "--margin-y",
+        type=float,
+        default=None,
+        help="top/bottom margin, if not --margin",
+    )
     run(parser.parse_args())
 
 

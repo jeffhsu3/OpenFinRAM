@@ -214,20 +214,65 @@ the other's core. (Until 2026-09-21 both wrappers sat side by side between two
 half arrays: port B crossed the A wrapper on M4 and port A rose to M6 to cross
 the B wrapper. That bought bitlines half as long at the price of both
 crossovers and a top/bottom split through the RTL and the netlist.) Each
-`iocol` is its wrapper plus a 0.144 um gap strapped on the bitlines' own
-layer. The edge cap hands every bitline through and the filler beside it has
-no metal, so port A's M2 bitlines are strapped across the filler; port B's end
-meets its IO on the array's last tap, as an IO face always has.
+`iocol` abuts the array. The edge cap hands every bitline through and the
+filler beside it has no metal, so port A's M2 bitlines are strapped across
+the filler; port B's end meets its IO on the array's last tap, as an IO face
+always has.
 
-The wrappers are still the published two-faced core. Only the face turned to
-the array carries bitlines (A's right face, B's left). The other face idles
-precharged: its four selects and precharge enable are tied low and its four
-complement selects high, as `VSS`/`VDD` labels on the wrapper's own M3 pins,
-which the macro router connects like any other supply terminal. Both ports
-export their write-enable and write-data pins, and each wrapper's
-`SAE`/`SAPRECHN` pair is shorted to the corresponding per-port sense phase.
-The two-faced composite `iocolgrp_sram_8t` survives only as the SPICE fixture
-the device-level IO regressions drive.
+Each `iocol` is the parametric column block from `chipforge_asap7`
+(`IoColumnSpec`): a four-leaf bitline mux group, a sense amplifier, a write
+driver and an output latch drawn on the 8T row, with a tap, 1620 x 2376 nm.
+`generate_asap7_8t_iocolumn.py` builds it at the bitcell's own bitline
+heights (the centres of the `BLA`/`BLAN` M2 bars and the `BLB`/`BLBN` M4
+bars), mirrors it in x for port A so the entries face the array, and writes
+the block's netlist beside the GDS (`tech/spice/sram_8t_iocolumn.sp`, one flat
+subcircuit per port and an `iocol_sram_8t_{a,b}` wrapper in the pin order
+`SpiceGenerator` instantiates). The amplifier's `SAE` and `SAPRECHN` are one
+net (`one_sense_phase`), as the earlier composite drove them. The reused 6T
+wrappers (`sram_8t_ioprech.gds`, the `ioprech_sram_8t_*` templates) are no
+longer in the macro; their generator and device-level SPICE gates remain.
+
+Against the wrappers, on `sram_x4x2x1`: the port IO is 1.76 um wide instead
+of 3.89, the macro reads 15 to 29 ps sooner at Q, the spaced program's energy
+is 8 % lower, and every read and cell is right. The write-enable glitch is
+unchanged.
+
+### The dummy rows' stubs are tied in the tile (2026-09-22)
+
+The corner and tap-slot cells of a tile's two dummy rows keep bitline and
+supply stubs at the real cells' heights, labelled VSS or VDD but touching
+nothing: twenty 162 nm bars a tile on M2 and M4. Each was a terminal of its
+own, and reaching one between the M5 wordlines went right or wrong with the
+track phase, which is what had held the margins at 2 um. `build_leaf` now
+ties them (`tie_end_row_stubs`): stubs of one net at one height are bridged
+along the row on M2; a VSS stub on M2 gets a strap up to the row's VSS bar;
+an M4 stub, which M4 (one direction only) cannot strap, gets a V3 onto the
+cell's own VSS via stack or an M3 jog to it; and the VDD bar, whose nearest
+VDD is the neighbouring real row's across the dummy row's VSS bars, gets a
+V2, an M3 jog on a free track and a V2 down. VSS components per tile 46 to
+26, VDD 16 to 12, tile DRC unchanged at 220. With that and supply pins on
+every layer, margins from 0.2 um up all route.
+
+### The block sits on the array's fin grid (2026-09-22)
+
+The bitcell centres a fin on its row boundary (fins at 0, 27, 54 ... nm up the
+row); chipforge's cells, like ASAP7's standard cells, centre a fin *space*
+there (13.5, 40.5 ...). Until 2026-09-22 the block stood 0.144 um off the
+array with a strap per bitline across the gap, which kept the two fin grids
+from touching but did not put them on one grating. The released ASAP7 bank
+has the same two grids (its `sram_cell_6t_122` on one, its sense amplifier,
+tap and decoder cells on the other) and resolves them by placing the IO group
+half a fin pitch up its row so the fins run straight through the seam. The
+block now does the same: `BitlineMuxSpec(grid_offset=13.5)` keeps
+`bitline_entry` measured from the array's row while the leaf is drawn 13.5 nm
+lower on its own edge (and 13.5 higher for the group's flipped leaves, whose
+rows it sits *below*), `build_port_io` places the block 13.5 nm up the
+column, and the gap and its straps are gone: the array's bars overhang its
+edge by 18 nm (the cap's) and 27 nm (the tap's) into the block's landings.
+`fin_grid_offset(bitcell)` reads the offset off the bitcell rather than
+assuming it. The tile is 3.996 um wide instead of 4.284; the public DRC deck
+gives the same 220 markers on it, rule for rule, none at either seam; every
+fin in the tile is on one 27 nm grid.
 
 ## Physical interface
 
@@ -486,16 +531,67 @@ deck before treating this cell as tapeout-qualified.
 The open-source 2RW path now uses `scripts/compile_asap7_2rw.py` for macro
 placement and routing, separate from the academic 6T assembler. It generates
 one tapped array of `2 * --wordlines` wordlines per column, the cap family at
-its port-A end, and an IO column at each end. Column tiles are placed in routing channels;
-banks share the external data buses and receive separate controller selects.
-The controller floorplan uses measured 8T tile geometry. Both write-enable
-polarities and both write-data buses are routed without tie-offs; the only
-tied pins are the nine controls of each wrapper's idle face.
+its port-A end, and an IO column at each end. Banks share the external data
+buses and receive separate controller selects. Both write-enable polarities
+and both write-data buses are routed without tie-offs.
+
+### Floorplan: controller band between two abutted stacks
+
+Since 2026-09-22 the data bits are two stacks of column tiles with the
+controller band between them, the way the 6T macro keeps its control spine
+mid-array: bits `0 .. bits/2 - 1` below the band, the rest above. The tiles
+of a stack abut at the tile's boundary pitch (six bitcell rows: four mux rows
+and the dummy row on each side), so a stack's wordlines (port A on M3, port B
+on M5) run through every tile by abutment and are never routed. Each stack's
+wordlines are driven at its edge by a pair of driver strips built from
+chipforge_asap7's `DriverSliceSpec` (`WL<i> = SEL . B<i>`, four wordlines a
+slice on the array's 108 nm pitch):
+
+* port A's strip sits against the array, its outputs on the port-A tracks;
+* port B's strip is flipped under it on a shared VSS rail, each output
+  climbing to the tile's M5 wordline (6 nm off the M3 track) on a
+  VIA34/VIA45 stack and an M5 strap;
+* both strips sit half a fin pitch (13.5 nm) in from the pair's edges, so
+  their fins and the array's are on one 27 nm grid (the array centres a fin on
+  its boundary, the slices a fin space), port A's outputs bridged to the edge
+  on M3;
+* a filler stands wherever a slice has no neighbour: under the array's tap
+  columns and at the row's ends.
+
+The slice is picked from the ladder `scripts/generate_asap7_8t_wl_slices.py`
+writes (`tech/gds/sram_8t_wl_slices.gds`, `tech/spice/sram_8t_wl_slices.sp`:
+`wl_slice_c{4,8,16,32,64}`, sized with `size_decoder` at 0.181 fF a cell) by
+the cells along the wordline in one stack, `4 * bits/2`; past 64 cells the
+post-decode NAND no longer fits its band and the compiler refuses. The
+controller (`tech/verilog_dp/sram_control.v`) no longer has a wordline
+driver stage: per port it emits `sel_lo[3:0]`, the static one-hot of the
+wordline index's low two bits shared by every slice, and `sel_hi[bank][k]`,
+the one-hot of the high bits gated by the wordline phase and the bank. The
+SPICE deck carries the ladder, one `wl_strip_c<cells>_x<slices>` and the two
+pairs `wl_strips_{lo,hi}_...`; the datapath halves are `Xdata_lo`/`Xdata_hi`
+on `wl_{a,b}_{lo,hi}[...]`.
+
+Between the strips and the controller lies `--channel-width`, outside the
+blocks `--margin`, and between banks `--bank-gap`, all 0.3 um by default
+(0.2 is the floor). A tile's IO columns are two rows tall against its six-row
+pitch, so the abutted stacks still leave a channel per tile on each IO side
+for the controls and data, and everything else is routed over the blocks on
+the upper layers; the macro pins land on M8/M9 at the edge. In the abstracts
+the wordline nets are obstructions, not pins (`abstract(..., abutted=...)`):
+the router never sees them, and the connectivity gate proves each one is a
+single conductor through the tiles and its strip, isolated from every other
+net.
+
+The controller's floorplan is the column's width by whatever height puts
+its cells at 50 % utilization (40 % for the single-port controller, which
+still carries a buffer stage per wordline; 60 % left the two-port one no room
+for its hold-repair buffers).
 
 The assembler extracts metal/via connectivity from the actual hard-cell GDS.
 Each disconnected supply component gets its own terminal, so the router must
-connect all array, IO, tap, and controller supply islands. IO/power pin access
-uses the highest metal in each connected component. Controller signal access
+connect all array, IO, tap, and controller supply islands. A supply component
+is a pin on every layer it has, so the router lands on a rail or a bar; a
+signal component's pin is its highest metal. Controller signal access
 follows the designated pin layer, including its connected landing wire but
 not higher internal routing. Other metal is an obstruction. After OpenROAD
 routing and KLayout streamout, a second conductor

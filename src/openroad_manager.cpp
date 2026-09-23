@@ -19,6 +19,11 @@ bool OpenRoadManager::run_openroad_flow() {
     gen.set_design_name("ctrl_decode");
     gen.set_site_name("asap7sc7p5t");
     gen.set_site_height(0.27);
+    // 40% was safe while the two-port controller carried a buffer stage per
+    // wordline; since the driver slices took the wordlines it is small
+    // logic plus its delay chains; 50% leaves hold repair its buffers (60%
+    // did not).
+    gen.set_max_utilization(cli_options_.single_port ? 0.40 : 0.50);
     gen.set_bitcell_width(cli_options_.bitcell_width);
 
     // QoR and work_dir must match YosysManager's CWD-based tmp (repo/tmp) for consistency

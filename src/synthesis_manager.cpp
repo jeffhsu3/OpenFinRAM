@@ -272,8 +272,11 @@ bool SynthesisManager::predict_capacitance() {
         signal_map["WRENA"] = {"wrena", "wrenan"};
         signal_map["SAE"] = {"sae", "saprechn", "oeb_out", "oe_out"};
     } else {
-        signal_map["WLT"] = {"wl_A", "wl_B"};
-        signal_map["YSELT"] = {"ysel_A", "yseln_A", "ysel_B", "yseln_B"};
+        // The wordlines are driven by the slice strips at the array; the
+        // controller's predecode lines fan out to the slices like a column
+        // select does to its columns.
+        signal_map["YSELT"] = {"ysel_A", "yseln_A", "ysel_B", "yseln_B",
+                               "sel_hi_A", "sel_hi_B", "sel_lo_A", "sel_lo_B"};
         signal_map["BLPRECHTN"] = {"blprechn_A", "blprechn_B"};
         signal_map["WRENA"] = {"wrena_A", "wrenan_A"};
         signal_map["SAE"] = {"sae_A", "sae_B", "oeb_out_A", "oe_out_A", "oeb_out_B", "oe_out_B"};

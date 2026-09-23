@@ -180,26 +180,30 @@ class Geometry:
 
 
 def locate(cells: list[dict], wordlines: int) -> None:
-    """Add ``half``, ``col``, ``row`` and ``group`` to each cell, from what it is wired to.
+    """Add ``half``, ``col``, ``row``, ``group`` and ``stack`` to each cell, from what it is wired to.
 
-    The wordline a cell sits on is a controller output (``wl_a[i]``, one bus
-    over the whole array) and its bitline is a net of its column group
-    (``BL_A[c]``), so neither the instance names nor their order are assumed.
-    Both ports are checked: a cell on ``wl_a[i]`` has to be on ``wl_b[i]``.
+    The wordline a cell sits on is a driver strip output (``wl_a_lo[i]``, one
+    bus over the stack of data bits below the controller band, ``wl_a_hi[i]``
+    the one above) and its bitline is a net of its column group (``BL_A[c]``),
+    so neither the instance names nor their order are assumed.  Both ports are
+    checked: a cell on ``wl_a_lo[i]`` has to be on ``wl_b_lo[i]``.
     """
     for cell in cells:
-        wordline = re.fullmatch(r"(?:.*:)?wl_a\[(\d+)\]", cell["nets"]["wla"], re.IGNORECASE)
-        other = re.fullmatch(r"(?:.*:)?wl_b\[(\d+)\]", cell["nets"]["wlb"], re.IGNORECASE)
+        wordline = re.fullmatch(r"(?:.*:)?wl_a_(lo|hi)\[(\d+)\]", cell["nets"]["wla"], re.IGNORECASE)
+        other = re.fullmatch(r"(?:.*:)?wl_b_(lo|hi)\[(\d+)\]", cell["nets"]["wlb"], re.IGNORECASE)
         bitline = re.fullmatch(r"(.*):bl_a\[(\d+)\]", cell["nets"]["bla"], re.IGNORECASE)
-        if not wordline or not bitline or not other or other[1] != wordline[1]:
+        if (not wordline or not bitline or not other or other[2] != wordline[2]
+                or other[1].lower() != wordline[1].lower()):  # fmt: skip
             raise ValueError(f"cannot place {cell['path']}: {cell['nets']}")
-        index = int(wordline[1])
+        index = int(wordline[2])
         cell.update(half=index // wordlines, row=index % wordlines, col=int(bitline[2]),
-                    group=bitline[1])  # fmt: skip
+                    group=bitline[1], stack=wordline[1].lower())  # fmt: skip
 
 
 # ── Testbench ────────────────────────────────────────────────────────────────
 PATTERNS = ("zeros", "ones", "0101", "1010")
+#: The two stacks of data bits, below and above the controller band, each with its own wordlines.
+STACKS = ("lo", "hi")
 
 
 def pattern_of(address: int) -> str:
@@ -326,7 +330,8 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         value = background(cell["address"], cell["bit"])
         lines.append(f".IC V(Xdut:{cell['path']}:Q)={vdd * value:g} V(Xdut:{cell['path']}:QB)={vdd * (1 - value):g}")
     watched = ["clk", *outputs]
-    watched += [f"Xdut:wl_{port}[{index}]" for port in "ab" for index in range(2 * g.wordlines)]
+    watched += [f"Xdut:wl_{port}_{stack}[{index}]" for port in "ab" for stack in STACKS
+                for index in range(2 * g.wordlines)]  # fmt: skip
     watched += [f"Xdut:{net}" for net in ("sae_A[0]", "sae_B[0]", "wrena_A[0]", "wrena_B[0]")]
     watched += [f"Xdut:{cell['path']}:Q" for cell in cells]
     watched += [f"Xdut:{node}" for node in probes]
@@ -403,14 +408,17 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             if op.kind == "-":
                 continue
             selected = g.wordline(op.address)
-            for other in range(2 * g.wordlines):
-                if other == selected:
-                    continue
-                lifted = peak(f"V(XDUT:WL_{port}[{other}])", rise - period / 4, rise + period / 2)
-                if lifted > 0.3 * vdd:
-                    hazards.append({"cycle": cycle, "port": port, "volts": round(lifted, 3),
-                                    "what": f"unselected wordline wl_{port.lower()}[{other}]"})  # fmt: skip
-            fired = after_clock(f"V(XDUT:WL_{port}[{selected}])", rise)
+            for stack in STACKS:
+                for other in range(2 * g.wordlines):
+                    if other == selected:
+                        continue
+                    lifted = peak(f"V(XDUT:WL_{port}_{stack.upper()}[{other}])", rise - period / 4, rise + period / 2)
+                    if lifted > 0.3 * vdd:
+                        hazards.append({"cycle": cycle, "port": port, "volts": round(lifted, 3),
+                                        "what": f"unselected wordline wl_{port.lower()}_{stack}[{other}]"})  # fmt: skip
+            # Both stacks' strips decode the same address; the later one is the wordline time.
+            fired_each = [after_clock(f"V(XDUT:WL_{port}_{stack.upper()}[{selected}])", rise) for stack in STACKS]
+            fired = None if any(f is None for f in fired_each) else max(fired_each)
             if op.kind == "W":
                 writes.append({"cycle": cycle, "port": port, "address": op.address, "data": op.data,
                                "clk_to_wl_ps": ps(fired)})  # fmt: skip

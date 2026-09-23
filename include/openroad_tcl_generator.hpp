@@ -25,6 +25,8 @@ public:
     void set_design_name(const std::string& n) { design_name_ = n; }
     void set_site_name(const std::string& n) { site_name_ = n; }
     void set_site_height(double height);
+    // Cap on cell area over core area when the floorplan height is derived.
+    void set_max_utilization(double utilization);
     void set_bitcell_width(double width);
     void set_cpu_count(int local_cpu, int remote_cpu = 0);
 
@@ -71,6 +73,7 @@ private:
     std::string design_name_ = "ctrl_decode";
     std::string site_name_ = "asap7sc7p5t";
     double site_height_ = 0.27;
+    double max_utilization_ = 0.40;
     double bitcell_width_ = 0.108;
     int local_cpu_ = 8;
     QoRReport2 qor_;

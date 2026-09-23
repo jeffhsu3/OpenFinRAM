@@ -4,13 +4,22 @@
 // per port.  NUM_WL stays the number of rows one row-select field addresses;
 // the address bit above the column select (bank_sel) picks the upper or lower
 // NUM_WL wordlines of that one array.
+//
+// The wordlines themselves are driven at the array by four-wordline slices
+// (WL<i> = SEL . B<i>, chipforge_asap7's DriverSliceSpec), one strip per port
+// on each side of this controller.  So the controller emits, per port, the
+// one-hot of the wordline index's two low bits (sel_lo, static) and, per
+// bank, the one-hot of its high bits gated by the wordline phase (sel_hi):
+// wordline w = {bank_sel, row}, w[1:0] picks within a slice, w[WL_BITS-1:2]
+// the slice.
 module ctrl_decode #(
     parameter ADDR_WIDTH = 5,
     parameter NUM_WL     = 2,
     parameter NUM_BANK   = 1,
     parameter COLUMN_MUX = 4,
     parameter WL_BUF     = 5,
-    parameter SAE_BUF    = 15
+    parameter SAE_BUF    = 15,
+    parameter SLICES     = (2 * NUM_WL) / 4   // four wordlines per driver slice; not to be overridden
 )(
     input  logic                  clk,
     input  logic                  rst_n,
@@ -23,7 +32,8 @@ module ctrl_decode #(
     input  logic [ADDR_WIDTH-1:0] A_A,
     input  logic [ADDR_WIDTH-1:0] A_B,
 
-    output logic [NUM_BANK-1:0][2*NUM_WL-1:0]   wl_A,
+    output logic [NUM_BANK-1:0][SLICES-1:0]     sel_hi_A,
+    output logic [3:0]                          sel_lo_A,
     output logic [NUM_BANK-1:0]                 blprechn_A,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] ysel_A,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseln_A,
@@ -33,7 +43,8 @@ module ctrl_decode #(
     output logic [NUM_BANK-1:0]                 oe_out_A,
     output logic [NUM_BANK-1:0]                 sae_A,
 
-    output logic [NUM_BANK-1:0][2*NUM_WL-1:0]   wl_B,
+    output logic [NUM_BANK-1:0][SLICES-1:0]     sel_hi_B,
+    output logic [3:0]                          sel_lo_B,
     output logic [NUM_BANK-1:0]                 blprechn_B,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] ysel_B,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseln_B,
@@ -54,6 +65,7 @@ module ctrl_decode #(
     endfunction
 
     localparam ROW_BITS      = clog2(NUM_WL);
+    localparam WL_BITS       = ROW_BITS + 1;       // 2*NUM_WL wordlines: {bank_sel, row}
     localparam Y_BITS        = (COLUMN_MUX > 1) ? clog2(COLUMN_MUX) : 1;
     localparam SLICE_BITS    = (NUM_BANK > 1) ? clog2(NUM_BANK) : 1;
     localparam BANK_BIT_IDX  = ROW_BITS + Y_BITS;
@@ -125,31 +137,39 @@ module ctrl_decode #(
 
     wire wl_read_fire_B  = wl_any_fire_B && read_req_B;
 
-    // Predecode once per port and share across all bank/half enables.  The two
-    // driver arrays of a port are the upper and lower NUM_WL wordlines of one
-    // array: wl[bank][{bank_sel, row}].
-    wire [NUM_WL-1:0] row_decode_A, row_decode_B;
-    sram_row_decode #(.NUM_WL(NUM_WL)) u_row_decode_A
-        (.A(row_sel_r_A), .SEL(row_decode_A));
-    sram_row_decode #(.NUM_WL(NUM_WL)) u_row_decode_B
-        (.A(row_sel_r_B), .SEL(row_decode_B));
+    // Predecode once per port.  The low two bits of the wordline index pick a
+    // wordline within a slice: their one-hot is static and shared by every
+    // slice and bank.  The high bits pick the slice: their one-hot is gated by
+    // the wordline phase and the bank, and is the slice's SEL.
+    wire [WL_BITS-1:0] wl_index_A = {bank_sel_r_A, row_sel_r_A};
+    wire [WL_BITS-1:0] wl_index_B = {bank_sel_r_B, row_sel_r_B};
+    wire [3:0] lo_A, lo_B;
+    wire [SLICES-1:0] hi_A, hi_B;
+    if (2 * NUM_WL < 4 || (2 * NUM_WL) % 4 != 0) begin : g_bad_wordlines
+        invalid_sram_wordline_count u_invalid ();   // a strip is whole slices
+    end
+    sram_row_decode #(.NUM_WL(4), .ADDR_BITS(2)) u_lo_A
+        (.A(wl_index_A[1:0]), .SEL(lo_A));
+    sram_row_decode #(.NUM_WL(4), .ADDR_BITS(2)) u_lo_B
+        (.A(wl_index_B[1:0]), .SEL(lo_B));
+    if (SLICES > 1) begin : g_hi
+        sram_row_decode #(.NUM_WL(SLICES), .ADDR_BITS(WL_BITS - 2)) u_hi_A
+            (.A(wl_index_A[WL_BITS-1:2]), .SEL(hi_A));
+        sram_row_decode #(.NUM_WL(SLICES), .ADDR_BITS(WL_BITS - 2)) u_hi_B
+            (.A(wl_index_B[WL_BITS-1:2]), .SEL(hi_B));
+    end else begin : g_one_slice
+        assign hi_A = 1'b1;
+        assign hi_B = 1'b1;
+    end
+    assign sel_lo_A = lo_A;
+    assign sel_lo_B = lo_B;
     for (genvar bank = 0; bank < NUM_BANK; bank = bank + 1) begin : g_wordlines
         wire enable_A = rst_n && (read_req_A || write_req_A) && wl_any_fire_A
                         && (slice_sel_r_A == bank);
         wire enable_B = rst_n && (read_req_B || write_req_B) && wl_any_fire_B
                         && (slice_sel_r_B == bank);
-        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_upper_A
-            (.SEL(row_decode_A), .EN(enable_A && bank_sel_r_A),
-             .WL(wl_A[bank][2*NUM_WL-1:NUM_WL]));
-        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_lower_A
-            (.SEL(row_decode_A), .EN(enable_A && !bank_sel_r_A),
-             .WL(wl_A[bank][NUM_WL-1:0]));
-        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_upper_B
-            (.SEL(row_decode_B), .EN(enable_B && bank_sel_r_B),
-             .WL(wl_B[bank][2*NUM_WL-1:NUM_WL]));
-        sram_wordline_driver_array #(.NUM_WL(NUM_WL)) u_lower_B
-            (.SEL(row_decode_B), .EN(enable_B && !bank_sel_r_B),
-             .WL(wl_B[bank][NUM_WL-1:0]));
+        assign sel_hi_A[bank] = hi_A & {SLICES{enable_A}};
+        assign sel_hi_B[bank] = hi_B & {SLICES{enable_B}};
     end
 
     // SAE is asserted after wl_read_fire with an additional SAE_BUF delay

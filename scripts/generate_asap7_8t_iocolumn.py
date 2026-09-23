@@ -10,12 +10,15 @@ crosses the other's IO.  (The earlier floorplan put both IO cores mid-bitline
 between two half arrays: port B crossed the A core on M4 and port A climbed to
 M6 to cross the B core.)
 
-The port-A and port-B hard wrappers are still the published differential core
-behind a pitch adapter, and that core has a bitline interface on both faces.
-Only the face turned to the array is used -- A's right face, B's left.  The
-other face's column selects and precharge enable are tied off so that it
-idles precharged: they carry VSS/VDD labels here, and the macro router
-connects every supply-labelled conductor to its rail.
+Each port's IO is the parametric column block from ``chipforge_asap7``
+(`IoColumnSpec`): a four-leaf bitline mux group, sense amplifier, write
+driver and output latch drawn on the 8T row, with a tap.  It is built here at
+the bitcell's own bitline heights, mirrored for port A so its entries face
+the array, and abutted to it: the block sits half a fin pitch up the row so
+its fins fall on the bitcell's grid (the bitcell centres a fin on its row
+boundary, the block a fin space), and the array's bitline bars overhang into
+its landings.  Its netlist is written beside the GDS
+(``tech/spice/sram_8t_iocolumn.sp``) for ``SpiceGenerator``.
 
 The resulting ``colgrp_x{N}x4_sram_8t`` cells match the logical
 ``colgrp_sram_8t`` hierarchy emitted by ``SpiceGenerator``.  N is the number
@@ -31,19 +34,31 @@ import hashlib
 import math
 import re
 import sys
+import tempfile
 from pathlib import Path
 
+import gdspy
 import gdstk
+from chipforge_asap7.devices import (
+    BitlineMuxSpec,
+    IoColumnSpec,
+    block_netlist,
+    build_io_column,
+    io_column_pins,
+)
 from generate_asap7_8t_bitcell import topbot_name
 
 
 BOUNDARY = 100
+FIN = 2
 PIN_TEXTTYPE = 251
 M1, V1, M2, V2, M3, V3, M4, V4, M5, V5, M6, V6, M7 = (
     19, 21, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70
 )
 MUX_ROWS = 4
-GAP_WIDTH = 0.144
+#: ASAP7's fin pitch, and where chipforge's cells (and ASAP7's standard cells)
+#: centre their first fin above a row boundary.
+FIN_PITCH, LEAF_FIN_PHASE = 27.0, 13.5
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
 
 
@@ -112,49 +127,35 @@ def clone_label(
     )
 
 
-def add_route_shape(
-    cell: gdstk.Cell,
-    routes: dict[str, list[tuple[int, tuple[float, float, float, float]]]],
-    net: str,
-    layer: int,
-    box: tuple[float, float, float, float],
-) -> None:
-    rect(cell, box, layer)
-    routes.setdefault(net, []).append((layer, box))
+#: The block's pin for each of the IO column's, per port.
+BLOCK_PIN = {
+    "PRECHN": "blprechn_{p}", "SAE": "sae_{p}", "D": "D{P}", "Q": "Q{P}",
+    "WRENA": "wrena_{p}", "WRENAN": "wrenan_{p}", "OE": "oe_out_{p}", "OEB": "oeb_out_{p}",
+}
 
 
-# The face of each wrapper that meets the array.  The published core names its
-# two faces T and B after the half arrays it used to sit between; here they
-# are just the left (T) and the right (B) face of the hard cell.
-ARRAY_FACE = {"A": "B", "B": "T"}
+def iocol_pin_name(block_pin: str, port: str) -> str:
+    """The IO column's name for a block pin: ``BL[2]`` -> ``BL_A[2]``, ``PRECHN`` -> ``blprechn_A``."""
+    match = re.fullmatch(r"(BL|BLN|YSEL|YSELN)\[(\d+)\]", block_pin)
+    if match:
+        bus = match.group(1)
+        bus = bus if bus.startswith("BL") else bus.lower()
+        return f"{bus}_{port}[{match.group(2)}]"
+    if block_pin in ("VDD", "VSS"):
+        return block_pin
+    return BLOCK_PIN[block_pin].format(p=port, P=port)
 
 
-def port_pin_name(name: str, port: str) -> str | None:
-    """Composite name of a wrapper pin, a supply to tie it to, or None to hide it.
-
-    Pins of the face turned away from the array are tied so that it idles
-    precharged with every column deselected.
-    """
-    used, unused = ARRAY_FACE[port], "TB".replace(ARRAY_FACE[port], "")
-    scalar = {
-        f"WRENA_{port}": f"wrena_{port}",
-        f"WRENAN_{port}": f"wrenan_{port}",
-        f"D_{port}": f"D{port}",
-        f"Q_{port}": f"Q{port}",
-        f"OEB_OUT_{port}": f"oeb_out_{port}",
-        f"OE_OUT_{port}": f"oe_out_{port}",
-        f"SAE_{port}": f"sae_{port}",
-        f"BLPRECH{used}N_{port}": f"blprechn_{port}",
-        f"BLPRECH{unused}N_{port}": "VSS",
-    }
-    if name in scalar:
-        return scalar[name]
-    match = re.fullmatch(rf"YSEL([TB])(N?)_{port}\[([0-3])\]", name)
-    if not match:
-        return None
-    if match.group(1) == used:
-        return f"ysel{match.group(2).lower()}_{port}[{match.group(3)}]"
-    return "VDD" if match.group(2) else "VSS"
+def iocol_pins(port: str) -> list[str]:
+    """Pin order of ``iocol_sram_8t_{a,b}``, as SpiceGenerator instantiates it."""
+    return [
+        *(f"BL_{port}[{i}]" for i in range(MUX_ROWS)),
+        *(f"BLN_{port}[{i}]" for i in range(MUX_ROWS)),
+        *(f"ysel_{port}[{i}]" for i in range(MUX_ROWS)),
+        *(f"yseln_{port}[{i}]" for i in range(MUX_ROWS)),
+        f"blprechn_{port}", f"sae_{port}", f"wrena_{port}", f"wrenan_{port}",
+        f"oe_out_{port}", f"oeb_out_{port}", f"D{port}", f"Q{port}", "VDD", "VSS",
+    ]
 
 
 def colgrp_control_name(name: str) -> str:
@@ -169,119 +170,124 @@ def colgrp_control_name(name: str) -> str:
     return name
 
 
-def validate_route_spacing(
-    routes: dict[str, list[tuple[int, tuple[float, float, float, float]]]]
-) -> None:
-    spacing = {
-        V1: 0.018, M2: 0.018, V2: 0.018, M3: 0.018,
-        V3: 0.018, M4: 0.024, V4: 0.033, M5: 0.024,
-        V5: 0.033, M6: 0.032, V6: 0.045, M7: 0.032,
-    }
-    names = list(routes)
-    for index, name in enumerate(names):
-        for other_name in names[index + 1:]:
-            for layer, a in routes[name]:
-                for other_layer, b in routes[other_name]:
-                    if layer != other_layer:
-                        continue
-                    ax0, ay0, ax1, ay1 = a
-                    bx0, by0, bx1, by1 = b
-                    dx = max(ax0 - bx1, bx0 - ax1, 0.0)
-                    dy = max(ay0 - by1, by0 - ay1, 0.0)
-                    required = spacing.get(layer, 0.018)
-                    if dx == 0.0:
-                        okay = dy >= required - 1e-9
-                    elif dy == 0.0:
-                        okay = dx >= required - 1e-9
-                    else:
-                        okay = math.hypot(dx, dy) >= required - 1e-9
-                    if not okay:
-                        raise RuntimeError(
-                            f"route spacing violation on layer {layer}: "
-                            f"{name} {a} vs {other_name} {b}"
-                        )
-
-
 def port_io_name(port: str) -> str:
     return f"iocol_sram_8t_{port.lower()}"
 
 
-def build_port_io(library: gdstk.Library, wrapper: gdstk.Cell, port: str) -> gdstk.Cell:
-    """One port's IO column: its wrapper, and a strapped gap on the array side.
+def bitline_entries(bitcell: gdstk.Cell) -> dict[str, tuple[float, float]]:
+    """Where the bitcell puts each port's bitline pair, in nm from the bottom of its boundary.
 
-    Port A stands left of the array and port B right of it, so the gap is on
-    A's right and on B's left.  The bitlines cross it on the layer the array
-    delivers them on, M2 for port A and M4 for port B.
+    The pair's metal is the bar under its label: port A's on M2, port B's on
+    M4.  This is what the block's leaves are built to.
     """
-    x0, y0, x1, y1 = boundary_box(wrapper)
-    width, height = x1 - x0, y1 - y0
-    if height <= 0 or width <= 0:
-        raise RuntimeError("invalid 8T IO wrapper boundary")
-    if any(poly.layer == M5 for poly in wrapper.polygons):
-        raise RuntimeError("8T wrapper unexpectedly occupies the M5 wordline layer")
-    layer, half = (M2, 0.009) if port == "A" else (M4, 0.012)
-    wrapper_x = 0.0 if port == "A" else GAP_WIDTH
-    total_width = width + GAP_WIDTH
-    edge_x = total_width if port == "A" else 0.0
+    _, y0, _, _ = boundary_box(bitcell)
+    entries = {}
+    for port, (true, comp, layer) in {"A": ("BLA", "BLAN", M2), "B": ("BLB", "BLBN", M4)}.items():
+        ys = []
+        for name in (true, comp):
+            label = direct_label(bitcell, name)
+            x, y = map(float, label.origin)
+            bars = [poly for poly in bitcell.polygons
+                    if poly.layer == layer and gdstk.inside([(x, y)], [poly])[0]]
+            if len(bars) != 1:
+                raise RuntimeError(f"{bitcell.name}: {name} does not sit on one {layer} bar")
+            (_, by0), (_, by1) = bars[0].bounding_box()
+            ys.append(round(((float(by0) + float(by1)) / 2 - y0) * 1000, 1))
+        entries[port] = (ys[0], ys[1])
+    return entries
+
+
+def fin_grid_offset(bitcell: gdstk.Cell) -> float:
+    """How far up the bitcell's row a chipforge block sits for its fins to land on the bitcell's grid, nm."""
+    _, y0, _, _ = boundary_box(bitcell)
+    phases = {round(((bbox(poly)[1] + bbox(poly)[3]) / 2 - y0) * 1000 % FIN_PITCH, 1) % FIN_PITCH
+              for poly in bitcell.polygons if poly.layer == FIN}  # fmt: skip
+    if len(phases) != 1:
+        raise RuntimeError(f"{bitcell.name}: fins are not on one {FIN_PITCH} nm grid: {sorted(phases)}")
+    return (LEAF_FIN_PHASE - phases.pop()) % FIN_PITCH
+
+
+def io_block_specs(bitcell: gdstk.Cell) -> dict[str, IoColumnSpec]:
+    """One `IoColumnSpec` per port: the block at the bitcell's bitline heights and on its fin grid, one sense phase."""
+    _, y0, _, y1 = boundary_box(bitcell)
+    entries = bitline_entries(bitcell)
+    offset = fin_grid_offset(bitcell)
+    specs = {}
+    for port, layer in (("A", "M2"), ("B", "M4")):
+        mux = BitlineMuxSpec(rows=2, selects=MUX_ROWS, bitline_entry=entries[port], bitline_layer=layer,
+                             grid_offset=offset)  # fmt: skip
+        if abs(mux.height / 1000 - (y1 - y0)) > 1e-6:
+            raise RuntimeError("the block's two rows do not add up to the bitcell's row")
+        specs[port] = IoColumnSpec(mux=mux, one_sense_phase=True)
+    return specs
+
+
+def build_io_blocks(specs: dict[str, IoColumnSpec]) -> tuple[dict[str, gdstk.Cell], str]:
+    """Draw both ports' blocks with chipforge (nm), read them back in um; and their netlists.
+
+    Both go into one library so the cells they share (amplifier, driver,
+    latch, supports) exist once.
+    """
+    nm = gdspy.GdsLibrary(unit=1e-9, precision=1e-10)
+    gdspy.current_library = nm
+    names = {port: build_io_column(spec, lib=nm, draw_pin_labels=False).name for port, spec in specs.items()}
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / "io_blocks.gds"
+        nm.write_gds(str(path))
+        um = gdstk.read_gds(str(path), unit=1e-6)
+    cells = {cell.name: cell for cell in um.cells}
+    netlists = []
+    for port, spec in specs.items():
+        block = f"iocol_block_{port.lower()}"
+        netlists.append(block_netlist(spec, name=block).replace(".END\n", ""))
+        pins = io_column_pins(spec)
+        netlists.append(
+            f".SUBCKT {port_io_name(port)} {' '.join(iocol_pins(port))}\n"
+            f"X_block {' '.join(iocol_pin_name(pin, port) for pin in pins)} {block}\n"
+            f".ENDS {port_io_name(port)}\n"
+        )
+    return {port: cells[name] for port, name in names.items()}, "\n".join(netlists) + ".END\n"
+
+
+def build_port_io(
+    library: gdstk.Library, port: str, block: gdstk.Cell, spec: IoColumnSpec
+) -> gdstk.Cell:
+    """One port's IO column: its block, abutting the array.
+
+    Port A stands left of the array, so its block is mirrored in x to put the
+    bitline entries on its right face; port B stands right of the array with
+    the block as drawn.  The block sits `grid_offset` up the column so its
+    fins are on the array's; its landings then meet each row's bitline bar,
+    which overhangs the array's edge into them.  The cell's boundary is the
+    column's, which the block overhangs by that offset at the top.
+    """
+    width, height = spec.width / 1000, spec.height / 1000
+    offset = spec.mux.grid_offset / 1000
+    mirrored = port == "A"
+    edge_x = width if mirrored else 0.0
 
     cell = library.new_cell(port_io_name(port))
-    cell.add(gdstk.Reference(wrapper, origin=(wrapper_x - x0, -y0)))
-    routes: dict[str, list[tuple[int, tuple[float, float, float, float]]]] = {}
-    face = ARRAY_FACE[port]
-    for source, target in ((f"BL{face}", "BL"), (f"BL{face}N", "BLN")):
-        labels = indexed_labels(wrapper, f"{source}_{port}")
-        if set(labels) != set(range(MUX_ROWS)):
-            raise RuntimeError(f"{wrapper.name}: incomplete {source}_{port} bus")
-        for index, label in labels.items():
-            if label.layer != layer:
-                raise RuntimeError(f"{wrapper.name}: {label.text} is not on layer {layer}")
-            y = float(label.origin[1]) - y0
-            net = f"{target}_{port}[{index}]"
-            span = ((width - 0.018, total_width) if port == "A"
-                    else (0.0, GAP_WIDTH + 0.018))
-            add_route_shape(cell, routes, net, layer,
-                            (span[0], y - half, span[1], y + half))
-            cell.add(clone_label(
-                label, net, (edge_x + (-0.006 if port == "A" else 0.006), y), layer
-            ))
+    if mirrored:
+        # A reflection in y then a half turn is a mirror in x.
+        cell.add(gdstk.Reference(block, origin=(width, offset), rotation=math.pi, x_reflection=True))
+    else:
+        cell.add(gdstk.Reference(block, origin=(0.0, offset)))
 
-    # SAE and SAPRECHN are intentionally shorted, matching the composite SPICE
-    # phase convention: one sense phase per port precharges low, evaluates high.
-    sae = direct_label(wrapper, f"SAE_{port}")
-    saprechn = direct_label(wrapper, f"SAPRECHN_{port}")
-    sae_point = (wrapper_x + float(sae.origin[0]) - x0, float(sae.origin[1]) - y0)
-    sap_point = (wrapper_x + float(saprechn.origin[0]) - x0,
-                 float(saprechn.origin[1]) - y0)
-    if abs(sae_point[1] - sap_point[1]) > 1e-9:
-        raise RuntimeError(f"port {port} sense controls are not row-aligned")
-    add_route_shape(
-        cell, routes, f"sae_{port}", M3,
-        (min(sae_point[0], sap_point[0]) - 0.008, sae_point[1] - 0.009,
-         max(sae_point[0], sap_point[0]) + 0.008, sae_point[1] + 0.009),
-    )
+    def placed(x: float, y: float) -> tuple[float, float]:
+        """A block-coordinate point (nm) in the cell (um)."""
+        return ((width - x / 1000) if mirrored else x / 1000, offset + y / 1000)
 
-    for label in wrapper.labels:
-        renamed = port_pin_name(label.text, port)
-        if renamed is None:
-            continue
-        point = (wrapper_x + float(label.origin[0]) - x0, float(label.origin[1]) - y0)
-        cell.add(clone_label(label, renamed, point))
+    for pin, (metal, (x, y)) in spec.pin_positions.items():
+        base = pin.split(".")[0]
+        gds_layer = {"M1": M1, "M2": M2, "M3": M3, "M4": M4}[metal]
+        px, py = placed(x, y)
+        if base in ("BL", "BLN") or re.fullmatch(r"BLN?\[\d+\]", base):
+            cell.add(gdstk.Label(iocol_pin_name(base, port), (edge_x + (-0.006 if mirrored else 0.006), py),
+                                 layer=gds_layer, texttype=PIN_TEXTTYPE))
+        else:
+            cell.add(gdstk.Label(iocol_pin_name(base, port), (px, py), layer=gds_layer, texttype=PIN_TEXTTYPE))
 
-    # One direct label per supply, on the wrapper's own M1 rails.  The tie-offs
-    # above carry the same names on M3, which is how to tell them apart.
-    vss_source = max(
-        (label for label in wrapper.labels if label.text == "VSS" and label.layer == M1),
-        key=lambda label: float(label.origin[0]),
-    )
-    vdd_source = next(
-        label for label in wrapper.labels if label.text == "VDD" and label.layer == M1
-    )
-    for source in (vss_source, vdd_source):
-        point = (wrapper_x + float(source.origin[0]) - x0, float(source.origin[1]) - y0)
-        cell.add(clone_label(source, source.text, point, M1))
-
-    validate_route_spacing(routes)
-    rect(cell, (0.0, 0.0, total_width, height), BOUNDARY)
+    rect(cell, (0.0, 0.0, width, height), BOUNDARY)
     return cell
 
 
@@ -370,16 +376,19 @@ def build_colgrp(
         io_labels = indexed_labels(io_cell, io_prefix)
         if set(array_labels) != set(io_labels):
             raise RuntimeError(f"{cell.name}: incomplete {source} interface")
+        # The IO column's pin sits on the centre of the bitcell's bar; the
+        # array's label is wherever the bitcell put its own, within the bar.
+        half = 0.009 if layer == M2 else 0.012
         for index, array_label in array_labels.items():
             y = float(array_label.origin[1]) - ary0
             io_label = io_labels[index]
             io_y = float(io_label.origin[1]) - (ay0 if io_cell is io_a else by0)
-            if io_label.layer != layer or abs(io_y - y) > 1e-6:
+            if io_label.layer != layer or abs(io_y - y) > half + 1e-6:
                 raise RuntimeError(
                     f"{cell.name}: {io_label.text} does not align to {source}[{index}]"
                 )
             if io_cell is io_a:
-                rect(cell, (cap_x - 0.018, y - 0.009, cap_metal_x + 0.018, y + 0.009), layer)
+                rect(cell, (cap_x - 0.018, io_y - half, cap_metal_x + 0.018, io_y + half), layer)
 
     for io_cell, io_x, (ox, oy) in ((io_a, 0.0, (ax0, ay0)), (io_b, io_b_x, (bx0, by0))):
         for label in io_cell.labels:
@@ -401,30 +410,26 @@ def load_cells(path: Path) -> tuple[gdstk.Library, dict[str, gdstk.Cell]]:
 
 def build_library(
     arrays_gds: Path,
-    wrappers_gds: Path,
     edges_gds: Path,
     wordline_counts: list[int],
-) -> gdstk.Library:
+) -> tuple[gdstk.Library, str]:
+    """The column hierarchy for every count, and the IO columns' SPICE."""
     arrays_lib, arrays = load_cells(arrays_gds)
-    wrappers_lib, wrappers = load_cells(wrappers_gds)
     edges_lib, edges = load_cells(edges_gds)
-    units = {(library.unit, library.precision)
-             for library in (arrays_lib, wrappers_lib, edges_lib)}
+    units = {(library.unit, library.precision) for library in (arrays_lib, edges_lib)}
     if len(units) != 1:
         raise RuntimeError("8T source GDS units/precision do not match")
-    wrapper_a = wrappers.get("ioprech_sram_8t_a")
-    wrapper_b = wrappers.get("ioprech_sram_8t_b")
     edge_names = {topbot_name(False, my) for my in (False, True)}
     edge_names.update({"FILLER_BLANK_8t", "FILLER_cgedge_8t"})
     bitcell = arrays.get("sram_cell_8t")
-    if None in (wrapper_a, wrapper_b, bitcell) or not edge_names <= edges.keys():
+    if bitcell is None or not edge_names <= edges.keys():
         raise RuntimeError("8T source GDS is missing a required hard cell")
 
     unit, precision = units.pop()
     library = gdstk.Library(
         "openfinram_asap7_8t_iocolumn", unit=unit, precision=precision
     )
-    library.add(bitcell, wrapper_a, wrapper_b, *(edges[name] for name in sorted(edge_names)))
+    library.add(bitcell, *(edges[name] for name in sorted(edge_names)))
     selected_arrays: dict[int, gdstk.Cell] = {}
     for count in wordline_counts:
         row_name = f"sramcol_x{count}_sram_8t"
@@ -437,12 +442,18 @@ def build_library(
         library.add(arrays[row_name], arrays[array_name])
         selected_arrays[count] = arrays[array_name]
 
-    io_a = build_port_io(library, wrapper_a, "A")
-    io_b = build_port_io(library, wrapper_b, "B")
+    specs = io_block_specs(bitcell)
+    blocks, netlist = build_io_blocks(specs)
+    for block in blocks.values():
+        for dep in (block, *block.dependencies(True)):
+            if dep not in library.cells:
+                library.add(dep)
+    io_a = build_port_io(library, "A", blocks["A"], specs["A"])
+    io_b = build_port_io(library, "B", blocks["B"], specs["B"])
     cap_array = build_cap_array(library, edges)
     for count in wordline_counts:
         build_colgrp(library, selected_arrays[count], io_a, io_b, cap_array, count)
-    return library
+    return library, netlist
 
 
 def assert_close(actual: float, expected: float, message: str) -> None:
@@ -450,11 +461,14 @@ def assert_close(actual: float, expected: float, message: str) -> None:
         raise RuntimeError(f"{message}: {actual} != {expected}")
 
 
-def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
+def verify_gds(path: Path, wordline_counts: list[int], spice: Path | None = None) -> dict[str, str]:
     library, cells = load_cells(path)
+    bitcell = cells.get("sram_cell_8t")
+    if bitcell is None:
+        raise RuntimeError(f"{path}: missing sram_cell_8t")
+    specs = io_block_specs(bitcell)
     expected = {
         "sram_cell_8t", "FILLER_BLANK_8t", "FILLER_cgedge_8t",
-        "ioprech_sram_8t_a", "ioprech_sram_8t_b",
         port_io_name("A"), port_io_name("B"), "col_cap_x4_sram_8t",
     }
     expected.update(topbot_name(False, my) for my in (False, True))
@@ -464,83 +478,69 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
             f"array_x{count}x4_sram_8t",
             colgrp_name(count),
         })
-    if set(cells) != expected:
+    blocks = {spec.cell_name for spec in specs.values()}
+    block_cells = {name for name in cells if name.startswith(("iocol_x", "blmux_", "sarow_", "wrdrv_", "outlatch_", "filler_fin", "tap_fin"))}
+    if not blocks <= block_cells:
+        raise RuntimeError(f"{path}: missing the IO blocks {sorted(blocks - block_cells)}")
+    if set(cells) != expected | block_cells:
         raise RuntimeError(
             f"{path}: cell set mismatch; missing={sorted(expected - set(cells))}, "
-            f"extra={sorted(set(cells) - expected)}"
+            f"extra={sorted(set(cells) - expected - block_cells)}"
         )
 
     io_boxes = {}
-    for port, layer, other in (("A", M2, M4), ("B", M4, None)):
+    for port, layer in (("A", M2), ("B", M4)):
         io = cells[port_io_name(port)]
-        wrapper = f"ioprech_sram_8t_{port.lower()}"
-        if [reference.cell_name for reference in io.references] != [wrapper]:
-            raise RuntimeError(f"{io.name}: expected exactly its own wrapper")
-        if any(ref.rotation or ref.x_reflection for ref in io.references):
-            raise RuntimeError(f"{io.name}: the wrapper must only be translated")
+        spec = specs[port]
+        if [reference.cell_name for reference in io.references] != [spec.cell_name]:
+            raise RuntimeError(f"{io.name}: expected exactly its own block, {spec.cell_name}")
+        (reference,) = io.references
+        mirrored = port == "A"
+        if bool(reference.x_reflection) != mirrored or bool(reference.rotation) != mirrored:
+            raise RuntimeError(f"{io.name}: port A's block is mirrored in x, port B's as drawn")
+        # The block sits half a fin pitch up the column, on the array's fin grid.
+        assert_close(float(reference.origin[1]), spec.mux.grid_offset / 1000, f"{io.name}: block fin-grid offset")
         io_boxes[port] = boundary_box(io)
-        assert_close(io_boxes[port][3] - io_boxes[port][1], 2.376, f"{io.name} height")
-        wrapper_box = boundary_box(cells[wrapper])
-        assert_close(io_boxes[port][2] - io_boxes[port][0],
-                     wrapper_box[2] - wrapper_box[0] + GAP_WIDTH, f"{io.name} width")
-        # The bitlines meet the array at the face turned to it, on its layer.
-        face_x = io_boxes[port][2] if port == "A" else io_boxes[port][0]
-        for prefix in ("BL", "BLN"):
+        assert_close(io_boxes[port][3] - io_boxes[port][1], spec.height / 1000, f"{io.name} height")
+        assert_close(io_boxes[port][2] - io_boxes[port][0], spec.width / 1000, f"{io.name} width")
+        # The bitlines meet the array at the face turned to it, on its layer,
+        # where the bitcell puts them.
+        face_x = io_boxes[port][2] if mirrored else io_boxes[port][0]
+        entry = spec.mux.bitline_entry
+        for prefix, y_leaf in (("BL", entry[0]), ("BLN", entry[1])):
             labels = indexed_labels(io, f"{prefix}_{port}")
             if set(labels) != set(range(MUX_ROWS)):
                 raise RuntimeError(f"{io.name}: incomplete {prefix}_{port} bus")
-            for label in labels.values():
+            for index, label in labels.items():
                 if label.layer != layer:
                     raise RuntimeError(f"{io.name}: {label.text} is on the wrong layer")
                 if abs(float(label.origin[0]) - face_x) > 0.0061:
                     raise RuntimeError(f"{io.name}: {label.text} is not at the array face")
-        # One IO per end: nothing crosses a core any more, so nothing of the
-        # composite's own rises above the layer its bitlines arrive on.
+                row = spec.mux.height / 1000
+                want = (index + 1) * row - y_leaf / 1000 if index % 2 else index * row + y_leaf / 1000
+                assert_close(float(label.origin[1]), want, f"{io.name}: {label.text} height")
+        # The column draws nothing of its own: the array's bars reach into the block.
         own = {poly.layer for poly in io.polygons} - {BOUNDARY}
-        if not own <= {layer, M3}:
+        if own:
             raise RuntimeError(f"{io.name}: unexpected routing layers {sorted(own)}")
         names = [label.text for label in io.labels]
-        required = {
-            f"wrena_{port}", f"wrenan_{port}", f"D{port}", f"Q{port}",
-            f"oeb_out_{port}", f"oe_out_{port}", f"blprechn_{port}", f"sae_{port}",
-        }
-        required.update(f"{prefix}_{port}[{index}]" for prefix in ("ysel", "yseln")
-                        for index in range(MUX_ROWS))
-        if not required.issubset(names):
+        required = set(iocol_pins(port))
+        if not required <= set(names):
             raise RuntimeError(f"{io.name}: missing IO pins {sorted(required - set(names))}")
-        leaked = [name for name in names if re.match(r"(YSEL|BLPRECH|SAPRECHN|WRENA|D_|Q_)", name)
-                  or re.match(r"(yselt|yselb|blprecht|blprechb)", name)]
-        if leaked:
-            raise RuntimeError(f"{io.name}: wrapper-only or split-era pins leaked: {leaked}")
-        # The idle face: four selects and its precharge enable low, four
-        # complement selects high, each on the wrapper's own M3 pin.
-        ties = {supply: [label for label in io.labels
-                         if label.text == supply and label.layer == M3]
-                for supply in ("VDD", "VSS")}
-        if (len(ties["VSS"]), len(ties["VDD"])) != (MUX_ROWS + 1, MUX_ROWS):
-            raise RuntimeError(f"{io.name}: idle-face tie-offs are incomplete")
-        unused = "TB".replace(ARRAY_FACE[port], "")
-        wrapper_cell = cells[wrapper]
-        wx0, wy0, _, _ = wrapper_box
-        shift = 0.0 if port == "A" else GAP_WIDTH
-        for supply, pins in (
-            ("VSS", [f"BLPRECH{unused}N_{port}"]
-                    + [f"YSEL{unused}_{port}[{i}]" for i in range(MUX_ROWS)]),
-            ("VDD", [f"YSEL{unused}N_{port}[{i}]" for i in range(MUX_ROWS)]),
-        ):
-            want = sorted((round(shift + float(direct_label(wrapper_cell, pin).origin[0]) - wx0, 6),
-                           round(float(direct_label(wrapper_cell, pin).origin[1]) - wy0, 6))
-                          for pin in pins)
-            have = sorted((round(float(label.origin[0]), 6), round(float(label.origin[1]), 6))
-                          for label in ties[supply])
-            if want != have:
-                raise RuntimeError(f"{io.name}: {supply} tie-offs are not on the idle face's pins")
-        m1_geometry = io.get_polygons(layer=M1, datatype=0)
-        for supply in ("VDD", "VSS"):
-            label = direct_label(io, supply, M1)
-            x, y = map(float, label.origin)
-            if not gdstk.inside([(x, y)], m1_geometry)[0]:
-                raise RuntimeError(f"{io.name}: {supply} label misses wrapper M1")
+        stale = [n for n in names if re.match(r"(YSEL|BLPRECH|SAPRECHN|WRENA|D_|Q_|yselt|yselb|blprecht|blprechb)", n)]
+        if stale:
+            raise RuntimeError(f"{io.name}: wrapper-era pins leaked: {stale}")
+        if any(n == "VDD" and label.layer != M1 for n, label in zip(names, io.labels)):
+            raise RuntimeError(f"{io.name}: a supply label is not on an M1 rail")
+
+    if spice is not None:
+        text = spice.read_text()
+        for port in ("A", "B"):
+            header = f".SUBCKT {port_io_name(port)} {' '.join(iocol_pins(port))}"
+            if header not in text:
+                raise RuntimeError(f"{spice}: {port_io_name(port)} is missing or its pins are not {header}")
+            if f".SUBCKT iocol_block_{port.lower()} " not in text:
+                raise RuntimeError(f"{spice}: missing the block netlist of port {port}")
 
     cap_array = cells["col_cap_x4_sram_8t"]
     expected_caps = ["FILLER_cgedge_8t"] + [topbot_name(False, bool(row % 2)) for row in range(MUX_ROWS)]
@@ -604,7 +604,7 @@ def verify_gds(path: Path, wordline_counts: list[int]) -> dict[str, str]:
 
     digests: dict[str, str] = {}
     for name in sorted(cells):
-        if not name.startswith(("iocol_", "colgrp_", "col_cap_")):
+        if not name.startswith(("iocol_sram", "colgrp_", "col_cap_")):
             continue
         records: list[str] = []
         cell = cells[name]
@@ -653,10 +653,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=repo / "tech/gds/sram_wordline_arrays.gds",
     )
     parser.add_argument(
-        "--wrappers-gds", type=Path,
-        default=repo / "tech/gds/sram_8t_ioprech.gds",
-    )
-    parser.add_argument(
         "--edges-gds", type=Path,
         default=repo / "tech/gds/sram_cell_8t_edges.gds",
     )
@@ -665,27 +661,40 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=repo / "tech/gds/sram_8t_iocolumn.gds",
     )
     parser.add_argument(
+        "--spice-output", type=Path, default=None,
+        help="the IO columns' SPICE (default: tech/spice/sram_8t_iocolumn.sp beside the default output)",
+    )
+    parser.add_argument(
         "--verify", type=Path,
         help="verify an existing GDS instead of generating one",
+    )
+    parser.add_argument(
+        "--verify-spice", type=Path, default=None,
+        help="with --verify: the SPICE file that has to go with it",
     )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    repo = Path(__file__).resolve().parents[1]
     try:
         if args.verify:
-            digests = verify_gds(args.verify, args.word_lines)
+            digests = verify_gds(args.verify, args.word_lines, args.verify_spice)
             print(f"PASS {args.verify}: {len(digests)} routed IO-column cells")
         else:
-            library = build_library(
-                args.arrays_gds, args.wrappers_gds,
-                args.edges_gds, args.word_lines,
-            )
+            library, netlist = build_library(args.arrays_gds, args.edges_gds, args.word_lines)
             args.output.parent.mkdir(parents=True, exist_ok=True)
             library.write_gds(str(args.output), timestamp=FIXED_GDS_TIMESTAMP)
-            digests = verify_gds(args.output, args.word_lines)
-            print(f"wrote {args.output}: {len(digests)} routed IO-column cells")
+            spice = args.spice_output or (
+                repo / "tech/spice/sram_8t_iocolumn.sp"
+                if args.output == repo / "tech/gds/sram_8t_iocolumn.gds"
+                else args.output.with_suffix(".sp")
+            )
+            spice.parent.mkdir(parents=True, exist_ok=True)
+            spice.write_text(netlist)
+            digests = verify_gds(args.output, args.word_lines, spice)
+            print(f"wrote {args.output} and {spice}: {len(digests)} routed IO-column cells")
         for name, digest in digests.items():
             print(f"  {name}: sha256={digest}")
         return 0

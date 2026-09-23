@@ -85,7 +85,7 @@ puts $structure_fd "dedicated_wordline_buffers [llength $final_wordline_drivers]
 puts $structure_fd "constrained_max_paths [llength $final_paths]"
 close $structure_fd
 report_checks -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > timing.rpt
-report_checks -to [get_ports -quiet {wlt* wlb* wl_A* wl_B*}] -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > wordline_timing.rpt
+report_checks -to [get_ports -quiet {wlt* wlb* sel_hi_A* sel_hi_B* sel_lo_A* sel_lo_B*}] -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > wordline_timing.rpt
 report_check_types -max_slew -max_capacitance -max_fanout -violators -verbose > electrical.rpt
 check_setup -verbose > final_setup.rpt
 report_clock_properties > clock_properties.rpt

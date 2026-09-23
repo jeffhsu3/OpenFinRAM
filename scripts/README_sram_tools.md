@@ -84,6 +84,28 @@ python3 scripts/gen_table3_report.py \
     -o reports/table3_timing_comparison.md
 ```
 
+## `generate_asap7_8t_iocolumn.py` writes the IO columns' SPICE too
+
+The IO columns are chipforge_asap7's `IoColumnSpec` block, built to the
+bitcell's bitline heights. Regenerating writes `tech/gds/sram_8t_iocolumn.gds`
+and `tech/spice/sram_8t_iocolumn.sp` together; `SpiceGenerator` reads the
+latter at run time, and `tests/run_8t_iocolumn_check.sh` compares both.
+
+## `generate_asap7_8t_wl_slices.py` — the wordline driver slice ladder
+
+```
+.venv/bin/python scripts/generate_asap7_8t_wl_slices.py --verify
+```
+
+The 2RW macro drives its wordlines at the array with chipforge_asap7's
+`DriverSliceSpec` (four wordlines a slice, `WL<i> = SEL . B<i>`), one strip
+per port on each side of the controller band. This writes the ladder the
+compiler picks from, `wl_slice_c{4,8,16,32,64}` sized with `size_decoder` to
+that many cells along the wordline, with a filler and tap each, as
+`tech/gds/sram_8t_wl_slices.gds` and `tech/spice/sram_8t_wl_slices.sp`;
+`SpiceGenerator` reads the SPICE and `compile_asap7_2rw.py` the GDS. A macro
+whose stack puts more than 64 cells on a wordline is refused.
+
 ## `verify_macro.py` — transistor LVS and device DRC of an assembled macro
 
 ```bash

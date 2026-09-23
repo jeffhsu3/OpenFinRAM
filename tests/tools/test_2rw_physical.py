@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-import re
 import sys
 import tempfile
 import unittest
@@ -11,7 +10,7 @@ import gdstk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from asap7_connectivity import MetalGraph
-from compile_asap7_2rw import abstract, build_leaf, check_route_drc, leaf_net, verify
+from compile_asap7_2rw import abstract, build_leaf, check_route_drc, leaf_net, strip_net, verify
 from mapped_verilog_to_spice import convert
 
 
@@ -148,21 +147,50 @@ class PhysicalMacroTests(unittest.TestCase):
 
     def test_both_ports_and_banks_map_onto_one_unsplit_array(self):
         for port in "AB":
-            self.assertEqual(leaf_net(f"D{port}", 1, 3, 4), f"D_{port}[3]")
-            self.assertEqual(leaf_net(f"wrena{port}", 1, 3, 4), f"wrena_{port}[1]")
-            self.assertEqual(leaf_net(f"wrenan{port}", 1, 3, 4), f"wrenan_{port}[1]")
-            self.assertEqual(leaf_net(f"blprechn{port}", 1, 3, 4), f"blprechn_{port}[1]")
+            self.assertEqual(leaf_net(f"D{port}", 1, 3, 4, 8), f"D_{port}[3]")
+            self.assertEqual(leaf_net(f"wrena{port}", 1, 3, 4, 8), f"wrena_{port}[1]")
+            self.assertEqual(leaf_net(f"wrenan{port}", 1, 3, 4, 8), f"wrenan_{port}[1]")
+            self.assertEqual(leaf_net(f"blprechn{port}", 1, 3, 4, 8), f"blprechn_{port}[1]")
             # NUM_WL = 4: a bank's array has eight wordlines, the upper four
             # being the ones the address bit above the column select picks.
-            self.assertEqual(leaf_net(f"WL{port}[2]", 1, 3, 4), f"wl_{port}[10]")
-            self.assertEqual(leaf_net(f"WL{port}[7]", 0, 3, 4), f"wl_{port}[7]")
-            self.assertEqual(leaf_net(f"ysel{port}[2]", 1, 3, 4), f"ysel_{port}[6]")
-            self.assertEqual(leaf_net(f"yseln{port}[2]", 1, 3, 4), f"yseln_{port}[6]")
+            # A wordline belongs to the stack its bit is in: bits 0..3 of
+            # eight are below the controller band, 4..7 above.
+            self.assertEqual(leaf_net(f"WL{port}[2]", 1, 3, 4, 8), f"wl_{port}_lo[10]")
+            self.assertEqual(leaf_net(f"WL{port}[7]", 0, 3, 4, 8), f"wl_{port}_lo[7]")
+            self.assertEqual(leaf_net(f"WL{port}[7]", 0, 4, 4, 8), f"wl_{port}_hi[7]")
+            self.assertEqual(leaf_net(f"ysel{port}[2]", 1, 3, 4, 8), f"ysel_{port}[6]")
+            self.assertEqual(leaf_net(f"yseln{port}[2]", 1, 3, 4, 8), f"yseln_{port}[6]")
             for split_era in (f"WLT{port}[2]", f"yselt{port}[2]", f"blprechtn{port}"):
                 with self.assertRaisesRegex(RuntimeError, "unmapped"):
-                    leaf_net(split_era, 0, 0, 4)
+                    leaf_net(split_era, 0, 0, 4, 8)
         with self.assertRaisesRegex(RuntimeError, "unmapped"):
-            leaf_net("typo", 0, 0, 2)
+            leaf_net("typo", 0, 0, 2, 2)
+
+    def test_strip_pair_pins_map_onto_the_controller_and_its_stack(self):
+        # NUM_WL = 4: eight wordlines a bank, two slices; bank 1's slices
+        # are sel_hi[2..3], the low two bits are shared by every slice.
+        for port in "AB":
+            self.assertEqual(strip_net(f"SEL_{port}[1]", 1, "hi", 4), f"sel_hi_{port}[3]")
+            self.assertEqual(strip_net(f"B_{port}[2]", 1, "hi", 4), f"sel_lo_{port}[2]")
+            self.assertEqual(strip_net(f"WL_{port}[5]", 1, "lo", 4), f"wl_{port}_lo[13]")
+            self.assertEqual(strip_net(f"WL_{port}[5]", 0, "hi", 4), f"wl_{port}_hi[5]")
+        self.assertEqual(strip_net("vss", 0, "hi", 4), "vss")
+        with self.assertRaisesRegex(RuntimeError, "unmapped"):
+            strip_net("ysel_A[0]", 0, "hi", 4)
+
+    def test_abutted_nets_are_probed_but_not_pins(self):
+        cell = gdstk.Cell("abutted")
+        cell.add(gdstk.rectangle((0, 0), (0.018, 0.5), layer=30))  # a wordline stub
+        cell.add(gdstk.rectangle((0.1, 0), (0.118, 0.5), layer=30))  # a routed pin
+        cell.add(gdstk.rectangle((0, 0.6), (0.2, 0.618), layer=19), gdstk.rectangle((0, 0.7), (0.2, 0.718), layer=19))
+        labels = [gdstk.Label("WLA[0]", (0.009, 0.25), layer=30), gdstk.Label("SEL_A[0]", (0.109, 0.25), layer=30)]
+        cell.add(*labels, gdstk.Label("VDD", (0.1, 0.609), layer=19), gdstk.Label("VSS", (0.1, 0.709), layer=19))
+        _, pins, lef, _ = abstract(cell, "abutted", labels, abutted=lambda net: net.startswith("WL"))
+        by_net = {info["net"]: info for info in pins.values()}
+        self.assertTrue(by_net["WLA[0]"].get("abutted"))
+        self.assertFalse(by_net["SEL_A[0]"].get("abutted"))
+        self.assertEqual(lef.count("  PIN "), 3)  # SEL_A[0], vdd, vss: the wordline is an obstruction
+        self.assertIn("OBS", lef)
 
     def test_capped_tapped_leaf_has_isolated_named_pins(self):
         for wordlines in (2, 4, 18):
@@ -192,25 +220,12 @@ class PhysicalMacroTests(unittest.TestCase):
                         ("WLTA", "WLTB", "WLBA", "WLBB", "yselt", "yselb", "blprecht", "blprechb")
                     )]
                 )
-                # The idle face of each wrapper (A's left, B's right) is tied
-                # off through the router: each of its nine control pins is a
-                # supply terminal, selects and precharge enable low, complement
-                # selects high.
-                graph = MetalGraph(master)
-                net_of = {
-                    root: p["net"]
-                    for p in pins.values()
-                    for root in graph.at(p["layer"], tuple(p["point"]))
-                }
-                idle, tied = {"A": "T", "B": "B"}, 0
-                for label in master.get_labels():
-                    pin = re.fullmatch(r"(YSEL|BLPRECH)([TB])(N?)_([AB])(\[\d\])?", label.text)
-                    if not pin or pin[2] != idle[pin[4]]:
-                        continue
-                    want = "vdd" if pin[1] == "YSEL" and pin[3] else "vss"
-                    self.assertEqual(net_of[graph.label_root(label)], want, label.text)
-                    tied += 1
-                self.assertEqual(tied, 18)
+                # The IO is the parametric block: no wrapper-era pins and no
+                # tie-offs (the dummy end rows' vss on M3 is the array's).
+                self.assertFalse([n for n in nets if n.startswith(("YSEL", "BLPRECH", "SAPRECHN"))])
+                for port in "AB":
+                    self.assertIn(f"sae_{port}", nets)
+                    self.assertIn(f"oeb_out{port}", nets)
 
                 def count(cell):
                     return (
@@ -222,6 +237,24 @@ class PhysicalMacroTests(unittest.TestCase):
                 self.assertEqual(count(master), 4 * wordlines)
                 self.assertIn("OBS", lef)
                 self.assertGreater(size[1], 6 * 0.594)
+                # The dummy rows' corner and tap-slot stubs are tied in the
+                # tile: no supply terminal is a lone 162 nm bar on M2/M4, and
+                # every supply pin offers all its layers, rails included.
+                supply_pins = [(pin, info) for pin, info in pins.items() if info["net"] in ("vdd", "vss")]
+                self.assertTrue(supply_pins)
+                for pin, info in supply_pins:
+                    block = lef[lef.index(f"  PIN {pin}\n"):]
+                    block = block[: block.index(f"  END {pin}")]
+                    polygons = [line for line in block.splitlines() if "POLYGON" in line]
+                    if len(polygons) == 1 and ("LAYER M2" in block or "LAYER M4" in block):
+                        xs = [float(v) for v in polygons[0].split()[1::2]]
+                        self.assertGreater(max(xs) - min(xs), 0.2, f"{pin} is a lone stub")
+                self.assertTrue(
+                    any("LAYER M1" in lef[lef.index(f"  PIN {pin}\n"):lef.index(f"  END {pin}")]
+                        and "LAYER M2" in lef[lef.index(f"  PIN {pin}\n"):lef.index(f"  END {pin}")]
+                        for pin, _ in supply_pins),
+                    "a supply pin with rail and bar on two layers",
+                )
 
 
 if __name__ == "__main__":

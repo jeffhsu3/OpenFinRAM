@@ -69,6 +69,10 @@ cell width off the array with a strap per bitline across the gap, as an edge
 cell would: abutted outright, the group's implant covers the diffusion sliver
 the array overhangs its boundary with, and every BLAN extracts as a tap, which
 is the same mechanism as the open tap-cell finding in `macro_verification.md`.
+(Since 2026-09-22 the block in the macro does abut, half a fin pitch up the
+row so its fins are on the array's grid, against the cap's filler on port A's
+side and the tap on port B's rather than a bare bitcell edge; see
+`asap7_8t_bitcell.md`, "The block sits on the array's fin grid".)
 
 The floorplan change is done (2026-09-21), with the reused wrappers for now:
 a column is `iocol A | edge cap | one array of 2*NUM_WL wordlines | iocol B`.
@@ -81,6 +85,8 @@ NUM_WL. See `docs/asap7_8t_bitcell.md` (the IO paragraph), and the closing
 sections of `docs/macro_verification.md` and `docs/macro_simulation.md` for
 what LVS, DRC and the read/write simulation say about it.
 
-Not yet built: write driver, output latch, and the per-group block around
-`SenseAmpSpec`, which then replace the wrappers in the two `iocol` cells.
+Done, 2026-09-22: the sense amplifier, write driver and output latch are drawn
+on the same row, `IoColumnSpec` places and routes the four for one column,
+and that block is what `iocol_sram_8t_a/b` now contain. The reused 6T cores
+are out of the macro.
 

@@ -1,7 +1,9 @@
 #include "spice_integrator.hpp"
+#include "spice_generator.hpp"
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include <cctype>
 #include <sys/stat.h>
 #include <algorithm>
 #include <regex>
@@ -295,8 +297,14 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
     
     for (int top_bottom = 0; top_bottom < 2; ++top_bottom) {
 
+        // The two halves of the data bits.  In the two-port macro they are
+        // the stacks below (`lo`) and above (`hi`) the controller band, each
+        // with its own wordlines from its own driver strips.
+        const char* half = cli_options_.single_port
+            ? (top_bottom == 0 ? "top" : "bottom")
+            : (top_bottom == 0 ? "lo" : "hi");
         oss << "** Instantiate SRAM Datapath\n"
-            << "Xdata_" << (top_bottom == 0 ? "top " : "bottom ");
+            << "Xdata_" << half << " ";
         
         for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
             if (cli_options_.single_port) {
@@ -310,17 +318,15 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                 }
                 oss << "\n+";
             } else {
-                // One unsplit array per column: 2*NUM_WL wordlines a bank.
+                // One unsplit array per column: 2*NUM_WL wordlines a bank,
+                // driven by this half's strips.
                 const uint64_t rows = 2 * cli_options_.num_wls;
-                for (uint64_t i = 0; i < rows; ++i) {
-                    oss << " wl_a[" << i + bank * rows << "]";
+                for (const char* port : {"a", "b"}) {
+                    for (uint64_t i = 0; i < rows; ++i) {
+                        oss << " wl_" << port << "_" << half << "[" << i + bank * rows << "]";
+                    }
+                    oss << "\n+";
                 }
-                oss << "\n+";
-
-                for (uint64_t i = 0; i < rows; ++i) {
-                    oss << " wl_b[" << i + bank * rows << "]";
-                }
-                oss << "\n+";
             }
         }
 
@@ -420,6 +426,45 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             << "x" << cli_options_.num_data_bits / 2 << "x" << cli_options_.num_banks << "\n\n";
     }
 
+    return oss.str();
+}
+
+// Two-port only: a pair of wordline driver strips (port A's and port B's) on
+// each side of the controller band, per bank.  The controller's
+// sel_hi_<P>[bank][k] is slice k's SEL (one-hot of the wordline index's high
+// bits, gated by the wordline phase) and sel_lo_<P>[j] the B<j> shared by
+// every slice (one-hot of its low two bits); the pair's WL_<P>[i] is wordline
+// i of that bank in that half.
+std::string SpiceIntegrator::generate_wordline_strip_instances() const {
+    std::ostringstream oss;
+    if (cli_options_.single_port) return oss.str();
+    const uint64_t rows = 2 * cli_options_.num_wls;
+    const uint64_t slices = rows / 4;
+    OpenFinRAM::SpiceGenerator generator(cli_options_);
+    oss << "** Instantiate the wordline driver strips\n";
+    for (const char* half : {"lo", "hi"}) {
+        for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
+            oss << "Xwl_" << half << "_" << bank;
+            for (const char* port : {"A", "B"}) {
+                for (uint64_t k = 0; k < slices; ++k) {
+                    oss << " sel_hi_" << port << "[" << bank * slices + k << "]";
+                }
+                oss << "\n+";
+                for (int j = 0; j < 4; ++j) {
+                    oss << " sel_lo_" << port << "[" << j << "]";
+                }
+                oss << "\n+";
+                for (uint64_t i = 0; i < rows; ++i) {
+                    oss << " wl_" << static_cast<char>(std::tolower(port[0])) << "_" << half
+                        << "[" << i + bank * rows << "]";
+                    if (i % 8 == 7 && i + 1 < rows) oss << "\n+";
+                }
+                oss << "\n+";
+            }
+            oss << " VDD VSS " << generator.wordline_strip_pair_name(half) << "\n";
+        }
+    }
+    oss << "\n";
     return oss.str();
 }
 
@@ -618,6 +663,7 @@ bool SpiceIntegrator::integrate_sram() {
     outfile << generate_subckt_header();
     outfile << generate_ctrl_instance(ctrl_ports);
     outfile << generate_datapath_instance();
+    outfile << generate_wordline_strip_instances();
     outfile << generate_footer();
     
     outfile.close();

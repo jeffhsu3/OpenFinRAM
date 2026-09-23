@@ -608,16 +608,12 @@ def verify_io_pitch(cells: dict[str, gdstk.Cell], io_gds: Path,
     io_cells = {cell.name: cell for cell in io_lib.cells}
     array = cells[array_name(CONTRACTS[0], wordlines, mux_rows, tap_pitch,
                              strap_pitch)]
-    # The face of each wrapper that meets the array: port A stands at the left
-    # end of the bitlines and uses its right (B) face, port B at the right end
-    # uses its left (T) face.
+    # Each port's IO column pins its bitlines at the array face, on the centre
+    # of the bitcell's bar; the array's label is wherever the bitcell put its
+    # own, within that bar.
     mappings = {
-        "ioprech_sram_8t_a": {
-            "BLA": "BLB_A", "BLAN": "BLBN_A",
-        },
-        "ioprech_sram_8t_b": {
-            "BLB": "BLT_B", "BLBN": "BLTN_B",
-        },
+        "iocol_sram_8t_a": {"BLA": "BL_A", "BLAN": "BLN_A"},
+        "iocol_sram_8t_b": {"BLB": "BL_B", "BLBN": "BLN_B"},
     }
     for io_name, pins in mappings.items():
         if io_name not in io_cells:
@@ -631,10 +627,14 @@ def verify_io_pitch(cells: dict[str, gdstk.Cell], io_gds: Path,
             if set(array_labels) != set(io_labels):
                 raise RuntimeError(f"{io_name}: incomplete {io_pin} interface")
             for index in array_labels:
-                assert_close(float(array_labels[index].origin[1]),
-                             float(io_labels[index].origin[1]),
-                             f"{io_name}: {io_pin}[{index}] pitch")
-                if array_labels[index].layer != io_labels[index].layer:
+                layer = io_labels[index].layer
+                half = 0.009 if layer == 20 else 0.012
+                offset = abs(float(array_labels[index].origin[1]) - float(io_labels[index].origin[1]))
+                if offset > half + 1e-6:
+                    raise RuntimeError(
+                        f"{io_name}: {io_pin}[{index}] is {offset * 1000:.1f} nm off the array's bar"
+                    )
+                if array_labels[index].layer != layer:
                     raise RuntimeError(f"{io_name}: {io_pin}[{index}] layer mismatch")
 
 
@@ -722,7 +722,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--io-gds", type=Path,
-        default=repo / "tech/gds/sram_8t_ioprech.gds",
+        default=repo / "tech/gds/sram_8t_iocolumn.gds",
         help="8T IO wrappers used for four-row pitch verification",
     )
     parser.add_argument(

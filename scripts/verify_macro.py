@@ -43,7 +43,11 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BITCELLS = ("sram_cell_*",)
+# Flattened into their parents for the comparison: the bitcell family, whose
+# devices the generator splits across cells, and the parametric IO block's
+# cells, which the compiler's deck carries as one flat subcircuit per port.
+BITCELLS = ("sram_cell_*", "blmux_*", "sarow_*", "wrdrv_*", "outlatch_*", "filler_fin_*", "tap_fin_*",
+            "wl_slice_*", "nand2_fin_*", "inv_fin_*", "wl_via*")  # fmt: skip
 
 
 def _lvs_findings(result) -> dict:

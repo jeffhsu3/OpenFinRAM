@@ -105,6 +105,7 @@ private:
      * @return Datapath instantiation string
      */
     std::string generate_datapath_instance() const;
+    std::string generate_wordline_strip_instances() const;
     
     /**
      * Generate footer section (power supply, .ENDS)

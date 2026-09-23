@@ -200,6 +200,16 @@ if(BUILD_TESTING)
         SKIP_RETURN_CODE 77
     )
 
+    # The wordline driver slice ladder the 2RW macro's strips are built from.
+    add_test(
+        NAME asap7_8t_wl_slices_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_wl_slices_check.sh
+    )
+    set_tests_properties(asap7_8t_wl_slices_check PROPERTIES
+        TIMEOUT 600
+        SKIP_RETURN_CODE 77
+    )
+
     add_test(
         NAME asap7_2rw_physical_check
         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_2rw_physical_check.sh

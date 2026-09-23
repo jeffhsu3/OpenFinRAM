@@ -41,8 +41,8 @@ def test_the_baseline_is_a_ratchet():
     assert verify_macro.compare(_found(), base) == ([], [])
     new, gone = verify_macro.compare(_found(drc_rules={"M1.S.2": 4, "V0.S.1": 1, "M2.W.1": 1}), base)
     assert new == ["DRC M1.S.2: 3 -> 4", "DRC M2.W.1: 0 -> 1"] and gone == []
-    new, gone = verify_macro.compare(_found(supply_shorts=["VSS <- IOPRECH_SRAM_8T_A.BLBN_A[0] x2"]), base)
-    assert new == ["supply_shorts: VSS <- IOPRECH_SRAM_8T_A.BLBN_A[0] x2"]
+    new, gone = verify_macro.compare(_found(supply_shorts=["VSS <- IOCOL_SRAM_8T_A.BLN_A[0] x2"]), base)
+    assert new == ["supply_shorts: VSS <- IOCOL_SRAM_8T_A.BLN_A[0] x2"]
     assert gone == ["supply_shorts: VSS <- CTRL_DECODE.WL_A[1] x1"]
     new, gone = verify_macro.compare(_found(lvs_matched=True, supply_shorts=[], drc_rules={"M1.S.2": 3}), base)
     assert new == [] and gone == ["LVS now matches", "supply_shorts: VSS <- CTRL_DECODE.WL_A[1] x1", "DRC V0.S.1: 1 -> 0"]
@@ -84,17 +84,16 @@ def test_macro_lvs_and_drc_hold_the_baseline(tmp_path: Path):
 
     # What the baseline says, spelled out, so that a change to it is a decision.
     lvs, relaxed = verdict["lvs"], verdict["lvs_without_double_implant_taps"]
-    assert lvs["failing"] == ["sram_x4x2x1"]  # the controller, both IO columns and every cell below match
-    assert lvs["series_order_cells"] == ["AND4x1_ASAP7_75t_R", "AO21x1_ASAP7_75t_R"]
+    assert lvs["failing"] == ["sram_x4x2x1"]  # the controller, IO columns, driver strips and every cell below match
+    assert lvs["series_order_cells"] == ["AO21x1_ASAP7_75t_R"]
     # One defect is left: the array tap's implant overlap ties every complement bitline to VSS.
-    # A column is one unsplit array with an IO at each end, so that is four complement bitlines
-    # a port -- on the one face of each wrapper that meets the array -- and half the overlaps
-    # the two half arrays had.
+    # A column is one unsplit array with a parametric IO block at each end, so that is the four
+    # complement bitlines of each port's block.
     assert sorted(lvs["supply_shorts"]) == sorted(
-        f"VSS <- IOPRECH_SRAM_8T_{port}.{pin}_{port}[{i}] x2"
-        for port, pin in (("A", "BLBN"), ("B", "BLTN")) for i in range(4)
+        f"VSS <- IOCOL_SRAM_8T_{port}.BLN_{port}[{i}] x2" for port in "AB" for i in range(4)
     )
     assert verdict["drc"]["rules"]["NSELECT.PSELECT.AUX.1"] == 10
-    # ... and with that set aside the whole macro matches, transistor for transistor.  (It did not
-    # until the WLA gate contacts were taken off the placement seam: wordlines were shorted there.)
+    # ... and with that set aside the whole macro matches, transistor for transistor: the two abutted
+    # stacks, their wordlines joined tile to tile and to the driver strips by abutment alone.  (It did
+    # not until the WLA gate contacts were taken off the placement seam: wordlines were shorted there.)
     assert relaxed["matched"] and relaxed["failing"] == [] and relaxed["supply_shorts"] == []

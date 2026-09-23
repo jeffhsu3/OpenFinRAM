@@ -192,3 +192,79 @@ map. Re-run on `sram_x4x2x1`:
 * The macro is 12.58 x 21.60 um against 13.00 x 22.14 um, with 742 checked net
   partitions against 816.
 * `tests/golden/asap7_2rw_macro_verification.json` was rewritten for it.
+
+## With the parametric IO (2026-09-22)
+
+`iocol_sram_8t_a/b` now hold chipforge_asap7's column block instead of the
+reused 6T wrappers. `verify_macro.py` flattens the block's cells (`blmux_*`,
+`sarow_*`, `wrdrv_*`, `outlatch_*`, the supports) into the per-port block,
+which the compiler's deck carries as one flat subcircuit. Re-run on
+`sram_x4x2x1`: diagnostic LVS matches the whole macro; strict LVS fails only
+on the tap implant overlap, now as `IOCOL_SRAM_8T_A.BLN_A[i]` and
+`IOCOL_SRAM_8T_B.BLN_B[i]`; DRC 450 -> 458 markers, none in the block or its
+cells (the deltas are the controller's place-and-route and the top-level
+routing, which move run to run). The macro is 8.31 x 25.89 um: the IO is
+half as wide, and the controller, sized to the narrower column, came out
+taller. The baseline JSON was rewritten.
+
+One finding on the way: the block's cells put their via row one fin from the
+rail, which left M1 pads 13 nm from the M1 rail. The public runset has no
+rule for a short edge facing a long one, but every published cell keeps 18,
+and the device-DRC gate said so. The via row now sits a fin further in.
+
+## With the abutted stacks and driver strips (2026-09-22)
+
+The macro is now two abutted stacks of column tiles with the controller band
+between them and a pair of `DriverSliceSpec` strips on each side (see
+`docs/asap7_8t_bitcell.md`, "Floorplan: controller band between two abutted
+stacks"). `verify_macro.py` flattens the slice cells (`wl_slice_*`,
+`nand2_fin_*`, `inv_fin_*`, the via cells) so the strip
+`wl_strip_c<cells>_x<slices>` and the pairs `wl_strips_{lo,hi}_...` compare
+against the deck's subcircuits of the same names. Re-run on `sram_x4x2x1`:
+
+* diagnostic LVS matches the whole macro, so every wordline is one net from
+  its slice through the tile abutments (port A on M3 directly, port B through
+  the VIA34/VIA45 stack and M5 strap), and no wordline touches a neighbour or
+  a rail at any seam;
+* strict LVS fails only on the tap implant overlap, the same eight
+  `IOCOL_SRAM_8T_{A,B}.BLN_*` pins;
+* DRC 458 -> 436 markers. The tile-to-strip seam adds nothing: the
+  half-fin-pitch margin keeps `FIN.S.1` away, and the gate tracks are bridged
+  across it (without that, the array's 7 nm gate stubs and the slice's gates
+  left a 1.5 nm gap that read as a broken 54 nm pitch, `GATE.S.1`). What is
+  left in the strip bands is the router meeting the strips' M1 rails and M4
+  pads, of the kind the baseline already carries. The baseline JSON was
+  rewritten; `AND4x1` left the series-order list with the controller's
+  wordline gating.
+
+One finding on the way: the compiler's deck writes the slices' devices with
+`nf` fingers, and chipforge_asap7's unit-fin reference expansion multiplied
+`nfin` by `m` but not by `nf`, so the strip's output inverters compared as
+half their fins. The expansion now counts fingers.
+
+## With the IO block abutting the array (2026-09-22)
+
+The block now sits half a fin pitch up the column, on the array's fin grid,
+with no gap (`asap7_8t_bitcell.md`, "The block sits on the array's fin
+grid"). On the tile alone the public deck gives 220 markers before and
+after, rule for rule, none at either seam. Re-run on `sram_x4x2x1`
+(8.04 x 26.89 um: 0.28 um narrower, and taller because the controller is
+floorplanned to the column's width): diagnostic LVS matches the whole macro,
+so every bitline reaches its leaf through the cap's 18 nm and the tap's
+27 nm bar overhang alone; strict LVS fails on the same eight tap-implant
+pins; DRC 436 -> 455, the deltas (`M1.S.2`, `V1.S.4`, `M5.S.5`, `M8.*`) all
+inside the re-placed controller and the top-level routing, whose marker
+coordinates put them there. The baseline JSON was rewritten.
+
+## With the floorplan tightened (2026-09-22)
+
+Margins, channels and bank gap 0.3 um instead of 2 (0.2 is the floor), the
+controller at 50 % utilization instead of 40, the dummy rows' stray stubs
+tied inside the tile and supply pins offered on every layer
+(`asap7_8t_bitcell.md`, "The dummy rows' stubs are tied in the tile").
+`sram_x4x2x1` is 4.65 x 17.93 um, 83 um2 against 216. Diagnostic LVS matches
+the whole macro; strict LVS fails on the same eight tap-implant pins; DRC
+455 -> 435, the tile itself unchanged at 220. Baseline rewritten. The
+narrow margins were not routable before the stubs were tied: the router
+reached those lone bars only at some track phases, which is why the old
+floorplan kept 2 um everywhere.

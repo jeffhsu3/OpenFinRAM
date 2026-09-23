@@ -37,6 +37,10 @@ void OpenRoadTclGenerator::set_site_height(double height) {
     site_height_ = height;
 }
 
+void OpenRoadTclGenerator::set_max_utilization(double utilization) {
+    max_utilization_ = utilization;
+}
+
 void OpenRoadTclGenerator::set_bitcell_width(double width) {
     bitcell_width_ = width;
 }
@@ -93,7 +97,7 @@ double OpenRoadTclGenerator::calculate_floorplan_height(double width) const {
     if (!qor_.valid || width <= 0) return align_to_site_height(0.54);
     // Leave room for load/slew repair, CTS, taps, and fillers.  The previous
     // 90% sizing target made the load-aware controller impossible to repair.
-    const double max_util = 0.40;
+    const double max_util = max_utilization_;
     double min_h = qor_.cell_area / width;
     double aligned = align_to_site_height(min_h);
     double util = qor_.cell_area / (width * aligned);
@@ -272,13 +276,8 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         file << "if {$dp_delay_count == 0} { error \"PERIPHERY_STRUCTURE: no named DP delay cells\" }\n";
         file << "foreach cell $dp_delay_cells { if {[get_property $cell ref_name] ne \"BUFx2_ASAP7_75t_R\"} { error \"PERIPHERY_STRUCTURE: DP delay cell is not BUFx2\" } }\n";
         file << "set_dont_touch $dp_delay_cells\n\n";
-        file << "set dp_wl_drivers [get_cells -hierarchical -quiet {g_wordlines*.u_driver}]\n";
-        file << "set dp_wl_gates [get_cells -hierarchical -quiet {g_wordlines*.u_enable}]\n";
-        file << "if {[llength $dp_wl_drivers] != " << (4 * num_wlt * num_mux)
-             << " || [llength $dp_wl_gates] != " << (4 * num_wlt * num_mux)
-             << "} { error \"PERIPHERY_STRUCTURE: DP wordline enable/driver stages missing\" }\n";
-        file << "set_dont_touch $dp_wl_drivers\n";
-        file << "set_dont_touch $dp_wl_gates\n";
+        // The wordlines are driven at the array by the driver-slice strips;
+        // the controller's sel_hi/sel_lo outputs are ordinary buffered ports.
         // Several DP controls are clock-derived top-level outputs.  Give every
         // output a real driver stage before placement so hold repair has a
         // resizable data-path cell instead of an unbuffered clock-to-port arc.
@@ -368,7 +367,7 @@ dict for {net pins} $dp_reset_nets {
         file << "close $structure_fd\n";
     }
     file << "report_checks -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > timing.rpt\n";
-    file << "report_checks -to [get_ports -quiet {wlt* wlb* wl_A* wl_B*}] -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > wordline_timing.rpt\n";
+    file << "report_checks -to [get_ports -quiet {wlt* wlb* sel_hi_A* sel_hi_B* sel_lo_A* sel_lo_B*}] -path_delay min_max -fields {slew capacitance fanout input_pin net} -digits 4 > wordline_timing.rpt\n";
     file << "report_check_types -max_slew -max_capacitance -max_fanout -violators -verbose > electrical.rpt\n";
     file << "check_setup -verbose > final_setup.rpt\n";
     file << "report_clock_properties > clock_properties.rpt\n";
