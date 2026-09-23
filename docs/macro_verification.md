@@ -312,3 +312,19 @@ at a stack's ends"), strict LVS matches all three sizes: `sram_x4x2x1` 4.70 x
 1053; the changes are all in the top-level M8/M9 routing, which now carries
 each tile's nets over the blocks rather than beside its dummy rows, with no
 gate, fin or local-interconnect rule moving. Baseline rewritten from x4x2.
+
+## Routed on M1-M7, pins on M6/M7 (2026-09-23)
+
+The macro used to route and pin on M1-M9, and about a quarter of the DRC
+markers were on M8/M9: the public deck sizes those layers by wire length
+(60 nm wide past 400 nm, 80 past 1.2 um, 120 past 1.8 um) and spaces them
+by width, and wants V8 enclosed by 20 nm, while `tech/lef/asap7_tech.lef`
+gives the router a flat 40 nm width and spacing and a V8 with no enclosure.
+Nothing the macro needs is up there, so `compile_asap7_2rw.py` now routes on
+M1 to `--top-layer` (7 by default) and places the pins on M6 (side edges)
+and M7 (top and bottom); the LEF's obstructions stop at M7, leaving M8/M9 to
+the chip. M6/M7 have no length-dependent widths, and the LEF's VIA67/VIA78
+already carry the deck's 11 nm enclosure. Strict LVS still matches;
+DRC x4x2 403 -> 318, x8x8 697 -> 481, x16x16 1053 -> 808, none on M6-M9
+(`M4.S.5` grows with the extra lower-layer wiring, 168 -> 194 on x16x16).
+Baseline rewritten.

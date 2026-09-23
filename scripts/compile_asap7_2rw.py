@@ -1005,8 +1005,12 @@ def run(args):
             f"make_tracks M{i} -x_offset 0 -y_offset 0 -x_pitch {pitch} -y_pitch {pitch}"
         )
     tcl += [
-        "place_pins -hor_layers M8 -ver_layers M9",
-        "set_routing_layers -signal M1-M9",
+        # The macro routes and pins on M1 up to --top-layer: odd, so the pins
+        # take its horizontal neighbour below for the side edges and itself
+        # for the top and bottom.  M7 by default: M8/M9 are the chip's, and
+        # the public deck sizes them by length, which the tech LEF does not.
+        f"place_pins -hor_layers M{args.top_layer - 1} -ver_layers M{args.top_layer}",
+        f"set_routing_layers -signal M1-M{args.top_layer}",
         "global_route",
         f"detailed_route -droute_end_iter {args.route_iterations} -output_drc macro_drc.rpt",
         "write_def routed.def",
@@ -1153,6 +1157,13 @@ def main():
         type=float,
         default=None,
         help="top/bottom margin, if not --margin",
+    )
+    parser.add_argument(
+        "--top-layer",
+        type=int,
+        default=7,
+        choices=(5, 7, 9),
+        help="highest metal the macro routes and pins on",
     )
     parser.add_argument(
         "--max-margin",

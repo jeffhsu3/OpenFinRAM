@@ -606,7 +606,8 @@ blocks `--margin`, and between banks `--bank-gap`, all 0.3 um by default
 (0.2 is the floor). A tile's IO columns are two rows tall against its six-row
 pitch, so the abutted stacks still leave a channel per tile on each IO side
 for the controls and data, and everything else is routed over the blocks on
-the upper layers; the macro pins land on M8/M9 at the edge. In the abstracts
+the upper layers; the macro pins land on M6/M7 at the edge (`--top-layer`,
+7 by default), leaving M8 and M9 to the chip. In the abstracts
 the wordline nets are obstructions, not pins (`abstract(..., abutted=...)`):
 the router never sees them, and the connectivity gate proves each one is a
 single conductor through the tiles and its strip, isolated from every other
