@@ -149,6 +149,25 @@ chipforge_asap7's `DriverSliceSpec` sized by `size_decoder`. The slice is 12 to
 36 ps faster at every length; past 64 cells the wire sets the delay, and the two
 M3 resistances in the repo differ by 5.4. See `docs/wordline_driver_study.md`.
 
+## `characterize_sense_margin.py` — what a shared IO costs the read
+
+```
+.venv/bin/python scripts/characterize_sense_margin.py [--cells 16,64] [--deltas 5,10,20,30,50]
+```
+
+Xyce, about ten seconds: port B's IO block as the compiler builds it, one-sided
+against chipforge_asap7's two-sided variant (one amplifier, driver and latch for
+two facing banks), reading both values from a column of real `sram_cell_8t`
+with the other cells storing the opposite. Prints the bitline and
+sense-node splits at sense enable, the amplifier's resolve time, and whether
+every read came out right. Nominal devices at TT: it shows function and the
+relative cost, not the margin an amplifier offset leaves. On 2026-09-24 the
+two-sided block read right everywhere, down to 5 ps from wordline to sense
+enable; its split at sense time was 17-34 % smaller (about 3-7 ps more sense
+delay for the same split), against the controller's roughly 76 ps.
+`tests/test_sense_margin.py` checks the deck, and with `OPENFINRAM_SLOW_TESTS=1`
+the read.
+
 ## Periphery status and remaining signoff
 
 The open-source `ctrl_decode` flow now preserves and checks its 108 physical
