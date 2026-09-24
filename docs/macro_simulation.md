@@ -287,3 +287,13 @@ x4x2: both programs pass (the slow test). x8x8 on the 33.22 um floorplan:
 spaced program PASS, all 256 cells, no hazards, clk to wordline 114 / 182 ps,
 to Q 228-305 ps, 1934 fJ: the same numbers as before, which is what a
 schematic says about a floorplan change.
+
+## Several banks (2026-09-24)
+
+`simulate_macro.py` takes the bank from the address bits above the half bit
+(`Geometry.banks`, `bank_shift`), places cells by bank, adds cycles that write
+and read the upper bank (and both banks on the same row at once), and checks
+write and sense enable per bank. `sram_x4x2x2`: both programs PASS, all 64
+cells, no hazards, clk to Q 206-279 ps. Two of the four upper-bank read bits
+are proven (Q moved after sense enable); the others returned the word the
+port had just read.

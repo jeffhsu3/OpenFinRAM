@@ -189,6 +189,15 @@ class Geometry:
     )
     mux: int
     bits: int
+    banks: int = 1
+
+    @property
+    def bank_shift(self) -> int:
+        """The address bit the bank index starts at: above the row, column and half bits."""
+        return self.row_bits + self.col_bits + 1
+
+    def bank(self, address: int) -> int:
+        return address >> self.bank_shift
 
     @property
     def row_bits(self) -> int:
@@ -200,7 +209,7 @@ class Geometry:
 
     @property
     def words(self) -> int:
-        return 2 * self.wordlines * self.mux
+        return 2 * self.wordlines * self.mux * self.banks
 
     def split(self, address: int) -> tuple[int, int, int]:
         """``(upper half?, column, row)`` as `sram_control.v` slices an address.
@@ -214,9 +223,9 @@ class Geometry:
         return half, col, row
 
     def wordline(self, address: int) -> int:
-        """Index of the wordline an address opens, in its bank's ``wl_A``/``wl_B``."""
+        """Index of the wordline an address opens, in the ``wl_a_lo`` etc. buses (all banks)."""
         half, _, row = self.split(address)
-        return half * self.wordlines + row
+        return self.bank(address) * 2 * self.wordlines + half * self.wordlines + row
 
 
 def locate(cells: list[dict], wordlines: int) -> None:
@@ -241,9 +250,9 @@ def locate(cells: list[dict], wordlines: int) -> None:
         if (not wordline or not bitline or not other or other[2] != wordline[2]
                 or other[1].lower() != wordline[1].lower()):  # fmt: skip
             raise ValueError(f"cannot place {cell['path']}: {cell['nets']}")
-        index = int(wordline[2])
-        cell.update(half=index // wordlines, row=index % wordlines, col=int(bitline[2]),
-                    group=bitline[1], stack=wordline[1].lower())  # fmt: skip
+        index = int(wordline[2])  # bank * 2 * NUM_WL + half * NUM_WL + row
+        cell.update(half=(index // wordlines) % 2, row=index % wordlines, col=int(bitline[2]),
+                    bank=index // (2 * wordlines), group=bitline[1], stack=wordline[1].lower())  # fmt: skip
 
 
 # ── Testbench ────────────────────────────────────────────────────────────────
@@ -329,6 +338,16 @@ def default_program(g: Geometry, *, spaced: bool = False) -> list[tuple[Op, Op]]
         (Op("R", col0_bottom), Op("R", col0_top)),
         (Op("R", last_top), Op("R", last_bottom)),
     ]
+    if g.banks > 1:
+        # The same words one bank up: a write each port, reads back across
+        # ports, and a read of each bank at once on the same row and column.
+        up = (g.banks - 1) << g.bank_shift
+        program += [
+            (Op("W", a | up, ~alternating & mask), Op("W", b | up, alternating)),
+            (Op("R", b | up), Op("R", a | up)),
+            (Op("R", a), Op("R", a | up)),
+            (Op("R", b | up), Op("R", b)),
+        ]
     if spaced:
         program = [step for ops in program
                    for step in ([ops, (Op("-"), Op("-"))] if any(op.kind == "W" for op in ops) else [ops])]  # fmt: skip
@@ -418,10 +437,9 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         )
     watched = ["clk", *outputs]
     watched += [f"Xdut:wl_{port}_{stack}[{index}]" for port in "ab" for stack in STACKS
-                for index in range(2 * g.wordlines)]  # fmt: skip
-    watched += [
-        f"Xdut:{net}" for net in ("sae_A[0]", "sae_B[0]", "wrena_A[0]", "wrena_B[0]")
-    ]
+                for index in range(2 * g.wordlines * g.banks)]  # fmt: skip
+    watched += [f"Xdut:{net}_{port}[{bank}]" for net in ("sae", "wrena") for port in "AB"
+                for bank in range(g.banks)]  # fmt: skip
     watched += [f"Xdut:{cell['path']}:Q" for cell in cells]
     watched += [f"Xdut:{node}" for node in probes]
     lines += [
@@ -514,18 +532,24 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
         rise = first + cycle * period
         sample = rise + 0.45 * period
         for port, op in zip("AB", ops):
-            if op.kind != "W":  # write enable has no business moving
+            for bank in range(
+                g.banks
+            ):  # write enable only for a write, and only its bank's
+                if op.kind == "W" and bank == g.bank(op.address):
+                    continue
                 lifted = peak(
-                    f"V(XDUT:WRENA_{port}[0])", rise - period / 4, rise + period / 2
+                    f"V(XDUT:WRENA_{port}[{bank}])",
+                    rise - period / 4,
+                    rise + period / 2,
                 )
                 if lifted > 0.3 * vdd:
-                    hazards.append({"cycle": cycle, "port": port, "what": "write enable in a cycle that is not a write",
-                                    "volts": round(lifted, 3)})  # fmt: skip
+                    hazards.append({"cycle": cycle, "port": port, "volts": round(lifted, 3),
+                                    "what": f"write enable of bank {bank} in a cycle that does not write it"})  # fmt: skip
             if op.kind == "-":
                 continue
             selected = g.wordline(op.address)
             for stack in STACKS:
-                for other in range(2 * g.wordlines):
+                for other in range(2 * g.wordlines * g.banks):
                     if other == selected:
                         continue
                     lifted = peak(
@@ -552,7 +576,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             ]
             clean = all(v < 0.2 * vdd or v > 0.8 * vdd for v in volts)
             got = [int(v > vdd / 2) for v in volts]
-            sensed = after_clock(f"V(XDUT:SAE_{port}[0])", rise)
+            sensed = after_clock(f"V(XDUT:SAE_{port}[{g.bank(op.address)}])", rise)
             arrivals = [
                 after_clock(f"V(Q_{port}[{bit}])", rise, last=True)
                 for bit in range(g.bits)
@@ -621,10 +645,9 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     described = json.loads(next(result_dir.glob("*.physical.json")).read_text())
     top = described["cell"]
     g = Geometry(
-        wordlines=described["wordlines_per_half"], mux=4, bits=described["bits"]
-    )
-    if described.get("banks", 1) != 1:
-        raise NotImplementedError("the address map here covers one bank")
+        wordlines=described["wordlines_per_half"], mux=4, bits=described["bits"],
+        banks=described.get("banks", 1),
+    )  # fmt: skip
     source = (netlist or result_dir / f"{top}.sp").read_text()
     subckts = parse_subckts(source)
     pins = subckts[top.lower()].pins
@@ -642,7 +665,8 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
             )
         cell["bit"] = int(bit[1])
         cell["address"] = (
-            (cell["half"] << (g.row_bits + g.col_bits))
+            (cell["bank"] << g.bank_shift)
+            | (cell["half"] << (g.row_bits + g.col_bits))
             | (cell["col"] << g.row_bits)
             | cell["row"]
         )

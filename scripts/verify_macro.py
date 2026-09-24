@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -79,12 +80,58 @@ def _lvs_findings(result) -> dict:
     }
 
 
+def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Path, Path]]:
+    """One copy of the macro per bank, the other banks' column tiles taken out of both sides.
+
+    KLayout's comparer does not finish on a whole multi-bank macro: every
+    bit's column appears once per bank on the same data nets, and it gets
+    lost pairing the copies.  Each view keeps one bank's tiles and all the
+    rest (controller, strips, routing), so it is a single-bank problem.  What
+    no view sees, a short between tiles of different banks, is what the
+    compiler's connectivity gate already rules out (every net one conductor,
+    isolated from every other).
+    """
+    import gdstk
+
+    text = netlist.read_text()
+    source = gdstk.read_gds(str(gds))
+    top = next(c for c in source.cells if c.name == cell)
+    xs = sorted({round(float(r.origin[0]), 3) for r in top.references if r.cell.name.startswith("dp_column")})
+    views = []
+    for bank, x_bank in enumerate(xs):
+        view = out / f"bank{bank}"
+        view.mkdir(parents=True, exist_ok=True)
+        library = gdstk.read_gds(str(gds))
+        view_top = next(c for c in library.cells if c.name == cell)
+        view_top.remove(*[r for r in view_top.references
+                          if r.cell.name.startswith("dp_column") and round(float(r.origin[0]), 3) != x_bank])  # fmt: skip
+        library.write_gds(str(view / gds.name))
+        # The column groups are X<bank>_<bit> in the stacked column group.
+        kept = [line for line in text.splitlines() if not re.match(rf"X(?!{bank}_)\d+_\d+ ", line)]
+        (view / netlist.name).write_text("\n".join(kept) + "\n")
+        views.append((view / gds.name, view / netlist.name))
+    return views
+
+
+def _merge_findings(parts: list[dict]) -> dict:
+    return {
+        "matched": all(p["matched"] for p in parts),
+        "series_order_cells": sorted({c for p in parts for c in p["series_order_cells"]}),
+        "failing": sorted({c for p in parts for c in p["failing"]}),
+        "unmatched": {f"bank{b}:{k}": v for b, p in enumerate(parts) for k, v in p["unmatched"].items()},
+        "supply_shorts": sorted({s for p in parts for s in p["supply_shorts"]}),
+        "report": [p["report"] for p in parts],
+        "per_bank": True,
+    }
+
+
 def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = True) -> dict:
     from chipforge_asap7.verification import drc_counts, run_drc, run_hierarchical_lvs
 
     result_dir = result_dir.resolve()
+    described = sorted(result_dir.glob("*.physical.json"))
+    banks = json.loads(described[0].read_text()).get("banks", 1) if described else 1
     if cell is None:
-        described = sorted(result_dir.glob("*.physical.json"))
         cell = json.loads(described[0].read_text())["cell"] if described else result_dir.name.rsplit("_", 2)[0]
     gds, netlist = result_dir / f"{cell}.gds", result_dir / f"{cell}.sp"
     for path in (gds, netlist):
@@ -92,15 +139,22 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
             raise FileNotFoundError(f"{path} is missing; is {result_dir} a compiler result?")
 
     started = time.time()
-    strict = run_hierarchical_lvs(gds, netlist, out / "lvs", cell_name=cell, flatten_circuits=BITCELLS)
-    verdict = {"cell": cell, "gds": str(gds), "lvs": _lvs_findings(strict)}
-    print(strict.describe())
-    if not strict.matched:
-        relaxed = run_hierarchical_lvs(gds, netlist, out / "lvs_diagnostic", cell_name=cell,
-                                       flatten_circuits=BITCELLS, double_implant_is_tap=False)  # fmt: skip
-        verdict["lvs_without_double_implant_taps"] = _lvs_findings(relaxed)
-        print("\n-- again, with ACTIVE under both implants not acting as a tap:")
-        print(relaxed.describe())
+    views = bank_views(gds, netlist, cell, out / "banks") if banks > 1 else [(gds, netlist)]
+    strict, relaxed = [], []
+    for index, (view_gds, view_netlist) in enumerate(views):
+        tag = f"bank{index}/" if banks > 1 else ""
+        result = run_hierarchical_lvs(view_gds, view_netlist, out / f"{tag}lvs", cell_name=cell, flatten_circuits=BITCELLS)
+        strict.append(_lvs_findings(result))
+        print(("" if banks == 1 else f"== bank {index}\n") + result.describe())
+        if not result.matched:
+            result = run_hierarchical_lvs(view_gds, view_netlist, out / f"{tag}lvs_diagnostic", cell_name=cell,
+                                          flatten_circuits=BITCELLS, double_implant_is_tap=False)  # fmt: skip
+            relaxed.append(_lvs_findings(result))
+            print("\n-- again, with ACTIVE under both implants not acting as a tap:")
+            print(result.describe())
+    verdict = {"cell": cell, "gds": str(gds), "lvs": strict[0] if banks == 1 else _merge_findings(strict)}
+    if relaxed:
+        verdict["lvs_without_double_implant_taps"] = relaxed[0] if banks == 1 else _merge_findings(relaxed)
     if drc:
         counts = drc_counts(run_drc(gds, out / "drc", cell_name=cell, timeout=7200))
         verdict["drc"] = {"markers": sum(counts.values()), "rules": dict(sorted(counts.items()))}

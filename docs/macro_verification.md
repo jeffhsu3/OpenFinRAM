@@ -328,3 +328,30 @@ already carry the deck's 11 nm enclosure. Strict LVS still matches;
 DRC x4x2 403 -> 318, x8x8 697 -> 481, x16x16 1053 -> 808, none on M6-M9
 (`M4.S.5` grows with the extra lower-layer wiring, 168 -> 194 on x16x16).
 Baseline rewritten.
+
+## Several banks (2026-09-24)
+
+Banks sit side by side, each with its own strip pairs, one controller
+spanning them. `sram_x4x2x2` (10.46 x 16.88 um) and `sram_x8x8x2` build and
+route. Transistor LVS of a whole two-bank macro does not finish: extraction
+takes seconds, but KLayout's comparer gets lost pairing the banks' copies of
+each bit's column, which share the data nets (x4x2x2 timed out after an hour;
+naming every net in the layout brought that one to 16 s, but x8x8x2 still
+ran past 50 minutes, and capping the comparer's search makes it give up on
+circuits that match). Splitting at the tile does not work either: tiles abut
+array row to array row, so a tile's edge bitcells are completed by its
+neighbour's diffusion and the tile alone is not a circuit.
+
+`verify_macro.py` therefore checks a multi-bank macro bank by bank
+(`bank_views`): each view drops the other banks' column tiles from the layout
+and their column groups (`X<bank>_<bit>`) from the reference, and keeps the
+controller, every strip and all the routing. Each is a single-bank problem:
+x8x8x2 matches strict in 47 s for both banks, x4x2x2 in 22 s. A short between
+tiles of different banks is outside every view; the compiler's connectivity
+gate, which proves every net one conductor isolated from every other, covers
+it. DRC runs on the whole macro (x4x2x2 409, x8x8x2 693 markers).
+
+The compiled macro now also carries a label on every named net at a point the
+connectivity gate verified, so nets are named in a viewer and LVS has names to
+start from. The two-bank controller's place-and-route left one 1 nm M1 spacing
+at 50 % utilization; the flow now retries at 44 % and 38 %.

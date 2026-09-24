@@ -143,6 +143,28 @@ bool OpenRoadManager::run_openroad_flow() {
         }
     }
     bool or_ok = gen.run_openroad(output_tcl, work_dir, log_file, openroad_bin);
+    // The utilization cap is a target, and the controller's place-and-route
+    // can still end one short of a clean route (a two-bank controller left a
+    // single 1 nm M1 spacing at 50 %).  Retry with a little more height
+    // rather than lowering the target for every build.
+    double utilization = cli_options_.single_port ? 0.40 : 0.50;
+    for (int retry = 0; retry < 2 && !or_ok; ++retry) {
+        LOGW << "OpenROAD periphery flow failed at " << utilization
+             << " utilization (see " << log_file << "); retrying lower";
+        utilization -= 0.06;
+        gen.set_max_utilization(utilization);
+        if (!gen.generate_run_tcl(sram_width, 0.0, output_tcl,
+                                  cli_options_.num_wls, cli_options_.num_wls,
+                                  num_ysel, addr_width,
+                                  cli_options_.num_banks,
+                                  cli_options_.spice_only, col_width,
+                                  platform_path, tech_root,
+                                  cli_options_.single_port)) {
+            LOGE << "Failed to generate OpenROAD run.tcl";
+            return false;
+        }
+        or_ok = gen.run_openroad(output_tcl, work_dir, log_file, openroad_bin);
+    }
     std::string def_path = join_path(work_dir, "ctrl_decode.def");
     std::string v_path = join_path(work_dir, "netlist_for_lvs.v");
     if (!or_ok) {

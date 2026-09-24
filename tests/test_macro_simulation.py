@@ -81,6 +81,18 @@ def test_an_address_is_sliced_the_way_the_controller_slices_it():
     assert sm.Geometry(wordlines=32, mux=4, bits=8).split((1 << 7) | (3 << 5) | 17) == (1, 3, 17)
 
 
+def test_the_bank_is_the_address_bits_above_the_half():
+    # sram_control.v: row, column, the half bit, then the bank index.  A
+    # bank's wordlines follow the previous bank's in the strips' buses.
+    g = sm.Geometry(wordlines=2, mux=4, bits=2, banks=2)
+    assert (g.bank_shift, g.words) == (4, 32)
+    assert g.bank(0b1_1101) == 1 and g.split(0b1_1101) == (1, 2, 1)
+    assert g.wordline(0b1_1101) == 4 + 3 and g.wordline(0b0_1101) == 3
+    program = sm.default_program(g)
+    assert any(g.bank(op.address) == 1 for ops in program for op in ops if op.kind == "W")
+    assert any(g.bank(op.address) == 1 for ops in program for op in ops if op.kind == "R")
+
+
 @pytest.mark.parametrize("g", [sm.Geometry(2, 4, 2), sm.Geometry(2, 4, 4), sm.Geometry(32, 4, 16)])
 def test_no_read_in_the_program_can_pass_by_standing_still(g):
     """A port's output latch shows the last word it read; every read must differ from it."""

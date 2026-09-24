@@ -1060,6 +1060,16 @@ def run(args):
     verify(work / "routed.gds", manifest)
     check_route_drc(work / "macro_drc.rpt")
     top.add(gdstk.rectangle((0, 0), (width, height), layer=100))
+    # Name every net at a point the connectivity gate has just proven is on
+    # it.  Transistor LVS uses matching names as starting points (it still
+    # checks every connection), which it needs once two banks make the
+    # columns interchangeable by topology alone; and a viewer shows the nets.
+    named = {label.text for label in top.labels}
+    for net, net_probes in probes.items():
+        if net.startswith("private:") or net in named or net in ("vdd", "vss"):
+            continue
+        probe = net_probes[0]
+        top.add(gdstk.Label(net, tuple(probe["point"]), layer=probe["layer"]))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     lib.write_gds(str(args.output), timestamp=columns.FIXED_GDS_TIMESTAMP)
     report = {
