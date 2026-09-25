@@ -351,6 +351,14 @@ tiles of different banks is outside every view; the compiler's connectivity
 gate, which proves every net one conductor isolated from every other, covers
 it. DRC runs on the whole macro (x4x2x2 409, x8x8x2 693 markers).
 
+With `--share-port-b` a pair of banks is one tile (`dp_colpair*`), so the
+views are per pair (`X<pair>_<bit>`), and `sram_x4x2x2`, one pair, is checked
+whole: strict match in one run. DRC 562 markers against 409 unshared; the
+difference is KLayout listing a cell once per orientation it is used in
+(`dummy_vertical_array_X4_tap4_8t:r0` and `:m90`, the same markers), plus
+routing noise over the tiles (six `M1.W.1` via landings, one `V0.M1.AUX.3`,
+one `V4.S.1-2-3`).
+
 The compiled macro now also carries a label on every named net at a point the
 connectivity gate verified, so nets are named in a viewer and LVS has names to
 start from. The two-bank controller's place-and-route left one 1 nm M1 spacing

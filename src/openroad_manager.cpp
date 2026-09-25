@@ -88,8 +88,20 @@ bool OpenRoadManager::run_openroad_flow() {
         const unsigned rows = 2 * cli_options_.num_wls;
         const unsigned tap_pitch = std::gcd(rows, 16u);
         const unsigned slots = rows + rows / tap_pitch;
-        sram_width = (io_a_size.width + cap_size.width + slots * bit_size.width
-                      + io_b_size.width) * cli_options_.num_banks;
+        const double half = io_a_size.width + cap_size.width + slots * bit_size.width;
+        sram_width = (half + io_b_size.width) * cli_options_.num_banks;
+        if (cli_options_.share_port_b) {
+            // Banks in pairs, mirrored about one two-sided port-B block.
+            auto* io_b2 = lib.get_cell("iocol_sram_8t_b2");
+            auto io_b2_size = io_b2 ? OpenFinRAM::get_cell_size_from_boundary(io_b2, map)
+                                    : decltype(io_b_size){};
+            if (!io_b2 || !io_b2_size.valid) {
+                LOGE << "tech/gds/sram_8t_iocolumn.gds has no two-sided port-B block (iocol_sram_8t_b2)";
+                lib.free_all();
+                return false;
+            }
+            sram_width = (2 * half + io_b2_size.width) * (cli_options_.num_banks / 2);
+        }
         lib.free_all();
     }
     double col_width = (sram_width + cli_options_.bitcell_width) / cli_options_.num_banks;

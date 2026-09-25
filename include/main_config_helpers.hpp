@@ -9,6 +9,9 @@ struct MainCliOptions {
     unsigned num_data_bits = 2;
     unsigned num_banks = 1;
     bool single_port = false;
+    // Two-port only: banks in pairs share port B's IO block, the pair's
+    // arrays mirrored about it (--share-port-b).
+    bool share_port_b = false;
     bool skip_characterization = true;
     std::string output_sp_name = "sram.sp";
     std::string output_gds_name = "sram.gds";

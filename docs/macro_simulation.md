@@ -297,3 +297,9 @@ write and sense enable per bank. `sram_x4x2x2`: both programs PASS, all 64
 cells, no hazards, clk to Q 206-279 ps. Two of the four upper-bank read bits
 are proven (Q moved after sense enable); the others returned the word the
 port had just read.
+
+With `--share-port-b` (`physical.json` `shared_port_b`), port B's sense and
+write enables are watched per pair of banks (`Geometry.io`). `sram_x4x2x2`
+shared: both programs PASS, all 64 cells, no hazards, clk to Q 206-289 ps,
+1592 / 1651 fJ. A port-B read of bank 1 (address 20) moves both bits after
+sense enable, so the block's second group reads through the shared amplifier.

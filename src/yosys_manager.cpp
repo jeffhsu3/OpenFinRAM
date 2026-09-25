@@ -100,7 +100,7 @@ std::string YosysManager::generate_yosys_script() const {
         cli_options_.num_wl_buf, cli_options_.num_sae_buf,
         abc_output_load_ff(), kAbcDelayTargetPs,
         platform, tech_lib,
-        cli_options_.single_port);
+        cli_options_.single_port, cli_options_.share_port_b);
 }
 
 double YosysManager::abc_output_load_ff() const {

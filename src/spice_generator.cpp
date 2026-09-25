@@ -454,8 +454,88 @@ std::string SpiceGenerator::generate_colgrp_8t() {
     return create_subckt("colgrp_sram_8t", ports, instances.str());
 }
 
+// With --share-port-b: one bank's column without port B's IO, its port-B
+// bitlines out to the block it shares with the other bank of its pair.
+std::string SpiceGenerator::generate_colgrp_half_8t() {
+    const int rows = 2 * config_.num_wls;
+    std::vector<std::string> ports;
+    append_indexed_ports(ports, "WLA[", rows, "]");
+    append_indexed_ports(ports, "WLB[", rows, "]");
+    append_ports(ports, {"DA", "QA", "wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA"});
+    append_indexed_ports(ports, "yselnA[", 4, "]");
+    append_indexed_ports(ports, "yselA[", 4, "]");
+    append_ports(ports, {"sae_A"});
+    append_indexed_ports(ports, "BL_B[", 4, "]");
+    append_indexed_ports(ports, "BLN_B[", 4, "]");
+    append_ports(ports, {"VDD", "VSS"});
+
+    std::stringstream instances;
+    instances << "X0 ";
+    append_indexed_tokens(instances, "WLA[", rows, "]");
+    append_indexed_tokens(instances, "WLB[", rows, "]");
+    append_indexed_tokens(instances, "BL_A[", 4, "]");
+    append_indexed_tokens(instances, "BLN_A[", 4, "]");
+    append_indexed_tokens(instances, "BL_B[", 4, "]");
+    append_indexed_tokens(instances, "BLN_B[", 4, "]");
+    instances << " VDD VSS array_sram_8t\n";
+    instances << "XIO_A ";
+    append_indexed_tokens(instances, "BL_A[", 4, "]");
+    append_indexed_tokens(instances, "BLN_A[", 4, "]");
+    append_indexed_tokens(instances, "yselA[", 4, "]");
+    append_indexed_tokens(instances, "yselnA[", 4, "]");
+    instances << "blprechnA sae_A wrenaA wrenanA oe_outA oeb_outA DA QA VDD VSS iocol_sram_8t_a\n";
+    return create_subckt("colgrp_half_sram_8t", ports, instances.str());
+}
+
+// A pair of banks' columns for one data bit: the two halves mirrored about
+// port B's two-sided block (iocol_sram_8t_b2).  The second bank's wordlines
+// and selects continue the first's indices; its one-per-bank controls end in
+// R.  Port B's enables are the pair's, its precharges and selects per bank.
+std::string SpiceGenerator::generate_colgrp_pair_8t() {
+    const int rows = 2 * config_.num_wls;
+    const std::vector<std::string> port_a = {"wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA", "sae_A"};
+    std::vector<std::string> ports;
+    append_indexed_ports(ports, "WLA[", 2 * rows, "]");
+    append_indexed_ports(ports, "WLB[", 2 * rows, "]");
+    append_ports(ports, {"DA", "QA", "DB", "QB"});
+    append_ports(ports, port_a);
+    for (const auto& name : port_a) ports.push_back(name + "R");
+    append_ports(ports, {"wrenaB", "wrenanB", "oeb_outB", "oe_outB", "sae_B", "blprechnB", "blprechnBR"});
+    append_indexed_ports(ports, "yselnA[", 8, "]");
+    append_indexed_ports(ports, "yselA[", 8, "]");
+    append_indexed_ports(ports, "yselnB[", 8, "]");
+    append_indexed_ports(ports, "yselB[", 8, "]");
+    append_ports(ports, {"VDD", "VSS"});
+
+    std::stringstream instances;
+    for (int bank = 0; bank < 2; ++bank) {
+        const std::string r = bank ? "R" : "";
+        instances << "XH" << bank << " ";
+        append_indexed_tokens(instances, "WLA[", rows, "]", bank * rows);
+        append_indexed_tokens(instances, "WLB[", rows, "]", bank * rows);
+        instances << "DA QA ";
+        for (const char* name : {"wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA"}) {
+            instances << name << r << ' ';
+        }
+        append_indexed_tokens(instances, "yselnA[", 4, "]", bank * 4);
+        append_indexed_tokens(instances, "yselA[", 4, "]", bank * 4);
+        instances << "sae_A" << r << ' ';
+        append_indexed_tokens(instances, "BL_B[", 4, "]", bank * 4);
+        append_indexed_tokens(instances, "BLN_B[", 4, "]", bank * 4);
+        instances << "VDD VSS colgrp_half_sram_8t\n";
+    }
+    instances << "XIO_B ";
+    append_indexed_tokens(instances, "BL_B[", 8, "]");
+    append_indexed_tokens(instances, "BLN_B[", 8, "]");
+    append_indexed_tokens(instances, "yselB[", 8, "]");
+    append_indexed_tokens(instances, "yselnB[", 8, "]");
+    instances << "blprechnB blprechnBR sae_B wrenaB wrenanB oe_outB oeb_outB DB QB VDD VSS iocol_sram_8t_b2\n";
+    return create_subckt("colgrp_pair_sram_8t", ports, instances.str());
+}
+
 std::string SpiceGenerator::generate_stacked_colgrp_8t() {
     const int rows = 2 * config_.num_wls;
+    const bool shared = config_.share_port_b;
     std::vector<std::string> ports;
     for (int mux = 0; mux < config_.num_banks; ++mux) {
         append_indexed_ports(ports, "WLA[", rows, "]", mux * rows);
@@ -473,8 +553,15 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
         "blprechnA", "blprechnB",
         "sae_A", "sae_B"
     };
+    // Shared, port B's enables are one per pair of banks (the controller's
+    // SHARED_B), its precharges still one per bank.
+    auto per_pair = [shared](const std::string& name) {
+        return shared && (name == "wrenaB" || name == "wrenanB" || name == "oeb_outB" ||
+                          name == "oe_outB" || name == "sae_B");
+    };
     for (const auto& name : ctrl_port_names) {
-        for (int mux = 0; mux < config_.num_banks; ++mux) {
+        const int count = per_pair(name) ? config_.num_banks / 2 : config_.num_banks;
+        for (int mux = 0; mux < count; ++mux) {
             ports.push_back(name + "[" + std::to_string(mux) + "]");
         }
     }
@@ -486,7 +573,29 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
     append_ports(ports, {"VDD", "VSS"});
 
     std::stringstream instances;
-    for (int mux = 0; mux < config_.num_banks; ++mux) {
+    // X<pair>_<bit>: both banks of the pair, as colgrp_pair_sram_8t orders them.
+    for (int pair = 0; shared && pair < config_.num_banks / 2; ++pair) {
+        for (int bit = 0; bit < config_.num_data_bits / 2; ++bit) {
+            const std::string p = std::to_string(pair);
+            instances << "X" << pair << "_" << bit << " ";
+            append_indexed_tokens(instances, "WLA[", 2 * rows, "]", 2 * pair * rows);
+            append_indexed_tokens(instances, "WLB[", 2 * rows, "]", 2 * pair * rows);
+            instances << "DA[" << bit << "] QA[" << bit << "] DB[" << bit << "] QB[" << bit << "] ";
+            for (int bank = 2 * pair; bank < 2 * pair + 2; ++bank) {
+                const std::string b = std::to_string(bank);
+                instances << "wrenaA[" << b << "] wrenanA[" << b << "] oeb_outA[" << b << "] oe_outA[" << b
+                          << "] blprechnA[" << b << "] sae_A[" << b << "] ";
+            }
+            instances << "wrenaB[" << p << "] wrenanB[" << p << "] oeb_outB[" << p << "] oe_outB[" << p
+                      << "] sae_B[" << p << "] blprechnB[" << 2 * pair << "] blprechnB[" << 2 * pair + 1 << "] ";
+            append_indexed_tokens(instances, "yselnA[", 8, "]", 8 * pair);
+            append_indexed_tokens(instances, "yselA[", 8, "]", 8 * pair);
+            append_indexed_tokens(instances, "yselnB[", 8, "]", 8 * pair);
+            append_indexed_tokens(instances, "yselB[", 8, "]", 8 * pair);
+            instances << "VDD VSS colgrp_pair_sram_8t\n";
+        }
+    }
+    for (int mux = 0; !shared && mux < config_.num_banks; ++mux) {
         for (int bit = 0; bit < config_.num_data_bits / 2; ++bit) {
             instances << "X" << mux << "_" << bit << " ";
             append_indexed_tokens(instances, "WLA[", rows, "]", mux * rows);
@@ -559,7 +668,12 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
 
         content << sep << generate_cell_row_8t() << "\n";
         content << sep << generate_array_8t() << "\n";
-        content << sep << generate_colgrp_8t() << "\n";
+        if (config_.share_port_b) {
+            content << sep << generate_colgrp_half_8t() << "\n";
+            content << sep << generate_colgrp_pair_8t() << "\n";
+        } else {
+            content << sep << generate_colgrp_8t() << "\n";
+        }
         content << sep << generate_stacked_colgrp_8t() << "\n";
     }
     

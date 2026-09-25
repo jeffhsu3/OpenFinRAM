@@ -5,8 +5,10 @@
 module tb_ctrl_decode_dp #(
     parameter int NUM_WL     = 8,
     parameter int NUM_BANK   = 1,
-    parameter int COLUMN_MUX = 4
+    parameter int COLUMN_MUX = 4,
+    parameter int SHARED_B   = 0   // banks share port B's IO block in pairs
 );
+    localparam int B_IO = SHARED_B ? NUM_BANK / 2 : NUM_BANK;
     localparam int ROW_BITS   = $clog2(NUM_WL);
     localparam int COL_BITS   = (COLUMN_MUX > 1) ? $clog2(COLUMN_MUX) : 1;
     localparam int BANK_BITS  = (NUM_BANK > 1) ? $clog2(NUM_BANK) : 0;
@@ -26,12 +28,13 @@ module tb_ctrl_decode_dp #(
     logic [NUM_BANK-1:0]
         blprechn_A, wrena_A, wrenan_A,
         oeb_out_A, oe_out_A, sae_A,
-        blprechn_B, wrena_B, wrenan_B,
-        oeb_out_B, oe_out_B, sae_B;
+        blprechn_B;
+    // Port B's sense, write and output enables: one per IO block.
+    logic [B_IO-1:0] wrena_B, wrenan_B, oeb_out_B, oe_out_B, sae_B;
 
     ctrl_decode #(
         .ADDR_WIDTH(ADDR_WIDTH), .NUM_WL(NUM_WL), .NUM_BANK(NUM_BANK),
-        .COLUMN_MUX(COLUMN_MUX), .WL_BUF(2), .SAE_BUF(2)
+        .COLUMN_MUX(COLUMN_MUX), .WL_BUF(2), .SAE_BUF(2), .SHARED_B(SHARED_B)
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .ce_n_A(ce_n_A), .ce_n_B(ce_n_B),
@@ -69,6 +72,9 @@ module tb_ctrl_decode_dp #(
         logic [NUM_BANK-1:0] expected_prech;
         logic [NUM_BANK-1:0] expected_wrena, expected_wrenan;
         logic [NUM_BANK-1:0] expected_oeb, expected_oe, expected_sae;
+        // Port B's enables, by IO block: a shared block is the bank's pair.
+        int unsigned io;
+        logic [B_IO-1:0] io_wrena, io_wrenan, io_oeb, io_oe, io_sae;
 
         row    = address & (NUM_WL - 1);
         col    = (address >> ROW_BITS) & (COLUMN_MUX - 1);
@@ -95,6 +101,16 @@ module tb_ctrl_decode_dp #(
             expected_oeb[bank] = 1'b0;
             expected_oe[bank] = 1'b1;
             expected_sae[bank] = 1'b1;
+        end
+        io = SHARED_B ? bank / 2 : bank;
+        io_wrena = '0; io_wrenan = '1; io_oeb = '1; io_oe = '0; io_sae = '0;
+        if (write_access) begin
+            io_wrena[io] = 1'b1;
+            io_wrenan[io] = 1'b0;
+        end else begin
+            io_oeb[io] = 1'b0;
+            io_oe[io] = 1'b1;
+            io_sae[io] = 1'b1;
         end
 
         ce_n_A = 1; we_n_A = 1; oe_n_A = 1;
@@ -127,9 +143,9 @@ module tb_ctrl_decode_dp #(
             if (sel_hi_B !== expected_hi || sel_lo_B !== expected_lo ||
                 ysel_B !== expected_ysel || yseln_B !== expected_yseln ||
                 blprechn_B !== expected_prech ||
-                wrena_B !== expected_wrena || wrenan_B !== expected_wrenan ||
-                oeb_out_B !== expected_oeb || oe_out_B !== expected_oe ||
-                sae_B !== expected_sae) begin
+                wrena_B !== io_wrena || wrenan_B !== io_wrenan ||
+                oeb_out_B !== io_oeb || oe_out_B !== io_oe ||
+                sae_B !== io_sae) begin
                 errors++;
                 $display("FAIL B %s address=%0d", write_access ? "write" : "read", address);
             end
@@ -143,7 +159,7 @@ module tb_ctrl_decode_dp #(
 
     initial begin
         if (!is_power_of_two(NUM_WL) || NUM_WL < 2 ||
-            !is_power_of_two(NUM_BANK) ||
+            !is_power_of_two(NUM_BANK) || (SHARED_B && NUM_BANK < 2) ||
             !is_power_of_two(COLUMN_MUX) || COLUMN_MUX < 2)
             $fatal(1, "unsupported test geometry");
 
@@ -169,8 +185,8 @@ module tb_ctrl_decode_dp #(
         end
 
         if (errors == 0)
-            $display("PASS: 2RW decode correct over all %0d addresses (NUM_WL=%0d, BANKS=%0d, MUX=%0d)",
-                     NUM_ADDR, NUM_WL, NUM_BANK, COLUMN_MUX);
+            $display("PASS: 2RW decode correct over all %0d addresses (NUM_WL=%0d, BANKS=%0d, MUX=%0d, SHARED_B=%0d)",
+                     NUM_ADDR, NUM_WL, NUM_BANK, COLUMN_MUX, SHARED_B);
         else
             $fatal(1, "FAILED: %0d error(s)", errors);
         $finish;

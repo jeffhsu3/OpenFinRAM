@@ -17,6 +17,11 @@ DriverSliceSpec, four wordlines a slice): port A's strip against the array,
 port B's flipped under it sharing a VSS rail and reaching the M5 wordlines
 through a via stack and strap.  Those wordline nets are never routed: the
 connectivity gate proves them through the abutments instead.
+
+With ``--share-port-b`` the banks go in pairs and a tile is a pair's column
+for one bit: ``port A IO | array | port B IO | array | port A IO``, the second
+bank's half the first's mirrored, so one two-sided port-B block serves both
+arrays.  The second bank's strips are the first's mirrored the same way.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from __future__ import annotations
 import argparse
 from collections import defaultdict
 import functools
+import itertools
 import json
 import math
 from pathlib import Path
@@ -229,8 +235,13 @@ def half_of(bit, bits):
     return "lo" if bit < bits // 2 else "hi"
 
 
-def leaf_net(name, bank, bit, wordlines, bits):
-    """Macro net of a column pin; `wordlines` is NUM_WL, half the array's."""
+def leaf_net(name, bank, bit, wordlines, bits, shared_b=False):
+    """Macro net of a column pin; `wordlines` is NUM_WL, half the array's.
+
+    A pair tile (`shared_b`, `bank` its first) names the second bank's
+    wordlines and selects by continuing the first's indices, and its
+    one-per-bank controls with an ``R``; port B's enables are the pair's.
+    """
     if name in ("vdd", "vss"):
         return name
     if name in ("DA", "DB", "QA", "QB"):
@@ -241,11 +252,12 @@ def leaf_net(name, bank, bit, wordlines, bits):
     mux = re.fullmatch(r"(yseln|ysel)([AB])\[(\d+)\]", name)
     if mux:
         return f"{mux[1]}_{mux[2]}[{bank * 4 + int(mux[3])}]"
-    ctrl = re.fullmatch(r"(wrena|wrenan|oeb_out|oe_out|blprechn)([AB])", name)
+    ctrl = re.fullmatch(r"(wrena|wrenan|oeb_out|oe_out|blprechn|sae_)([AB])(R?)", name)
     if ctrl:
-        return f"{ctrl[1]}_{ctrl[2]}[{bank}]"
-    if name in ("sae_A", "sae_B"):
-        return f"{name}[{bank}]"
+        signal = ctrl[1].rstrip("_")
+        if shared_b and ctrl[2] == "B" and signal != "blprechn":
+            return f"{signal}_B[{bank // 2}]"
+        return f"{signal}_{ctrl[2]}[{bank + (1 if ctrl[3] else 0)}]"
     raise RuntimeError(f"unmapped column pin {name}")
 
 
@@ -465,12 +477,29 @@ def ends_tag(bottom, top):
     }[(bottom, top)]
 
 
-def build_leaf(wordlines, tap_pitch, bottom=True, top=True):
+def mirrored(lib, cell, name, width):
+    """`cell` mirrored in x about ``width / 2`` (x -> width - x), labels and boundary included."""
+    out = lib.new_cell(name)
+    out.add(gdstk.Reference(cell, origin=(width, 0.0), rotation=math.pi, x_reflection=True))
+    for label in cell.labels:
+        x, y = map(float, label.origin)
+        out.add(columns.clone_label(label, label.text, (width - x, y)))
+    for poly in cell.polygons:
+        if poly.layer == 100:
+            (x0, y0), (x1, y1) = poly.bounding_box()
+            out.add(gdstk.rectangle((width - x1, y0), (width - x0, y1), layer=100))
+    return out
+
+
+def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False):
     """``iocol A | cap | array of `wordlines` | iocol B``, with a dummy row below and/or above.
 
     In a stack of abutted tiles only the stack's two ends need a dummy row
     (its outer end and the end facing its driver strip); the tiles between
     abut array row to array row, their IO blocks rail to rail.
+
+    With `shared_b` it is a pair's tile: the half without port B's IO, then
+    the two-sided port-B block, then the half mirrored (`build_colgrp_pair`).
     """
     gds = REPO / "tech/gds"
     lib = arrays.build_library(
@@ -496,7 +525,7 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True):
     io_b = columns.build_port_io(lib, "B", blocks["B"], specs["B"])
     caps = columns.build_cap_array(lib, edges)
     array = cells[f"array_x{wordlines}x4_tap{tap_pitch}_sram_8t"]
-    leaf = columns.build_colgrp(lib, array, io_a, io_b, caps, wordlines)
+    leaf = columns.build_colgrp(lib, array, io_a, None if shared_b else io_b, caps, wordlines)
     capped = lib.new_cell("capped_" + leaf.name + ends_tag(bottom, top))
     capped.add(gdstk.Reference(leaf))
     for label in leaf.labels:
@@ -542,6 +571,11 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True):
     columns.rect(
         capped, (0, -pitch if bottom else 0, width, (5 if top else 4) * pitch), 100
     )
+    if shared_b:
+        io_b2 = columns.build_port_io(lib, "B2", blocks["B2"], specs["B2"])
+        return columns.build_colgrp_pair(
+            lib, capped, io_b2, wordlines, name=capped.name.replace("capped_", "capped_pair_", 1)
+        )
     return capped
 
 
@@ -772,6 +806,11 @@ def run(args):
         raise RuntimeError("wordlines and bits must be positive even values >= 2")
     if args.banks < 1 or args.banks & (args.banks - 1):
         raise RuntimeError("banks must be a power of two")
+    shared_b = args.share_port_b
+    if shared_b and args.banks < 2:
+        raise RuntimeError("sharing port B's IO needs banks in pairs")
+    # What the floorplan repeats across: a bank, or a pair of banks.
+    units, banks_per_unit = (args.banks // 2, 2) if shared_b else (args.banks, 1)
     work = args.work.resolve()
     work.mkdir(parents=True, exist_ok=True)
     array_wordlines = 2 * args.wordlines
@@ -793,18 +832,24 @@ def run(args):
         bottom, top = ends_of(index)
         if (bottom, top) in variants:
             continue
-        cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top)
+        cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top, shared_b=shared_b)
         labels = [label for label in cell.labels if not supply(label.text)]
-        variants[(bottom, top)] = (cell, *abstract(
-            cell, "dp_column" + ends_tag(bottom, top), labels, abutted=is_wordline
-        ))  # fmt: skip
+        master = ("dp_colpair" if shared_b else "dp_column") + ends_tag(bottom, top)
+        variants[(bottom, top)] = (cell, *abstract(cell, master, labels, abutted=is_wordline))
     leaf = next(iter(variants.values()))[0]
     size = next(iter(variants.values()))[4]
     lef = "\n".join(v[3] for v in variants.values())
     strip_lib = gdstk.Library(unit=1e-6, precision=1e-10)
+    # The strips are drawn on the first bank's half: a pair tile's first reference.
     strip_pairs, slice_load = build_wordline_strips(
-        strip_lib, leaf, args.wordlines, args.bits
+        strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits
     )
+    if shared_b:
+        tile_width = columns.boundary_box(leaf)[2]
+        for half in list(strip_pairs):
+            strip_pairs[half + "_r"] = mirrored(
+                strip_lib, strip_pairs[half], strip_pairs[half].name + "_r", tile_width
+            )
     pair_masters = {}
     for half, pair in strip_pairs.items():
         pair_labels = [label for label in pair.labels if not supply(label.text)]
@@ -867,7 +912,7 @@ def run(args):
     # stride can strand the small cap/tap ground terminals between tracks.
     bank_stride = math.ceil((size[0] + bank_gap) / 2.88) * 2.88
     width = max(
-        (args.banks - 1) * bank_stride + size[0] + 2 * margin, ctrl_size[0] + 2 * margin
+        (units - 1) * bank_stride + size[0] + 2 * margin, ctrl_size[0] + 2 * margin
     )
 
     # Bottom to top: the lower stack of tiles, abutted at the tile's boundary
@@ -896,8 +941,9 @@ def run(args):
         if info.get("private"):
             continue
         nets[info["net"]].append(("CTRL", pin))
-    for bank in range(args.banks):
-        x_bank = margin + bank * bank_stride
+    for unit in range(units):
+        x_bank = margin + unit * bank_stride
+        bank = unit * banks_per_unit  # a pair tile's first bank
         for bit in range(args.bits):
             inst = f"COL_{bank}_{bit}"
             index = bit % half_bits
@@ -907,20 +953,24 @@ def run(args):
             y_tile = (y_lo_tiles if bit < half_bits else y_hi_tiles) + offsets[index]
             origin = (x_bank - (bx0 - tile_ox), y_tile - (by0 - tile_oy))
             resolve = functools.partial(
-                leaf_net, bank=bank, bit=bit, wordlines=args.wordlines, bits=args.bits
+                leaf_net, bank=bank, bit=bit, wordlines=args.wordlines, bits=args.bits,
+                shared_b=shared_b,
             )
             instances.append((inst, hard.name, origin, resolve))
             for pin, info in pins.items():
                 if info.get("private") or info.get("abutted"):
                     continue
                 nets[resolve(info["net"])].append((inst, pin))
-        for half, y_pair in (("lo", y_lo_strips), ("hi", y_hi_strips)):
-            cell, cell_pins, _, _ = pair_masters[half]
-            inst = f"WL_{half.upper()}_{bank}"
-            pox, poy = bbox_origin(strip_pairs[half])
+        for (half, y_pair), second in itertools.product(
+            (("lo", y_lo_strips), ("hi", y_hi_strips)), range(banks_per_unit)
+        ):
+            drawn = half + ("_r" if second else "")  # the second bank's are mirrored
+            cell, cell_pins, _, _ = pair_masters[drawn]
+            inst = f"WL_{half.upper()}_{bank + second}"
+            pox, poy = bbox_origin(strip_pairs[drawn])
             origin = (x_bank + pox, y_pair + poy)  # the pair is drawn in the tile's x
             resolve = functools.partial(
-                strip_net, bank=bank, half=half, wordlines=args.wordlines
+                strip_net, bank=bank + second, half=half, wordlines=args.wordlines
             )
             instances.append((inst, cell.name, origin, resolve))
             for pin, info in cell_pins.items():
@@ -1076,14 +1126,17 @@ def run(args):
         "cell": top_name,
         "size_um": [width, height],
         "banks": args.banks,
+        "shared_port_b": shared_b,
         "bits": args.bits,
         "margin_um": args.margin,
         "floorplan": "controller band between two stacks of abutted column tiles "
-        "(port A IO | array | port B IO), a wordline driver strip pair on each side",
+        + ("(port A IO | array | shared port B IO | mirrored array | port A IO)" if shared_b
+           else "(port A IO | array | port B IO)")
+        + ", a wordline driver strip pair on each side",
         "wordlines_per_half": args.wordlines,
         "array_wordlines": array_wordlines,
         "tap_pitch": tap_pitch,
-        "column_tiles": args.banks * args.bits,
+        "column_tiles": units * args.bits,
         "wordline_slice": wl_slices.slice_name(slice_load),
         "cells_along_wordline": 4 * (args.bits // 2),
         "wordline_strip_pairs": 2 * args.banks,
@@ -1099,7 +1152,7 @@ def run(args):
         json.dumps(report, indent=2) + "\n"
     )
     print(
-        f"PASS: {top_name}: {args.banks * args.bits} column tiles, {2 * args.banks} strip pairs, "
+        f"PASS: {top_name}: {units * args.bits} column tiles, {2 * args.banks} strip pairs, "
         f"{len(probes)} connected nets"
     )
 
@@ -1162,6 +1215,9 @@ def main():
     parser.add_argument("--margin", type=float, default=0.3,
                         help="um from the blocks to the macro edge, where the pins land")  # fmt: skip
     parser.add_argument("--bank-gap", type=float, default=0.3, help="um between banks")
+    parser.add_argument("--share-port-b", action="store_true",
+                        help="banks in pairs, mirrored about one two-sided port-B IO block "
+                        "(the controller built with SHARED_B)")  # fmt: skip
     parser.add_argument(
         "--margin-y",
         type=float,

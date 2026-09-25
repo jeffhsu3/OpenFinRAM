@@ -43,6 +43,8 @@ private:
     std::string generate_cell_row_8t();
     std::string generate_array_8t();
     std::string generate_colgrp_8t();
+    std::string generate_colgrp_half_8t();
+    std::string generate_colgrp_pair_8t();
     std::string generate_stacked_colgrp_8t();
 
     std::string generate_spice_content(bool single_port);

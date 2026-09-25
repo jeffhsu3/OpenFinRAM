@@ -425,6 +425,56 @@ TEST(SpiceTemplates8T, ColumnGroupBindsEveryIoColumnPinByName) {
     }
 }
 
+// --share-port-b: banks in pairs, the pair's two columns mirrored about one
+// two-sided port-B block; port B's enables one per pair, its precharges and
+// selects per bank.
+TEST(SpiceTemplates8T, SharedPortBPairsTwoHalvesAboutOneTwoSidedBlock) {
+    ScopedCurrentPath cwd(REPO_ROOT);
+    MainCliOptions config;
+    config.num_wls = 2;
+    config.num_data_bits = 4;
+    config.num_banks = 2;
+    config.share_port_b = true;
+    const std::string deck = OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    EXPECT_EQ(deck.find(".SUBCKT colgrp_sram_8t "), std::string::npos);
+
+    const std::string half = subckt_text(deck, "colgrp_half_sram_8t");
+    EXPECT_EQ(count_occurrences(half, "iocol_sram_8t_a"), 1U);
+    EXPECT_EQ(half.find("iocol_sram_8t_b"), std::string::npos);
+    EXPECT_EQ(instance_node_count(half, "X0"), named_subckt_port_count(deck, "array_sram_8t"));
+
+    const std::string pair = subckt_text(deck, "colgrp_pair_sram_8t");
+    const std::string wrapper = subckt_text(deck, "iocol_sram_8t_b2");
+    ASSERT_FALSE(wrapper.empty());
+    EXPECT_EQ(count_occurrences(pair, " colgrp_half_sram_8t"), 2U);
+    EXPECT_EQ(instance_node_count(pair, "XIO_B"), subckt_port_count(wrapper));
+    EXPECT_EQ(instance_node_count(wrapper, "X_block"), named_subckt_port_count(deck, "iocol_block_b2"));
+    for (const auto& entry : instance_bindings(pair, "XIO_B", wrapper)) {
+        EXPECT_EQ(entry.second, colgrp_net(entry.first)) << entry.first;
+    }
+    // The second half takes the second bank's wordlines, selects, controls
+    // and the block's right group.
+    EXPECT_NE(pair.find("XH1 WLA[4] WLA[5] WLA[6] WLA[7] WLB[4]"), std::string::npos);
+    EXPECT_NE(pair.find("DA QA wrenaAR wrenanAR oeb_outAR oe_outAR blprechnAR yselnA[4]"), std::string::npos);
+    EXPECT_NE(pair.find("sae_AR BL_B[4] BL_B[5] BL_B[6] BL_B[7] BLN_B[4]"), std::string::npos);
+
+    const auto stacked = subckt_body(deck, "stacked_colgrp_x4x2x2");
+    ASSERT_FALSE(stacked.empty());
+    const auto header = tokens(stacked.front());
+    auto has = [&header](const std::string& pin) {
+        return std::find(header.begin(), header.end(), pin) != header.end();
+    };
+    for (const std::string& pin : {"sae_B[0]", "wrenaB[0]", "oe_outB[0]", "blprechnB[1]", "sae_A[1]", "yselB[7]"}) {
+        EXPECT_TRUE(has(pin)) << pin;
+    }
+    for (const std::string& pin : {"sae_B[1]", "wrenaB[1]", "oe_outB[1]"}) {
+        EXPECT_FALSE(has(pin)) << pin;
+    }
+    EXPECT_EQ(subckt_instance_node_count(deck, "stacked_colgrp_x4x2x2", "X0_0"),
+              named_subckt_port_count(deck, "colgrp_pair_sram_8t"));
+    EXPECT_EQ(subckt_text(deck, "stacked_colgrp_x4x2x2").find("X1_0 "), std::string::npos);  // one pair
+}
+
 TEST(SpiceTemplates8T, GeneratedDeckOmitsRetiredReplicaSaeScaffolding) {
     const std::string generated = generated_deck_8t();
 

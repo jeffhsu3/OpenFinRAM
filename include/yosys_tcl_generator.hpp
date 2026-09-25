@@ -44,7 +44,9 @@ public:
         double abc_delay_ps,
         const std::string& platform_path,
         const std::string& tech_lib_path,
-        bool single_port = true) const;
+        bool single_port = true,
+        // Two-port only: banks share port B's IO block in pairs (SHARED_B).
+        bool shared_port_b = false) const;
 };
 
 } // namespace OpenFinRAM

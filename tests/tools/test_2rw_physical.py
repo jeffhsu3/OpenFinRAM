@@ -169,6 +169,46 @@ class PhysicalMacroTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unmapped"):
             leaf_net("typo", 0, 0, 2, 2)
 
+    def test_a_pair_tile_maps_its_second_bank_and_shares_port_b(self):
+        # NUM_WL = 4, pair tile of banks 2 and 3: the second bank's wordlines
+        # and selects continue the first's, its controls carry an R; port B's
+        # enables are the pair's, its precharges the bank's.
+        net = lambda name: leaf_net(name, 2, 3, 4, 8, shared_b=True)  # noqa: E731
+        self.assertEqual(net("WLA[9]"), "wl_A_lo[25]")  # bank 3's wordline 1
+        self.assertEqual(net("yselB[6]"), "ysel_B[14]")
+        self.assertEqual(net("wrenaAR"), "wrena_A[3]")
+        self.assertEqual(net("sae_AR"), "sae_A[3]")
+        self.assertEqual(net("sae_A"), "sae_A[2]")
+        self.assertEqual(net("blprechnB"), "blprechn_B[2]")
+        self.assertEqual(net("blprechnBR"), "blprechn_B[3]")
+        for enable in ("wrena", "wrenan", "oe_out", "oeb_out"):
+            self.assertEqual(net(f"{enable}B"), f"{enable}_B[1]")
+        self.assertEqual(net("sae_B"), "sae_B[1]")
+        self.assertEqual(net("QA"), "Q_A[3]")
+        self.assertEqual(leaf_net("sae_B", 2, 3, 4, 8), "sae_B[2]")  # not shared
+
+    def test_a_pair_tile_is_two_mirrored_halves_about_one_port_b_block(self):
+        import generate_asap7_8t_iocolumn as columns
+
+        tile = build_leaf(8, 8, bottom=True, top=False, shared_b=True)
+        half, block, second = tile.references
+        self.assertEqual((half.cell.name, second.cell.name), (half.cell.name, half.cell.name))
+        self.assertEqual(block.cell.name, "iocol_sram_8t_b2")
+        self.assertTrue(second.x_reflection)
+        x0, y0, x1, y1 = columns.boundary_box(tile)
+        hx0, hy0, hx1, hy1 = columns.boundary_box(half.cell)
+        bx0, _, bx1, _ = columns.boundary_box(block.cell)
+        self.assertAlmostEqual(x1 - x0, 2 * (hx1 - hx0) + bx1 - bx0, places=6)
+        self.assertEqual((y0, y1), (hy0, hy1))
+        labels = [label for label in tile.labels if not supply(label.text)]
+        _, pins, _, _ = abstract(tile, "pair", labels)
+        nets = {p["net"] for p in pins.values() if not p.get("private")}
+        for port in "AB":
+            self.assertTrue({f"WL{port}[{i}]" for i in range(16)} <= nets)
+        self.assertTrue({"sae_A", "sae_AR", "sae_B", "blprechnB", "blprechnBR", "yselB[7]", "DB", "QB"} <= nets)
+        # Both halves drive the bit's Q_A and take its D_A: two pins each.
+        self.assertEqual(sum(p["net"] == "QA" for p in pins.values()), 2)
+
     def test_strip_pair_pins_map_onto_the_controller_and_its_stack(self):
         # NUM_WL = 4: eight wordlines a bank, two slices; bank 1's slices
         # are sel_hi[2..3], the low two bits are shared by every slice.

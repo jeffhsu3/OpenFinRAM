@@ -646,6 +646,37 @@ the width of each port. The mux height is currently fixed at four. Wordline
 count and data width must be even and at least two; banks must be a power of
 two. Arrays are generated on demand rather than limited to tracked GDS sizes.
 
+### Banks sharing port B's IO (`--share-port-b`)
+
+With two or more banks, `--share-port-b` puts the banks in pairs and gives
+each pair's column one port-B IO block between its two arrays:
+
+    port A IO | cap | array (bank 2p) | port B IO, two-sided | array (2p+1) | cap | port A IO
+
+The second bank's half is the first's mirrored in x, so both arrays' port-B
+ends face the block. The block is chipforge_asap7's
+`IoColumnSpec(two_sided=True)`: the mux group on each face, one sense
+amplifier, write driver and output latch between them
+(`iocol_sram_8t_b2`, written with the other IO columns by
+`scripts/generate_asap7_8t_iocolumn.py`, with `colgrp_half_*`/`colgrp_pair_*`).
+Only one bank of a pair is accessed on a port in a cycle, so the controller
+(`SHARED_B`, set by the flag) drives port B's sense, write and output enables
+once per pair (`sae_B[pair]`, ...), and its precharges and column selects per
+bank, the unselected bank's group staying precharged and deselected.
+`scripts/characterize_sense_margin.py` measured what the far group and the
+wire across the block cost a read: 17-34 % of the sense split, a few ps.
+
+In the pair tile the second bank's wordlines and selects continue the first's
+indices (`WLA[rows + i]`, `yselB[4 + i]`) and its one-per-bank controls end
+in `R` (`sae_AR`, `blprechnBR`), which is what `leaf_net` maps to the
+macro's per-bank nets. Its wordline strips are the first bank's mirrored the
+same way. The deck's `stacked_colgrp` instantiates `colgrp_pair_sram_8t`
+per pair and bit (`X<pair>_<bit>`), each two `colgrp_half_sram_8t` and the
+block. `sram_x4x2x2`: 7.94 x 16.31 um against 10.46 x 16.88 um unshared
+(-27 % area); strict LVS matches, DRC finds nothing the unshared macro does
+not have (KLayout reports a cell once per orientation, so the mirrored half
+repeats the cells' known markers under `:m90`).
+
 `scripts/mapped_verilog_to_spice.py` parses the routed controller through
 Yosys and orders every instance using the actual CDL formal pins, including
 expanded one-bit buses and supply connections. Unknown cells/pins fail instead

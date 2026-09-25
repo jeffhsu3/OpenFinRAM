@@ -50,7 +50,8 @@ std::string YosysTclGenerator::generate_script(
     double abc_delay_ps,
     const std::string& platform_path,
     const std::string& tech_lib_path,
-    bool single_port) const {
+    bool single_port,
+    bool shared_port_b) const {
 
     auto libs = resolve_liberty_files(platform_path, tech_lib_path);
     std::ostringstream lib_list;
@@ -98,6 +99,7 @@ std::string YosysTclGenerator::generate_script(
             << " -set COLUMN_MUX " << column_mux
             << " -set WL_BUF " << num_wl_buf
             << " -set SAE_BUF " << num_sae_buf
+            << (shared_port_b ? " -set SHARED_B 1" : "")
             << " ctrl_decode\n";
     }
     oss << "hierarchy -check -top ctrl_decode\n";

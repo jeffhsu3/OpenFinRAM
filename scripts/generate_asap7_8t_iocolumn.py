@@ -135,42 +135,52 @@ BLOCK_PIN = {
 
 
 def iocol_pin_name(block_pin: str, port: str) -> str:
-    """The IO column's name for a block pin: ``BL[2]`` -> ``BL_A[2]``, ``PRECHN`` -> ``blprechn_A``."""
-    match = re.fullmatch(r"(BL|BLN|YSEL|YSELN)\[(\d+)\]", block_pin)
+    """The IO column's name for a block pin: ``BL[2]`` -> ``BL_A[2]``, ``PRECHN`` -> ``blprechn_A``.
+
+    A two-sided block's second group (``_R``) serves the second bank of the
+    pair: its bitlines and selects continue the first group's indices
+    (``BL_R[2]`` -> ``BL_B[6]``), its precharge is ``blprechn_BR``.
+    """
+    match = re.fullmatch(r"(BL|BLN|YSEL|YSELN)(_R)?\[(\d+)\]", block_pin)
     if match:
         bus = match.group(1)
         bus = bus if bus.startswith("BL") else bus.lower()
-        return f"{bus}_{port}[{match.group(2)}]"
+        return f"{bus}_{port}[{int(match.group(3)) + (MUX_ROWS if match.group(2) else 0)}]"
     if block_pin in ("VDD", "VSS"):
         return block_pin
+    if block_pin == "PRECHN_R":
+        return f"blprechn_{port}R"
     return BLOCK_PIN[block_pin].format(p=port, P=port)
 
 
-def iocol_pins(port: str) -> list[str]:
-    """Pin order of ``iocol_sram_8t_{a,b}``, as SpiceGenerator instantiates it."""
+def iocol_pins(port: str, two_sided: bool = False) -> list[str]:
+    """Pin order of ``iocol_sram_8t_{a,b,b2}``, as SpiceGenerator instantiates it."""
+    leaves = 2 * MUX_ROWS if two_sided else MUX_ROWS
     return [
-        *(f"BL_{port}[{i}]" for i in range(MUX_ROWS)),
-        *(f"BLN_{port}[{i}]" for i in range(MUX_ROWS)),
-        *(f"ysel_{port}[{i}]" for i in range(MUX_ROWS)),
-        *(f"yseln_{port}[{i}]" for i in range(MUX_ROWS)),
-        f"blprechn_{port}", f"sae_{port}", f"wrena_{port}", f"wrenan_{port}",
+        *(f"BL_{port}[{i}]" for i in range(leaves)),
+        *(f"BLN_{port}[{i}]" for i in range(leaves)),
+        *(f"ysel_{port}[{i}]" for i in range(leaves)),
+        *(f"yseln_{port}[{i}]" for i in range(leaves)),
+        f"blprechn_{port}", *([f"blprechn_{port}R"] if two_sided else []),
+        f"sae_{port}", f"wrena_{port}", f"wrenan_{port}",
         f"oe_out_{port}", f"oeb_out_{port}", f"D{port}", f"Q{port}", "VDD", "VSS",
     ]
 
 
 def colgrp_control_name(name: str) -> str:
     match = re.fullmatch(
-        r"(wrena|wrenan|oeb_out|oe_out|blprechn)_([AB])", name
+        r"(wrena|wrenan|oeb_out|oe_out|blprechn)_([AB]R?)", name
     )
     if match:
         return f"{match.group(1)}{match.group(2)}"
-    match = re.fullmatch(r"(yseln|ysel)_([AB])\[([0-3])\]", name)
+    match = re.fullmatch(r"(yseln|ysel)_([AB])\[(\d+)\]", name)
     if match:
         return f"{match.group(1)}{match.group(2)}[{match.group(3)}]"
     return name
 
 
 def port_io_name(port: str) -> str:
+    """``A``, ``B``, or ``B2``: port B's two-sided block, shared by a pair of banks."""
     return f"iocol_sram_8t_{port.lower()}"
 
 
@@ -219,6 +229,9 @@ def io_block_specs(bitcell: gdstk.Cell) -> dict[str, IoColumnSpec]:
         if abs(mux.height / 1000 - (y1 - y0)) > 1e-6:
             raise RuntimeError("the block's two rows do not add up to the bitcell's row")
         specs[port] = IoColumnSpec(mux=mux, one_sense_phase=True)
+    # Port B's block for a pair of banks mirrored about it: one amplifier,
+    # driver and latch between the two arrays' port-B ends.
+    specs["B2"] = IoColumnSpec(mux=specs["B"].mux, one_sense_phase=True, two_sided=True)
     return specs
 
 
@@ -242,8 +255,8 @@ def build_io_blocks(specs: dict[str, IoColumnSpec]) -> tuple[dict[str, gdstk.Cel
         netlists.append(block_netlist(spec, name=block).replace(".END\n", ""))
         pins = io_column_pins(spec)
         netlists.append(
-            f".SUBCKT {port_io_name(port)} {' '.join(iocol_pins(port))}\n"
-            f"X_block {' '.join(iocol_pin_name(pin, port) for pin in pins)} {block}\n"
+            f".SUBCKT {port_io_name(port)} {' '.join(iocol_pins(port[0], spec.two_sided))}\n"
+            f"X_block {' '.join(iocol_pin_name(pin, port[0]) for pin in pins)} {block}\n"
             f".ENDS {port_io_name(port)}\n"
         )
     return {port: cells[name] for port, name in names.items()}, "\n".join(netlists) + ".END\n"
@@ -260,11 +273,13 @@ def build_port_io(
     fins are on the array's; its landings then meet each row's bitline bar,
     which overhangs the array's edge into them.  The cell's boundary is the
     column's, which the block overhangs by that offset at the top.
+
+    ``B2``, the two-sided port-B block, stands between two arrays, its
+    second group's bitlines entering from its right face.
     """
     width, height = spec.width / 1000, spec.height / 1000
     offset = spec.mux.grid_offset / 1000
     mirrored = port == "A"
-    edge_x = width if mirrored else 0.0
 
     cell = library.new_cell(port_io_name(port))
     if mirrored:
@@ -281,11 +296,12 @@ def build_port_io(
         base = pin.split(".")[0]
         gds_layer = {"M1": M1, "M2": M2, "M3": M3, "M4": M4}[metal]
         px, py = placed(x, y)
-        if base in ("BL", "BLN") or re.fullmatch(r"BLN?\[\d+\]", base):
-            cell.add(gdstk.Label(iocol_pin_name(base, port), (edge_x + (-0.006 if mirrored else 0.006), py),
-                                 layer=gds_layer, texttype=PIN_TEXTTYPE))
+        name = iocol_pin_name(base, port[0])
+        if re.fullmatch(r"BLN?(_R)?\[\d+\]", base):
+            face = width - 0.006 if mirrored or "_R" in base else 0.006
+            cell.add(gdstk.Label(name, (face, py), layer=gds_layer, texttype=PIN_TEXTTYPE))
         else:
-            cell.add(gdstk.Label(iocol_pin_name(base, port), (px, py), layer=gds_layer, texttype=PIN_TEXTTYPE))
+            cell.add(gdstk.Label(name, (px, py), layer=gds_layer, texttype=PIN_TEXTTYPE))
 
     rect(cell, (0.0, 0.0, width, height), BOUNDARY)
     return cell
@@ -311,15 +327,16 @@ def build_cap_array(library: gdstk.Library, edges: dict[str, gdstk.Cell],
     return cell
 
 
-def colgrp_name(wordlines: int) -> str:
-    return f"colgrp_x{wordlines}x4_sram_8t"
+def colgrp_name(wordlines: int, kind: str = "") -> str:
+    """``colgrp_x{N}x4_sram_8t``; `kind` ``half`` or ``pair`` for the shared-port-B tiles."""
+    return f"colgrp{'_' + kind if kind else ''}_x{wordlines}x4_sram_8t"
 
 
 def build_colgrp(
     library: gdstk.Library,
     array: gdstk.Cell,
     io_a: gdstk.Cell,
-    io_b: gdstk.Cell,
+    io_b: gdstk.Cell | None,
     cap_array: gdstk.Cell,
     wordlines: int,
 ) -> gdstk.Cell:
@@ -330,10 +347,14 @@ def build_colgrp(
     no metal, so port A's M2 bitlines are strapped across the filler.  The far
     end needs no cap: a tapped array ends in a tap there, which is what an IO
     face has always met.
+
+    Without `io_b` it is the half of a pair (`build_colgrp_pair`): the
+    array's port-B bitlines end at its right edge, labelled ``BL_B``/``BLN_B``
+    where the shared block's landings meet them.
     """
     arx0, ary0, arx1, ary1 = boundary_box(array)
     ax0, ay0, ax1, ay1 = boundary_box(io_a)
-    bx0, by0, bx1, by1 = boundary_box(io_b)
+    bx0, by0, bx1, by1 = boundary_box(io_b) if io_b is not None else (0.0, ary0, 0.0, ary1)
     cpx0, cpy0, cpx1, cpy1 = boundary_box(cap_array)
     array_width, array_height = arx1 - arx0, ary1 - ary0
     cap_width = cpx1 - cpx0
@@ -346,11 +367,12 @@ def build_colgrp(
     array_x = cap_x + cap_width
     io_b_x = array_x + array_width
     total_width = io_b_x + (bx1 - bx0)
-    cell = library.new_cell(colgrp_name(wordlines))
+    cell = library.new_cell(colgrp_name(wordlines, "" if io_b is not None else "half"))
     cell.add(gdstk.Reference(io_a, origin=(-ax0, -ay0)))
     cell.add(gdstk.Reference(cap_array, origin=(cap_x - cpx0, -cpy0)))
     cell.add(gdstk.Reference(array, origin=(array_x - arx0, -ary0)))
-    cell.add(gdstk.Reference(io_b, origin=(io_b_x - bx0, -by0)))
+    if io_b is not None:
+        cell.add(gdstk.Reference(io_b, origin=(io_b_x - bx0, -by0)))
 
     for source, layer in (("WLA", M3), ("WLB", M5)):
         for index, label in indexed_labels(array, source).items():
@@ -373,6 +395,12 @@ def build_colgrp(
     }
     for source, (io_prefix, io_cell, layer) in bitline_map.items():
         array_labels = indexed_labels(array, source)
+        if io_cell is None:
+            for index, array_label in array_labels.items():
+                y = float(array_label.origin[1]) - ary0
+                cell.add(gdstk.Label(f"{io_prefix}[{index}]", (io_b_x - 0.006, y), layer=layer,
+                                     texttype=PIN_TEXTTYPE))
+            continue
         io_labels = indexed_labels(io_cell, io_prefix)
         if set(array_labels) != set(io_labels):
             raise RuntimeError(f"{cell.name}: incomplete {source} interface")
@@ -391,15 +419,80 @@ def build_colgrp(
                 rect(cell, (cap_x - 0.018, io_y - half, cap_metal_x + 0.018, io_y + half), layer)
 
     for io_cell, io_x, (ox, oy) in ((io_a, 0.0, (ax0, ay0)), (io_b, io_b_x, (bx0, by0))):
+        if io_cell is None:
+            continue
         for label in io_cell.labels:
             if label.text.startswith(("BL_", "BLN_")):
                 continue
-            if label.text in {"VDD", "VSS"} and label.layer == M1 and io_cell is io_a:
+            if label.text in {"VDD", "VSS"} and label.layer == M1 and io_cell is io_a and io_b is not None:
                 continue  # one rail label per supply is enough; port B's are kept
             point = (io_x + float(label.origin[0]) - ox, float(label.origin[1]) - oy)
             cell.add(clone_label(label, colgrp_control_name(label.text), point))
 
     rect(cell, (0.0, 0.0, total_width, array_height), BOUNDARY)
+    return cell
+
+
+#: The second bank's name for a column pin in a pair tile: wordlines and
+#: selects continue the first bank's indices, one-per-bank controls take an R.
+def second_bank_name(name: str, wordlines: int) -> str:
+    match = re.fullmatch(r"(WLA|WLB)\[(\d+)\]", name)
+    if match:
+        return f"{match.group(1)}[{int(match.group(2)) + wordlines}]"
+    match = re.fullmatch(r"(yseln|ysel)A\[(\d+)\]", name)
+    if match:
+        return f"{match.group(1)}A[{int(match.group(2)) + MUX_ROWS}]"
+    if re.fullmatch(r"(wrena|wrenan|oeb_out|oe_out|blprechn)A|sae_A", name):
+        return name + "R"
+    return name  # DA, QA (the bit's, whichever bank), supplies
+
+
+def build_colgrp_pair(
+    library: gdstk.Library, half: gdstk.Cell, io_b2: gdstk.Cell, wordlines: int, name: str | None = None
+) -> gdstk.Cell:
+    """``half | iocol B2 | half mirrored``: two banks' columns sharing port B's block.
+
+    The second half is the first mirrored in x, so both arrays' port-B ends
+    face the block, the first's on its left group, the second's on its right.
+    `half` is `build_colgrp`'s half or anything built on it (with dummy rows),
+    its boundary the column's; its top-level labels are the pair's first
+    bank's, and the second bank's are renamed by `second_bank_name`.
+    """
+    hx0, hy0, hx1, hy1 = boundary_box(half)
+    bx0, by0, bx1, by1 = boundary_box(io_b2)
+    half_width, block_width = hx1 - hx0, bx1 - bx0
+    if abs(hx0) > 1e-9:
+        raise RuntimeError(f"{half.name}: a half starts at x = 0")
+    total_width = 2 * half_width + block_width
+    cell = library.new_cell(name or colgrp_name(wordlines, "pair"))
+    cell.add(gdstk.Reference(half))
+    cell.add(gdstk.Reference(io_b2, origin=(half_width - bx0, -by0)))
+    # A reflection in y then a half turn is a mirror in x: x -> total - x.
+    cell.add(gdstk.Reference(half, origin=(total_width, 0.0), rotation=math.pi, x_reflection=True))
+
+    # Both arrays' port-B bitlines meet the block's landings.
+    for prefix in ("BL_B", "BLN_B"):
+        ends = indexed_labels(half, prefix)
+        block = indexed_labels(io_b2, prefix)
+        if set(block) != set(range(2 * MUX_ROWS)) or set(ends) != set(range(MUX_ROWS)):
+            raise RuntimeError(f"{cell.name}: incomplete {prefix} interface")
+        for index, end in ends.items():
+            for leaf in (index, index + MUX_ROWS):
+                if abs(float(block[leaf].origin[1]) - by0 - float(end.origin[1])) > 0.012 + 1e-6:
+                    raise RuntimeError(f"{cell.name}: {block[leaf].text} does not align to {end.text}")
+
+    for label in half.labels:
+        if label.text.startswith(("BL_", "BLN_")):
+            continue
+        x, y = map(float, label.origin)
+        cell.add(clone_label(label, label.text, (x, y)))
+        cell.add(clone_label(label, second_bank_name(label.text, wordlines), (total_width - x, y)))
+    for label in io_b2.labels:
+        if label.text.startswith(("BL_", "BLN_")):
+            continue
+        point = (half_width + float(label.origin[0]) - bx0, float(label.origin[1]) - by0)
+        cell.add(clone_label(label, colgrp_control_name(label.text), point))
+    rect(cell, (0.0, hy0, total_width, hy1), BOUNDARY)
     return cell
 
 
@@ -450,9 +543,12 @@ def build_library(
                 library.add(dep)
     io_a = build_port_io(library, "A", blocks["A"], specs["A"])
     io_b = build_port_io(library, "B", blocks["B"], specs["B"])
+    io_b2 = build_port_io(library, "B2", blocks["B2"], specs["B2"])
     cap_array = build_cap_array(library, edges)
     for count in wordline_counts:
         build_colgrp(library, selected_arrays[count], io_a, io_b, cap_array, count)
+        half = build_colgrp(library, selected_arrays[count], io_a, None, cap_array, count)
+        build_colgrp_pair(library, half, io_b2, count)
     return library, netlist
 
 
@@ -469,14 +565,14 @@ def verify_gds(path: Path, wordline_counts: list[int], spice: Path | None = None
     specs = io_block_specs(bitcell)
     expected = {
         "sram_cell_8t", "FILLER_BLANK_8t", "FILLER_cgedge_8t",
-        port_io_name("A"), port_io_name("B"), "col_cap_x4_sram_8t",
+        port_io_name("A"), port_io_name("B"), port_io_name("B2"), "col_cap_x4_sram_8t",
     }
     expected.update(topbot_name(False, my) for my in (False, True))
     for count in wordline_counts:
         expected.update({
             f"sramcol_x{count}_sram_8t",
             f"array_x{count}x4_sram_8t",
-            colgrp_name(count),
+            colgrp_name(count), colgrp_name(count, "half"), colgrp_name(count, "pair"),
         })
     blocks = {spec.cell_name for spec in specs.values()}
     block_cells = {name for name in cells if name.startswith(("iocol_x", "blmux_", "sarow_", "wrdrv_", "outlatch_", "filler_fin", "tap_fin"))}
@@ -533,8 +629,29 @@ def verify_gds(path: Path, wordline_counts: list[int], spice: Path | None = None
         if any(n == "VDD" and label.layer != M1 for n, label in zip(names, io.labels)):
             raise RuntimeError(f"{io.name}: a supply label is not on an M1 rail")
 
+    # Port B's shared block: the one-sided block's group and a mirrored copy,
+    # entering from both faces at the same heights.
+    io_b2 = cells[port_io_name("B2")]
+    b2_box = boundary_box(io_b2)
+    assert_close(b2_box[2] - b2_box[0], specs["B2"].width / 1000, f"{io_b2.name} width")
+    for prefix in ("BL_B", "BLN_B"):
+        labels = indexed_labels(io_b2, prefix)
+        if set(labels) != set(range(2 * MUX_ROWS)):
+            raise RuntimeError(f"{io_b2.name}: incomplete {prefix} bus")
+        for index in range(MUX_ROWS):
+            left, right = labels[index], labels[index + MUX_ROWS]
+            assert_close(float(left.origin[0]), b2_box[0] + 0.006, f"{left.text} at the left face")
+            assert_close(float(right.origin[0]), b2_box[2] - 0.006, f"{right.text} at the right face")
+            assert_close(float(right.origin[1]), float(left.origin[1]), f"{right.text} height")
+    required = set(iocol_pins("B", two_sided=True))
+    if not required <= {label.text for label in io_b2.labels}:
+        raise RuntimeError(f"{io_b2.name}: missing IO pins {sorted(required - {l.text for l in io_b2.labels})}")
+
     if spice is not None:
         text = spice.read_text()
+        header = f".SUBCKT {port_io_name('B2')} {' '.join(iocol_pins('B', two_sided=True))}"
+        if header not in text or ".SUBCKT iocol_block_b2 " not in text:
+            raise RuntimeError(f"{spice}: {port_io_name('B2')} is missing or its pins are not {header}")
         for port in ("A", "B"):
             header = f".SUBCKT {port_io_name(port)} {' '.join(iocol_pins(port))}"
             if header not in text:
@@ -601,6 +718,34 @@ def verify_gds(path: Path, wordline_counts: list[int], spice: Path | None = None
                            if re.match(r"(WLT|WLBA|WLBB|yselt|yselb|blprecht|blprechb)", name))
         if split_era:
             raise RuntimeError(f"{colgrp.name}: split-era pins remain: {split_era}")
+
+        # The pair: a half, the shared block, the half mirrored; the second
+        # bank's wordlines and selects continuing the first's.
+        half, pair = cells[colgrp_name(count, "half")], cells[colgrp_name(count, "pair")]
+        half_box, pair_box = boundary_box(half), boundary_box(pair)
+        assert_close(half_box[2] - half_box[0], expected_width - (io_boxes["B"][2] - io_boxes["B"][0]),
+                     f"{half.name}: width")  # fmt: skip
+        assert_close(pair_box[2] - pair_box[0], 2 * (half_box[2] - half_box[0]) + b2_box[2] - b2_box[0],
+                     f"{pair.name}: width")  # fmt: skip
+        if [ref.cell_name for ref in pair.references] != [half.name, io_b2.name, half.name]:
+            raise RuntimeError(f"{pair.name}: expected half / iocol B2 / half")
+        if not pair.references[2].x_reflection:
+            raise RuntimeError(f"{pair.name}: the second half is mirrored")
+        for prefix, layer in (("WLA", M3), ("WLB", M5)):
+            if set(indexed_labels(pair, prefix)) != set(range(2 * count)):
+                raise RuntimeError(f"{pair.name}: incomplete {prefix} bus")
+        pair_names = {label.text for label in pair.labels}
+        required_pair = {
+            "DA", "QA", "DB", "QB", "wrenaB", "wrenanB", "oeb_outB", "oe_outB", "sae_B",
+            "blprechnB", "blprechnBR", "VDD", "VSS",
+        }
+        for suffix in ("", "R"):
+            required_pair.update(f"{c}A{suffix}" for c in ("wrena", "wrenan", "oeb_out", "oe_out", "blprechn"))
+            required_pair.add(f"sae_A{suffix}")
+        required_pair.update(f"{prefix}{port}[{index}]" for prefix in ("yseln", "ysel")
+                             for port in "AB" for index in range(2 * MUX_ROWS))  # fmt: skip
+        if not required_pair <= pair_names:
+            raise RuntimeError(f"{pair.name}: missing pins {sorted(required_pair - pair_names)}")
 
     digests: dict[str, str] = {}
     for name in sorted(cells):

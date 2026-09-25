@@ -3551,6 +3551,7 @@ bool LayoutGenerator::create_dual_port_macro() {
         << " --wordlines " << cli_options_.num_wls
         << " --bits " << cli_options_.num_data_bits
         << " --banks " << cli_options_.num_banks
+        << (cli_options_.share_port_b ? " --share-port-b" : "")
         << " --controller " << quote(controller)
         << " --work " << quote(work)
         << " --output " << quote(output)

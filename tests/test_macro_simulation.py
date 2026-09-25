@@ -93,6 +93,14 @@ def test_the_bank_is_the_address_bits_above_the_half():
     assert any(g.bank(op.address) == 1 for ops in program for op in ops if op.kind == "R")
 
 
+def test_a_shared_port_b_enable_serves_a_pair_of_banks():
+    g = sm.Geometry(wordlines=2, mux=4, bits=2, banks=4, shared_b=True)
+    assert [g.io("B", bank) for bank in range(4)] == [0, 0, 1, 1]
+    assert [g.io("A", bank) for bank in range(4)] == [0, 1, 2, 3]
+    assert (g.ios("A"), g.ios("B")) == (4, 2)
+    assert sm.Geometry(2, 4, 2, banks=4).ios("B") == 4
+
+
 @pytest.mark.parametrize("g", [sm.Geometry(2, 4, 2), sm.Geometry(2, 4, 4), sm.Geometry(32, 4, 16)])
 def test_no_read_in_the_program_can_pass_by_standing_still(g):
     """A port's output latch shows the last word it read; every read must differ from it."""

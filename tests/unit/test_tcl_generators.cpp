@@ -124,6 +124,19 @@ TEST(YosysTclGeneratorGoldenTest, GenerateScriptMatchesGolden) {
     expect_matches_golden("yosys_synth_ref.ys", script);
 }
 
+TEST(YosysTclGeneratorTest, DualPortSharesPortBIoOnlyWhenAsked) {
+    YosysTclGenerator gen;
+    auto script = [&](bool shared) {
+        return gen.generate_script(
+            std::string(REPO_ROOT) + "/tech/verilog_dp", "tmp/syn_dp_fixed",
+            "ADDR_WIDTH=7,NUM_WL=8,NUM_BANK=2,COLUMN_MUX=4,WL_BUF=3,SAE_BUF=2",
+            7, 8, 2, 4, 3, 2, 24.5, 2500.0, "", std::string(REPO_ROOT) + "/tech/lib",
+            /*single_port=*/false, /*shared_port_b=*/shared);
+    };
+    EXPECT_NE(script(true).find("-set SAE_BUF 2 -set SHARED_B 1 ctrl_decode"), std::string::npos);
+    EXPECT_EQ(script(false).find("SHARED_B"), std::string::npos);
+}
+
 TEST(YosysTclGeneratorTest, DualPortChecksAndNamesExactPhysicalStructure) {
     YosysTclGenerator gen;
     const std::string script = gen.generate_script(

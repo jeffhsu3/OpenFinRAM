@@ -4,7 +4,8 @@ set -u
 cd "$(dirname "$0")/.."
 
 SRC="tests/prim_models.v tests/tb_ctrl_decode_dp.sv tech/verilog_dp/sram_control.v tech/verilog_dp/delay_cell.v tech/verilog_dp/row_decoder.v"
-CONFIGS=("2 1 2" "8 2 4" "16 4 4")
+# NUM_WL BANKS MUX SHARED_B: the last two share port B's IO in bank pairs.
+CONFIGS=("2 1 2 0" "8 2 4 0" "16 4 4 0" "8 2 4 1" "16 4 4 1")
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -15,17 +16,18 @@ for cfg in "${CONFIGS[@]}"; do
             -Ptb_ctrl_decode_dp.NUM_WL="$1" \
             -Ptb_ctrl_decode_dp.NUM_BANK="$2" \
             -Ptb_ctrl_decode_dp.COLUMN_MUX="$3" \
+            -Ptb_ctrl_decode_dp.SHARED_B="$4" \
             -o "$work/tb_ctrl_decode_dp" $SRC >"$work/compile.log" 2>&1; then
-        printf "NUM_WL=%-3s BANKS=%-2s MUX=%-2s: COMPILE ERROR\n" "$1" "$2" "$3"
+        printf "NUM_WL=%-3s BANKS=%-2s MUX=%-2s SHARED_B=%s: COMPILE ERROR\n" "$1" "$2" "$3" "$4"
         cat "$work/compile.log"
         fail=1
         continue
     fi
     result="$(vvp "$work/tb_ctrl_decode_dp" 2>&1)"
     if grep -q '^PASS' <<<"$result"; then
-        printf "NUM_WL=%-3s BANKS=%-2s MUX=%-2s: %s\n" "$1" "$2" "$3" "$(grep '^PASS' <<<"$result")"
+        printf "NUM_WL=%-3s BANKS=%-2s MUX=%-2s SHARED_B=%s: %s\n" "$1" "$2" "$3" "$4" "$(grep '^PASS' <<<"$result")"
     else
-        printf "NUM_WL=%-3s BANKS=%-2s MUX=%-2s: FAIL\n" "$1" "$2" "$3"
+        printf "NUM_WL=%-3s BANKS=%-2s MUX=%-2s SHARED_B=%s: FAIL\n" "$1" "$2" "$3" "$4"
         grep -E '^FAIL|^FATAL' <<<"$result" | head
         fail=1
     fi

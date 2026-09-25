@@ -190,6 +190,15 @@ class Geometry:
     mux: int
     bits: int
     banks: int = 1
+    #: Banks in pairs share port B's IO: its sense and write enables are one per pair.
+    shared_b: bool = False
+
+    def io(self, port: str, bank: int) -> int:
+        """Index of the sense/write enable serving `bank` on `port`."""
+        return bank // 2 if self.shared_b and port == "B" else bank
+
+    def ios(self, port: str) -> int:
+        return self.banks // 2 if self.shared_b and port == "B" else self.banks
 
     @property
     def bank_shift(self) -> int:
@@ -438,8 +447,8 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
     watched = ["clk", *outputs]
     watched += [f"Xdut:wl_{port}_{stack}[{index}]" for port in "ab" for stack in STACKS
                 for index in range(2 * g.wordlines * g.banks)]  # fmt: skip
-    watched += [f"Xdut:{net}_{port}[{bank}]" for net in ("sae", "wrena") for port in "AB"
-                for bank in range(g.banks)]  # fmt: skip
+    watched += [f"Xdut:{net}_{port}[{io}]" for net in ("sae", "wrena") for port in "AB"
+                for io in range(g.ios(port))]  # fmt: skip
     watched += [f"Xdut:{cell['path']}:Q" for cell in cells]
     watched += [f"Xdut:{node}" for node in probes]
     lines += [
@@ -532,19 +541,18 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
         rise = first + cycle * period
         sample = rise + 0.45 * period
         for port, op in zip("AB", ops):
-            for bank in range(
-                g.banks
-            ):  # write enable only for a write, and only its bank's
-                if op.kind == "W" and bank == g.bank(op.address):
+            # Write enable only for a write, and only its bank's (its pair's, shared).
+            for io in range(g.ios(port)):
+                if op.kind == "W" and io == g.io(port, g.bank(op.address)):
                     continue
                 lifted = peak(
-                    f"V(XDUT:WRENA_{port}[{bank}])",
+                    f"V(XDUT:WRENA_{port}[{io}])",
                     rise - period / 4,
                     rise + period / 2,
                 )
                 if lifted > 0.3 * vdd:
                     hazards.append({"cycle": cycle, "port": port, "volts": round(lifted, 3),
-                                    "what": f"write enable of bank {bank} in a cycle that does not write it"})  # fmt: skip
+                                    "what": f"write enable {io} in a cycle that does not write it"})  # fmt: skip
             if op.kind == "-":
                 continue
             selected = g.wordline(op.address)
@@ -576,7 +584,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             ]
             clean = all(v < 0.2 * vdd or v > 0.8 * vdd for v in volts)
             got = [int(v > vdd / 2) for v in volts]
-            sensed = after_clock(f"V(XDUT:SAE_{port}[{g.bank(op.address)}])", rise)
+            sensed = after_clock(f"V(XDUT:SAE_{port}[{g.io(port, g.bank(op.address))}])", rise)
             arrivals = [
                 after_clock(f"V(Q_{port}[{bit}])", rise, last=True)
                 for bit in range(g.bits)
@@ -646,7 +654,7 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     top = described["cell"]
     g = Geometry(
         wordlines=described["wordlines_per_half"], mux=4, bits=described["bits"],
-        banks=described.get("banks", 1),
+        banks=described.get("banks", 1), shared_b=described.get("shared_port_b", False),
     )  # fmt: skip
     source = (netlist or result_dir / f"{top}.sp").read_text()
     subckts = parse_subckts(source)

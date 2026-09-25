@@ -26,6 +26,13 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .default_value(false)
         .implicit_value(true);
 
+    program.add_argument("--share-port-b")
+        .help("Two-port: banks in pairs share port B's sense amplifier, write driver "
+              "and output latch, the pair's arrays mirrored about one two-sided IO block. "
+              "Needs an even number of banks.")
+        .default_value(false)
+        .implicit_value(true);
+
     program.add_argument("--skip-characterization")
         .help("Skip SiliconSmart and emit an explicitly estimated early-PPA Liberty model.")
         .default_value(false)
@@ -111,6 +118,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.num_data_bits         = program.get<unsigned>("--num-data-bits");
     options.num_banks             = program.get<unsigned>("--num-banks");
     options.single_port           = program.get<bool>("--single-port");
+    options.share_port_b          = program.get<bool>("--share-port-b");
     options.skip_characterization = program.get<bool>("--skip-characterization");
     options.num_wl_buf            = program.get<unsigned>("--num-wl-buf");
     options.num_sae_buf           = program.get<unsigned>("--num-sae-buf");
@@ -156,6 +164,10 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     }
     if ((options.num_banks & (options.num_banks - 1)) != 0) {
         LOGE << "Error: --num-banks must be a power of 2.";
+        std::exit(1);
+    }
+    if (options.share_port_b && (options.single_port || options.num_banks < 2)) {
+        LOGE << "Error: --share-port-b needs the two-port macro and at least two banks.";
         std::exit(1);
     }
 

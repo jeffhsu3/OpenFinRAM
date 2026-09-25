@@ -96,7 +96,8 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Pat
     text = netlist.read_text()
     source = gdstk.read_gds(str(gds))
     top = next(c for c in source.cells if c.name == cell)
-    xs = sorted({round(float(r.origin[0]), 3) for r in top.references if r.cell.name.startswith("dp_column")})
+    # A pair of banks sharing port B's IO is one tile (dp_colpair), X<pair>_<bit>.
+    xs = sorted({round(float(r.origin[0]), 3) for r in top.references if r.cell.name.startswith("dp_col")})
     views = []
     for bank, x_bank in enumerate(xs):
         view = out / f"bank{bank}"
@@ -104,7 +105,7 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Pat
         library = gdstk.read_gds(str(gds))
         view_top = next(c for c in library.cells if c.name == cell)
         view_top.remove(*[r for r in view_top.references
-                          if r.cell.name.startswith("dp_column") and round(float(r.origin[0]), 3) != x_bank])  # fmt: skip
+                          if r.cell.name.startswith("dp_col") and round(float(r.origin[0]), 3) != x_bank])  # fmt: skip
         library.write_gds(str(view / gds.name))
         # The column groups are X<bank>_<bit> in the stacked column group.
         kept = [line for line in text.splitlines() if not re.match(rf"X(?!{bank}_)\d+_\d+ ", line)]
@@ -139,22 +140,24 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
             raise FileNotFoundError(f"{path} is missing; is {result_dir} a compiler result?")
 
     started = time.time()
-    views = bank_views(gds, netlist, cell, out / "banks") if banks > 1 else [(gds, netlist)]
+    shared = described and json.loads(described[0].read_text()).get("shared_port_b", False)
+    units = banks // 2 if shared else banks
+    views = bank_views(gds, netlist, cell, out / "banks") if units > 1 else [(gds, netlist)]
     strict, relaxed = [], []
     for index, (view_gds, view_netlist) in enumerate(views):
-        tag = f"bank{index}/" if banks > 1 else ""
+        tag = f"bank{index}/" if units > 1 else ""
         result = run_hierarchical_lvs(view_gds, view_netlist, out / f"{tag}lvs", cell_name=cell, flatten_circuits=BITCELLS)
         strict.append(_lvs_findings(result))
-        print(("" if banks == 1 else f"== bank {index}\n") + result.describe())
+        print(("" if units == 1 else f"== bank {index}\n") + result.describe())
         if not result.matched:
             result = run_hierarchical_lvs(view_gds, view_netlist, out / f"{tag}lvs_diagnostic", cell_name=cell,
                                           flatten_circuits=BITCELLS, double_implant_is_tap=False)  # fmt: skip
             relaxed.append(_lvs_findings(result))
             print("\n-- again, with ACTIVE under both implants not acting as a tap:")
             print(result.describe())
-    verdict = {"cell": cell, "gds": str(gds), "lvs": strict[0] if banks == 1 else _merge_findings(strict)}
+    verdict = {"cell": cell, "gds": str(gds), "lvs": strict[0] if units == 1 else _merge_findings(strict)}
     if relaxed:
-        verdict["lvs_without_double_implant_taps"] = relaxed[0] if banks == 1 else _merge_findings(relaxed)
+        verdict["lvs_without_double_implant_taps"] = relaxed[0] if units == 1 else _merge_findings(relaxed)
     if drc:
         counts = drc_counts(run_drc(gds, out / "drc", cell_name=cell, timeout=7200))
         verdict["drc"] = {"markers": sum(counts.values()), "rules": dict(sorted(counts.items()))}

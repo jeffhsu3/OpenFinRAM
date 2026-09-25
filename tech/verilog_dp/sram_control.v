@@ -12,6 +12,13 @@
 // bank, the one-hot of its high bits gated by the wordline phase (sel_hi):
 // wordline w = {bank_sel, row}, w[1:0] picks within a slice, w[WL_BITS-1:2]
 // the slice.
+//
+// SHARED_B: banks 2k and 2k+1 are mirrored so their port-B ends face each
+// other and share one IO block per bit (chipforge_asap7's two-sided
+// IoColumnSpec).  Port B's precharge and column selects stay per bank, one
+// set for each side of the block; its sense enable, write enable and output
+// enable become one per bank pair (B_IO of them), firing for whichever bank
+// of the pair the address picks.  Port A is unchanged.
 module ctrl_decode #(
     parameter ADDR_WIDTH = 5,
     parameter NUM_WL     = 2,
@@ -19,7 +26,9 @@ module ctrl_decode #(
     parameter COLUMN_MUX = 4,
     parameter WL_BUF     = 5,
     parameter SAE_BUF    = 15,
-    parameter SLICES     = (2 * NUM_WL) / 4   // four wordlines per driver slice; not to be overridden
+    parameter SLICES     = (2 * NUM_WL) / 4,  // four wordlines per driver slice; not to be overridden
+    parameter SHARED_B   = 0,
+    parameter B_IO       = (SHARED_B != 0) ? NUM_BANK / 2 : NUM_BANK  // port-B IO blocks; not to be overridden
 )(
     input  logic                  clk,
     input  logic                  rst_n,
@@ -48,11 +57,11 @@ module ctrl_decode #(
     output logic [NUM_BANK-1:0]                 blprechn_B,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] ysel_B,
     output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseln_B,
-    output logic [NUM_BANK-1:0]                 wrena_B,
-    output logic [NUM_BANK-1:0]                 wrenan_B,
-    output logic [NUM_BANK-1:0]                 oeb_out_B,
-    output logic [NUM_BANK-1:0]                 oe_out_B,
-    output logic [NUM_BANK-1:0]                 sae_B
+    output logic [B_IO-1:0]                     wrena_B,
+    output logic [B_IO-1:0]                     wrenan_B,
+    output logic [B_IO-1:0]                     oeb_out_B,
+    output logic [B_IO-1:0]                     oe_out_B,
+    output logic [B_IO-1:0]                     sae_B
 );
 
     function integer clog2;
@@ -112,6 +121,12 @@ module ctrl_decode #(
 
     wire read_req_A  = (state_A == READ)  && !ce_n_A;
     wire write_req_A = (state_A == WRITE) && !ce_n_A;
+    if (SHARED_B != 0 && (NUM_BANK < 2 || NUM_BANK % 2 != 0)) begin : g_bad_shared_b
+        invalid_shared_port_b_needs_bank_pairs u_invalid ();   // two banks to a block
+    end
+    // The port-B IO block the addressed bank reads and writes through.
+    wire [SLICE_BITS-1:0] io_sel_r_B = (SHARED_B != 0) ? (slice_sel_r_B >> 1) : slice_sel_r_B;
+
     wire read_req_B  = (state_B == READ)  && !ce_n_B;
     wire write_req_B = (state_B == WRITE) && !ce_n_B;
 
@@ -264,6 +279,8 @@ module ctrl_decode #(
 
             ysel_B[i]   = '0;
             yseln_B[i]  = '1;
+        end
+        for (int i = 0; i < B_IO; i = i + 1) begin
             wrena_B[i]  = 1'b0;
             wrenan_B[i] = 1'b1;
         end
@@ -290,13 +307,13 @@ module ctrl_decode #(
             yseln_B[slice_sel_r_B]    = ~ysel_B[slice_sel_r_B];
 
             if (read_req_B) begin
-                oeb_out_B[slice_sel_r_B] = oe_n_B;
-                sae_B[slice_sel_r_B]     = sae_raw_B;
+                oeb_out_B[io_sel_r_B] = oe_n_B;
+                sae_B[io_sel_r_B]     = sae_raw_B;
             end
 
             if (write_req_B) begin
-                wrena_B[slice_sel_r_B]  = wl_write_fire_B;
-                wrenan_B[slice_sel_r_B] = ~wl_write_fire_B;
+                wrena_B[io_sel_r_B]  = wl_write_fire_B;
+                wrenan_B[io_sel_r_B] = ~wl_write_fire_B;
             end
         end
 

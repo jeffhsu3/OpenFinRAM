@@ -378,7 +378,12 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             };
         }
         for (const auto& sig : ctrl_sigs) {
-            for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
+            // Shared, port B's enables are the controller's one per pair of
+            // banks (SHARED_B); its precharges stay one per bank.
+            const bool per_pair = cli_options_.share_port_b && sig != "blprechn_B" &&
+                                  sig.size() > 2 && sig.compare(sig.size() - 2, 2, "_B") == 0;
+            const int count = per_pair ? cli_options_.num_banks / 2 : cli_options_.num_banks;
+            for (int bank = 0; bank < count; ++bank) {
                 oss << " " << sig << "[" << bank << "]";
             }
 
