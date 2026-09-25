@@ -811,8 +811,9 @@ def run(args):
         raise RuntimeError("sharing port B's IO needs banks in pairs")
     # What the floorplan repeats across: a bank, or a pair of banks.
     units, banks_per_unit = (args.banks // 2, 2) if shared_b else (args.banks, 1)
-    work = args.work.resolve()
-    work.mkdir(parents=True, exist_ok=True)
+    if args.plan_band is None:
+        work = args.work.resolve()
+        work.mkdir(parents=True, exist_ok=True)
     array_wordlines = 2 * args.wordlines
     tap_pitch = math.gcd(array_wordlines, 16)
 
@@ -850,12 +851,50 @@ def run(args):
             strip_pairs[half + "_r"] = mirrored(
                 strip_lib, strip_pairs[half], strip_pairs[half].name + "_r", tile_width
             )
+    # With the strips in the controller's band, the controller routes its
+    # select outputs onto the strips' SEL/B pins itself: at this level those
+    # nets are joined already, like the wordlines, and only probed.
+    in_band = args.band is not None
+
+    def is_strip_select(net):
+        return re.fullmatch(r"(SEL|B)_[AB]\[\d+\]", net) is not None
+
     pair_masters = {}
     for half, pair in strip_pairs.items():
         pair_labels = [label for label in pair.labels if not supply(label.text)]
         pair_masters[half] = abstract(
-            pair, f"dp_wl_strips_{half}", pair_labels, abutted=is_wordline
+            pair, f"dp_wl_strips_{half}", pair_labels,
+            abutted=lambda net: is_wordline(net) or (in_band and is_strip_select(net)),
         )
+
+    bank_gap = args.bank_gap
+    # Preserve the validated pin-access phase in each bank. 2.88 um is the
+    # least common multiple of all M1-M9 routing pitches; an arbitrary bank
+    # stride can strand the small cap/tap ground terminals between tracks.
+    bank_stride = math.ceil((size[0] + bank_gap) / 2.88) * 2.88
+    pair_height = columns.boundary_box(strip_pairs["hi"])[3]
+    tile_width = columns.boundary_box(leaf)[2]
+    band_width = (units - 1) * bank_stride + tile_width
+
+    def strip_placements(die_height):
+        """Every strip pair in a band `die_height` tall, from the band's lower left: its
+        instance, drawn master, bank, side, and origin; the lower pair at the band's
+        bottom edge, the upper at its top, both in the tiles' x."""
+        placed = []
+        for unit, (half, second) in itertools.product(
+            range(units), itertools.product(("lo", "hi"), range(banks_per_unit))
+        ):
+            drawn = half + ("_r" if second else "")
+            pox, poy = bbox_origin(strip_pairs[drawn])
+            y = 0.0 if half == "lo" else die_height - pair_height
+            bank = unit * banks_per_unit + second
+            placed.append((f"WL_{half.upper()}_{bank}", drawn, bank, half,
+                           (unit * bank_stride + pox, y + poy)))  # fmt: skip
+        return placed
+
+    if args.plan_band is not None:
+        plan_band(args, pair_masters, strip_placements, band_width, pair_height)
+        return
     ctrl_lib = gdstk.read_gds(str(args.controller))
     ctrl = next(c for c in ctrl_lib.cells if c.name == "ctrl_decode")
     add_pin_conductors(ctrl)
@@ -865,7 +904,8 @@ def run(args):
         if label.texttype == 251 and not supply(label.text)
     ]
     controller, ctrl_pins, ctrl_lef, ctrl_size = abstract(
-        ctrl, "dp_controller", ctrl_labels
+        ctrl, "dp_controller", ctrl_labels,
+        abutted=(lambda net: net.startswith("sel_")) if in_band else None,
     )
     masters = {v[1].name: (v[1], v[2]) for v in variants.values()}
     masters["dp_controller"] = (controller, ctrl_pins)
@@ -897,7 +937,7 @@ def run(args):
     # the channel on each side of the controller, where its outputs fan out;
     # and the gap between banks.  Every one is routed on the top layers over
     # the blocks as well, so none needs to hold whole buses.
-    margin, channel, bank_gap = args.margin, args.channel_width, args.bank_gap
+    margin, channel = args.margin, args.channel_width
     margin_y = args.margin_y if args.margin_y is not None else margin
     for name, value in (
         ("margin", margin),
@@ -907,10 +947,6 @@ def run(args):
     ):
         if value < 0.2:
             raise RuntimeError(f"the {name} must be at least 0.2 um, got {value}")
-    # Preserve the validated pin-access phase in each bank. 2.88 um is the
-    # least common multiple of all M1-M9 routing pitches; an arbitrary bank
-    # stride can strand the small cap/tap ground terminals between tracks.
-    bank_stride = math.ceil((size[0] + bank_gap) / 2.88) * 2.88
     width = max(
         (units - 1) * bank_stride + size[0] + 2 * margin, ctrl_size[0] + 2 * margin
     )
@@ -925,20 +961,36 @@ def run(args):
         return y1 - y0
 
     offsets = [sum(tile_height(k) for k in range(index)) for index in range(half_bits)]
-    pair_height = columns.boundary_box(strip_pairs["hi"])[3]
     stack = offsets[-1] + tile_height(half_bits - 1)
     y_lo_tiles = margin_y
-    y_lo_strips = y_lo_tiles + stack
-    y_ctrl = y_lo_strips + pair_height + channel
-    y_hi_strips = y_ctrl + ctrl_size[1] + channel
-    y_hi_tiles = y_hi_strips + pair_height
+    if in_band:
+        # The controller's die is the whole band between the stacks, the
+        # strips in the holes its placement left against each stack.
+        die_width, die_height = band_die(args.band)
+        if abs(die_width - band_width) > 1e-3:
+            raise RuntimeError(f"the controller's band is {die_width} um wide, the tiles {band_width}")
+        y_band = y_lo_tiles + stack
+        y_lo_strips, y_hi_strips = y_band, y_band + die_height - pair_height
+        y_hi_tiles = y_band + die_height
+        cox, coy = bbox_origin(ctrl)
+        ctrl_origin = (margin + cox, y_band + coy)
+    else:
+        y_lo_strips = y_lo_tiles + stack
+        y_ctrl = y_lo_strips + pair_height + channel
+        y_hi_strips = y_ctrl + ctrl_size[1] + channel
+        y_hi_tiles = y_hi_strips + pair_height
+        ctrl_origin = (margin, y_ctrl)
     height = y_hi_tiles + stack + margin_y
+    if in_band:
+        # The band is the tiles' width; only the controller's side pins stand
+        # out of it, into the margin.
+        width = max(margin + band_width, ctrl_origin[0] + ctrl_size[0]) + margin
     # (instance, master, origin, pin net -> macro net)
-    instances = [("CTRL", "dp_controller", (margin, y_ctrl), lambda net: net)]
+    instances = [("CTRL", "dp_controller", ctrl_origin, lambda net: net)]
     nets = defaultdict(list)
     probes = defaultdict(list)
     for pin, info in ctrl_pins.items():
-        if info.get("private"):
+        if info.get("private") or info.get("abutted"):
             continue
         nets[info["net"]].append(("CTRL", pin))
     for unit in range(units):
@@ -1157,6 +1209,75 @@ def run(args):
     )
 
 
+#: Keep-out around a strip in the controller's band: std-cell wells and
+#: implants clear of the slices', and room for the strips' supply pins.
+BAND_HALO_X, BAND_HALO_Y = 0.216, 0.27
+#: The band's rows stop this far short of the stacks it touches.
+BAND_INSET = 0.108
+
+
+def plan_band(args, pair_masters, strip_placements, band_width, pair_height):
+    """What the controller's place-and-route needs to take the strips into its band.
+
+    ``strips.lef`` holds the strips' abstracts; ``plan.txt`` the band's
+    width, the core area the strips and their halos take, the halos and the
+    inset; ``band.tcl`` places the strips in a die of ``$band_height`` as
+    fixed physical instances, connects their SEL/B pins to the controller's
+    ``sel_hi``/``sel_lo`` ports so it routes them, and removes the instances
+    before the controller is written out.
+    """
+    out = args.plan_band
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "strips.lef").write_text(
+        'VERSION 5.8 ;\nBUSBITCHARS "[]" ;\nDIVIDERCHAR "/" ;\n'
+        + "\n".join(m[2] for m in pair_masters.values()) + "\nEND LIBRARY\n"
+    )
+    placed = strip_placements(0.0)
+    reserved = sum((pair_masters[drawn][3][0] + 2 * BAND_HALO_X) * (pair_height + BAND_HALO_Y - BAND_INSET)
+                   for _, drawn, _, _, _ in placed)  # fmt: skip
+    (out / "plan.txt").write_text(
+        f"width {band_width:.4f}\nreserved {reserved:.4f}\ninset {BAND_INSET}\n"
+        f"halo_x {BAND_HALO_X}\nhalo_y {BAND_HALO_Y}\n"
+    )
+    tcl = [
+        "# Generated by compile_asap7_2rw.py --plan-band: the wordline strips in the controller's band.",
+        f"read_lef {{{out / 'strips.lef'}}}",
+        "set band_strips {}",
+        "proc band_place_strips {die_height} {",
+        "  global band_strips",
+        "  set block [ord::get_db_block]",
+        "  set dbu [$block getDbUnitsPerMicron]",
+    ]
+    for inst, drawn, bank, half, (x, y) in placed:
+        # strip_placements(0) puts an upper pair `pair_height` below a zero-height band's top.
+        y_expr = f"{y:.4f}" if half == "lo" else f"$die_height + ({y:.4f})"
+        tcl += [
+            f"  set inst [odb::dbInst_create $block [[ord::get_db] findMaster dp_wl_strips_{drawn}] {inst}]",
+            f"  $inst setLocation [expr {{round({x:.4f} * $dbu)}}] [expr {{round(({y_expr}) * $dbu)}}]",
+            "  $inst setPlacementStatus FIRM",
+            "  lappend band_strips $inst",
+        ]
+    tcl += ["}", "proc band_connect_strips {} {", "  set block [ord::get_db_block]"]
+    for inst, drawn, bank, half, _ in placed:
+        for pin, info in pair_masters[drawn][1].items():
+            if info.get("private") or info.get("abutted"):
+                continue
+            net = strip_net(info["net"], bank=bank, half=half, wordlines=args.wordlines)
+            if net.startswith("sel_"):
+                tcl.append(f"  [[$block findInst {inst}] findITerm {pin}] connect "
+                           f"[[$block findBTerm {{{net}}}] getNet]")  # fmt: skip
+    tcl += ["}", "proc band_remove_strips {} {", "  global band_strips",
+            "  foreach inst $band_strips { odb::dbInst_destroy $inst }", "  set band_strips {}", "}"]  # fmt: skip
+    (out / "band.tcl").write_text("\n".join(tcl) + "\n")
+    print(f"PLAN: band {band_width:.3f} um wide, {len(placed)} strip pairs, {reserved:.2f} um^2 kept out")
+
+
+def band_die(band):
+    """The controller's die, as its place-and-route wrote it beside the plan: ``(width, height)``."""
+    values = dict(line.split() for line in (band / "die.txt").read_text().splitlines() if line.strip())
+    return float(values["width"]), float(values["height"])
+
+
 def add_pin_conductors(cell):
     """DEF pin rectangles are conductors as well as pin-purpose markers."""
     for polygon in list(cell.polygons):
@@ -1204,9 +1325,13 @@ def main():
     parser.add_argument("--wordlines", type=int, required=True)
     parser.add_argument("--bits", type=int, required=True)
     parser.add_argument("--banks", type=int, default=1)
-    parser.add_argument("--controller", type=Path, required=True)
-    parser.add_argument("--work", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--controller", type=Path)
+    parser.add_argument("--plan-band", type=Path, default=None,
+                        help="write the controller band's plan (strips, keep-outs) here and stop")  # fmt: skip
+    parser.add_argument("--band", type=Path, default=None,
+                        help="a plan whose controller took the strips into its band (die.txt written)")  # fmt: skip
+    parser.add_argument("--work", type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--openroad", default="openroad")
     parser.add_argument("--route-iterations", type=int, default=64)
     parser.add_argument("--route-timeout", type=int, default=900)
@@ -1238,6 +1363,11 @@ def main():
         help="widen the margin (doubling) up to this if routing fails",
     )
     args = parser.parse_args()
+    if args.plan_band is None and None in (args.controller, args.work, args.output):
+        parser.error("--controller, --work and --output are required unless --plan-band")
+    if args.plan_band is not None:
+        run(args)
+        return
     # The margin is where the macro pins land and the controller's outputs
     # turn; how much the router needs depends on where it put the pins,
     # which is not known before routing.  Start tight, widen on failure.

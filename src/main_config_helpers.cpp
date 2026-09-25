@@ -33,6 +33,12 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .default_value(false)
         .implicit_value(true);
 
+    program.add_argument("--strips-in-controller")
+        .help("Two-port: place and route the controller around the wordline driver strips, "
+              "its band filling the space between the two stacks of column tiles.")
+        .default_value(false)
+        .implicit_value(true);
+
     program.add_argument("--skip-characterization")
         .help("Skip SiliconSmart and emit an explicitly estimated early-PPA Liberty model.")
         .default_value(false)
@@ -119,6 +125,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.num_banks             = program.get<unsigned>("--num-banks");
     options.single_port           = program.get<bool>("--single-port");
     options.share_port_b          = program.get<bool>("--share-port-b");
+    options.strips_in_controller  = program.get<bool>("--strips-in-controller");
     options.skip_characterization = program.get<bool>("--skip-characterization");
     options.num_wl_buf            = program.get<unsigned>("--num-wl-buf");
     options.num_sae_buf           = program.get<unsigned>("--num-sae-buf");
@@ -164,6 +171,10 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     }
     if ((options.num_banks & (options.num_banks - 1)) != 0) {
         LOGE << "Error: --num-banks must be a power of 2.";
+        std::exit(1);
+    }
+    if (options.strips_in_controller && options.single_port) {
+        LOGE << "Error: --strips-in-controller is for the two-port macro.";
         std::exit(1);
     }
     if (options.share_port_b && (options.single_port || options.num_banks < 2)) {

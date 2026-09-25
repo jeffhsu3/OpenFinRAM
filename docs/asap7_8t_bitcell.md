@@ -677,6 +677,40 @@ block. `sram_x4x2x2`: 7.94 x 16.31 um against 10.46 x 16.88 um unshared
 not have (KLayout reports a cell once per orientation, so the mirrored half
 repeats the cells' known markers under `:m90`).
 
+### Strips in the controller's band (`--strips-in-controller`)
+
+A strip pair is only as wide as its array, so the band it stands in was
+mostly empty (two thirds of it on a shared `sram_x4x2x2`), and a 0.3 um
+channel on each side of the controller held its fan-out to the strips. With
+`--strips-in-controller` the controller's die is the whole band between the
+two stacks and the strips sit inside it:
+
+* `compile_asap7_2rw.py --plan-band DIR` builds the tiles and strips first and
+  writes the band's width, the core area the strips and their halos take, the
+  strips' abstracts (`strips.lef`) and `band.tcl`;
+* the controller's place-and-route (`OpenRoadManager`) sizes the die from its
+  cells at the utilization cap plus that keep-out, places the strips at its
+  bottom and top edges as fixed physical instances, cuts the rows around them
+  (`cut_rows`, and `tapcell` with the same halos: 0.216 um across, one row
+  along), and keeps its rows 0.108 um short of the edges the tiles touch. Its
+  pins stand on the side edges only. After timing closure on the ports' SDC
+  loads it connects every strip's `SEL`/`B<j>` pin to its `sel_hi`/`sel_lo`
+  port net, routes them, and removes the instances before writing out, so
+  its GDS keeps only the wires it landed on the strip pins;
+* the assembler (`--band DIR`, reading back `die.txt`) abuts the stacks to
+  the band's edges and puts the strips where the plan did. The select nets
+  are joined by the controller's own wires, so like the wordlines they are
+  probed by the connectivity gate and not routed again.
+
+`sram_x4x2x2` shared: 7.99 x 14.42 um against 7.94 x 16.31 um (-11 %); the
+band is 6.70 um where controller, strips and channels took 8.55. Strict LVS
+matches; DRC 559 against 562, with nothing between the strips and the
+controller's cells (one `M1.S.2` where top-level supply routing reaches a
+strip's rail inside its halo); both Xyce programs pass as before. The rows cut
+around the strips are fragmented enough that the controller does not
+legalize at 50 % (one flop finds no gap after clock-tree and hold repair), so
+it builds on the 44 % retry.
+
 `scripts/mapped_verilog_to_spice.py` parses the routed controller through
 Yosys and orders every instance using the actual CDL formal pins, including
 expanded one-bit buses and supply connections. Unknown cells/pins fail instead

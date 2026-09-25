@@ -12,6 +12,10 @@ struct MainCliOptions {
     // Two-port only: banks in pairs share port B's IO block, the pair's
     // arrays mirrored about it (--share-port-b).
     bool share_port_b = false;
+    // Two-port only: the wordline driver strips go into the controller's band
+    // as placement keep-outs, the band abutting both stacks of column tiles
+    // (--strips-in-controller).
+    bool strips_in_controller = false;
     bool skip_characterization = true;
     std::string output_sp_name = "sram.sp";
     std::string output_gds_name = "sram.gds";

@@ -12,6 +12,24 @@ struct PinInfo2 {
     double x;
 };
 
+// Two-port: the wordline driver strips taken into the controller's band
+// (compile_asap7_2rw.py --plan-band).  The die is the band between the two
+// stacks of column tiles; the strips sit at its bottom and top edges, as
+// fixed physical instances during place-and-route, and its rows stop `inset`
+// short of both edges.
+struct BandPlan {
+    bool enabled = false;
+    std::string dir;        // plan.txt, band.tcl, strips.lef; die.txt is written back
+    double width = 0.0;     // the band's width, um
+    double reserved = 0.0;  // core area the strips and their halos take, um^2
+    double inset = 0.0;
+    double halo_x = 0.0;
+    double halo_y = 0.0;
+};
+
+// Reads <dir>/plan.txt; false if it is missing or incomplete.
+bool read_band_plan(const std::string& dir, BandPlan& plan);
+
 struct QoRReport2 {
     double cell_area = 0.0;
     bool valid = false;
@@ -29,6 +47,10 @@ public:
     void set_max_utilization(double utilization);
     void set_bitcell_width(double width);
     void set_cpu_count(int local_cpu, int remote_cpu = 0);
+    void set_band(const BandPlan& band) { band_ = band; }
+    // The band's die height for `width`: rows for the cells at the
+    // utilization cap plus the strips' keep-outs, and the two insets.
+    double band_die_height(double width) const;
 
     bool parse_qor_report(const std::string& qor_file);
     const QoRReport2& get_qor_report() const { return qor_; }
@@ -77,6 +99,7 @@ private:
     double bitcell_width_ = 0.108;
     int local_cpu_ = 8;
     QoRReport2 qor_;
+    BandPlan band_;
 
     // helpers
     bool file_exists(const std::string& p) const;

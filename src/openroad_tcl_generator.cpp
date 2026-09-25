@@ -33,6 +33,32 @@ namespace OpenFinRAM {
 
 OpenRoadTclGenerator::OpenRoadTclGenerator() {}
 
+bool read_band_plan(const std::string& dir, BandPlan& plan) {
+    std::ifstream in(join_path(dir, "plan.txt"));
+    if (!in.is_open()) return false;
+    std::map<std::string, double> values;
+    std::string key;
+    double value = 0.0;
+    while (in >> key >> value) values[key] = value;
+    for (const char* required : {"width", "reserved", "inset", "halo_x", "halo_y"}) {
+        if (!values.count(required)) return false;
+    }
+    plan.enabled = true;
+    plan.dir = dir;
+    plan.width = values["width"];
+    plan.reserved = values["reserved"];
+    plan.inset = values["inset"];
+    plan.halo_x = values["halo_x"];
+    plan.halo_y = values["halo_y"];
+    return plan.width > 0.0;
+}
+
+double OpenRoadTclGenerator::band_die_height(double width) const {
+    const double core = align_to_site_height(
+        (qor_.cell_area / max_utilization_ + band_.reserved) / width);
+    return core + 2 * band_.inset;
+}
+
 void OpenRoadTclGenerator::set_site_height(double height) {
     site_height_ = height;
 }
@@ -109,10 +135,18 @@ double OpenRoadTclGenerator::calculate_floorplan_height(double width) const {
 }
 
 std::string OpenRoadTclGenerator::generate_floorplan_command(double& w, double& h) const {
-    if (h == 0.0) h = calculate_floorplan_height(w);
-    else h = align_to_site_height(h);
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(3);
+    if (band_.enabled) {
+        oss << std::setprecision(4);
+        h = band_die_height(w);
+        oss << "initialize_floorplan -die_area \"0 0 " << w << " " << h << "\""
+            << " -core_area \"0 " << band_.inset << " " << w << " " << h - band_.inset << "\""
+            << " -site " << site_name_;
+        return oss.str();
+    }
+    if (h == 0.0) h = calculate_floorplan_height(w);
+    else h = align_to_site_height(h);
     // OpenROAD initialize_floorplan expects microns (um), not DBU
     oss << "initialize_floorplan -die_area \"0 0 " << w << " " << h << "\""
         << " -core_area \"0 0 " << w << " " << h << "\""
@@ -132,7 +166,8 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         LOGE << "QoR not valid, cannot generate OpenROAD TCL";
         return false;
     }
-    if (height == 0.0) height = calculate_floorplan_height(width);
+    if (band_.enabled) height = band_die_height(width);
+    else if (height == 0.0) height = calculate_floorplan_height(width);
     else height = align_to_site_height(height);
 
     std::string out_dir = output_file.substr(0, output_file.find_last_of("/\\"));
@@ -236,7 +271,17 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     file << "make_tracks M3 -x_offset 0 -y_offset 0 -x_pitch 0.036 -y_pitch 0.036\n";
     file << "make_tracks M4 -x_offset 0 -y_offset 0 -x_pitch 0.048 -y_pitch 0.048\n";
     file << "make_tracks M5 -x_offset 0 -y_offset 0 -x_pitch 0.048 -y_pitch 0.048\n";
-    file << "place_pins -hor_layers M4 -ver_layers M5\n\n";
+    if (band_.enabled) {
+        // The strips go in as fixed physical instances with a keep-out; the
+        // band's bottom and top edges touch the column tiles, so its pins
+        // stand on the side edges only.
+        file << "source {" << join_path(band_.dir, "band.tcl") << "}\n";
+        file << "band_place_strips " << height << "\n";
+        file << "cut_rows -halo_width_x " << band_.halo_x << " -halo_width_y " << band_.halo_y << "\n";
+        file << "place_pins -hor_layers M4 -ver_layers M5 -exclude bottom:* -exclude top:*\n\n";
+    } else {
+        file << "place_pins -hor_layers M4 -ver_layers M5\n\n";
+    }
 
     // Global connections
     file << "add_global_connection -net VDD -pin_pattern {^VDD$} -power\n";
@@ -256,7 +301,12 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         file << "catch {remove_nets -net zero_}\n";
     }
     file << "set_voltage 0.7\n";
-    file << "tapcell -distance 14 -tapcell_master TAPCELL_ASAP7_75t_R\n\n";
+    file << "tapcell -distance 14 -tapcell_master TAPCELL_ASAP7_75t_R";
+    if (band_.enabled) {
+        // tapcell cuts the rows around blocks again, with a 2 um halo unless told.
+        file << " -halo_width_x " << band_.halo_x << " -halo_width_y " << band_.halo_y;
+    }
+    file << "\n\n";
 
     if (single_port) {
         // Preserve the explicitly instantiated physical delay line while allowing
@@ -332,6 +382,11 @@ dict for {net pins} $dp_reset_nets {
     // Fill before routing so filler geometry participates in detailed-route
     // legality.  Do not attempt a second decap-as-filler pass into zero gaps.
     file << "filler_placement \"FILLER_ASAP7_75t_R FILLERxp5_ASAP7_75t_R\"\n";
+    if (band_.enabled) {
+        // Timing is closed on the ports' SDC loads; now route the select
+        // outputs onto the strips' pins themselves.
+        file << "band_connect_strips\n";
+    }
     file << "global_route\n";
     file << "detailed_route -output_drc detailed_route_drc.rpt\n\n";
     if (!single_port) {
@@ -396,6 +451,11 @@ dict for {net pins} $dp_reset_nets {
 
     // OpenROAD 2.0 has no GDS writer. Emit DEF/ODB here; OpenRoadManager
     // streams the DEF through KLayout and substitutes full standard-cell GDS.
+    if (band_.enabled) {
+        // The strips are the macro's own instances: the controller keeps
+        // only the wires it landed on their pins.
+        file << "band_remove_strips\n";
+    }
     file << "write_def ctrl_decode.def\n";
     file << "write_verilog netlist_for_lvs.v\n";
     file << "write_sdc ctrl_decode.sdc\n";

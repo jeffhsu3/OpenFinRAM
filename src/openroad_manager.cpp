@@ -3,7 +3,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <iomanip>
 #include <numeric>
+#include <sstream>
 #include <sys/stat.h>
 #include "plog/Log.h"
 #include "openroad_tcl_generator.hpp"
@@ -104,6 +106,29 @@ bool OpenRoadManager::run_openroad_flow() {
         }
         lib.free_all();
     }
+    // With the strips in the controller's band, the assembler plans the band
+    // first: its width is the tiles', and the strips' keep-outs are known.
+    if (!cli_options_.single_port && cli_options_.strips_in_controller) {
+        const std::string band_dir = join_path(work_dir, "band");
+        const std::string local_python = join_path(get_current_dir_name(), ".venv/bin/python");
+        std::ostringstream plan;
+        plan << (file_exists(local_python) ? local_python : std::string("python3"))
+             << " '" << join_path(get_current_dir_name(), "scripts/compile_asap7_2rw.py") << "'"
+             << " --wordlines " << cli_options_.num_wls
+             << " --bits " << cli_options_.num_data_bits
+             << " --banks " << cli_options_.num_banks
+             << (cli_options_.share_port_b ? " --share-port-b" : "")
+             << " --plan-band '" << band_dir << "' > '" << join_path(work_dir, "band_plan.log") << "' 2>&1";
+        OpenFinRAM::BandPlan band;
+        if (std::system(plan.str().c_str()) != 0 || !OpenFinRAM::read_band_plan(band_dir, band)) {
+            LOGE << "Planning the controller band failed; see " << join_path(work_dir, "band_plan.log");
+            return false;
+        }
+        gen.set_band(band);
+        sram_width = band.width;
+        LOGI << "Controller band: " << band.width << " um wide, " << band.reserved
+             << " um^2 kept out for the wordline strips";
+    }
     double col_width = (sram_width + cli_options_.bitcell_width) / cli_options_.num_banks;
     // Prefer CWD tech (repo root) for tech_root; OpenROAD flow may be run from repo root
     std::string tech_root_cwd = join_path(get_current_dir_name(), "tech");
@@ -188,6 +213,12 @@ bool OpenRoadManager::run_openroad_flow() {
     if (!file_exists(def_path) || !file_exists(v_path)) {
         LOGE << "OpenROAD completed without required DEF/Verilog outputs";
         return false;
+    }
+    if (cli_options_.strips_in_controller && !cli_options_.single_port) {
+        // The assembler stacks the tiles on the band's edges: tell it the die.
+        std::ofstream die(join_path(work_dir, "band/die.txt"));
+        die << std::fixed << std::setprecision(4) << "width " << sram_width << "\nheight "
+            << gen.band_die_height(sram_width) << "\n";
     }
 
     std::string gds_path = join_path(work_dir, "ctrl_decode.gds");

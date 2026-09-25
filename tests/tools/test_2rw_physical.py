@@ -209,6 +209,30 @@ class PhysicalMacroTests(unittest.TestCase):
         # Both halves drive the bit's Q_A and take its D_A: two pins each.
         self.assertEqual(sum(p["net"] == "QA" for p in pins.values()), 2)
 
+    def test_the_band_plan_puts_each_strip_at_its_stacks_edge_and_hands_it_the_selects(self):
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as scratch:
+            band = Path(scratch) / "band"
+            subprocess.run([sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/compile_asap7_2rw.py"),
+                            "--wordlines", "2", "--bits", "2", "--banks", "2", "--share-port-b",
+                            "--plan-band", str(band)], check=True, capture_output=True)  # fmt: skip
+            plan = dict(line.split() for line in (band / "plan.txt").read_text().splitlines())
+            self.assertAlmostEqual(float(plan["width"]), 7.344, places=3)  # one pair tile
+            self.assertGreater(float(plan["reserved"]), 0)
+            tcl = (band / "band.tcl").read_text()
+            # Four strip pairs: each bank's lower and upper, the second bank's mirrored.
+            for master in ("lo", "hi", "lo_r", "hi_r"):
+                self.assertEqual(tcl.count(f"findMaster dp_wl_strips_{master}]"), 1)
+            # The upper pairs hang from the band's top edge, the lower stand on its bottom.
+            self.assertEqual(tcl.count("$die_height + ("), 2)
+            # Every slice's SEL and B<j> of each port goes to the controller's
+            # select ports: 1 slice x (1 + 4) pins x 2 ports x 4 pairs.
+            self.assertEqual(tcl.count("] connect [[$block findBTerm {sel_"), 40)
+            self.assertIn("{sel_hi_B[1]}", tcl)  # bank 1's slice
+            self.assertNotIn("findBTerm {wl_", tcl)  # wordlines stay abutted
+            self.assertIn("odb::dbInst_destroy", tcl)
+
     def test_strip_pair_pins_map_onto_the_controller_and_its_stack(self):
         # NUM_WL = 4: eight wordlines a bank, two slices; bank 1's slices
         # are sel_hi[2..3], the low two bits are shared by every slice.

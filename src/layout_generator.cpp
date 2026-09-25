@@ -3552,6 +3552,8 @@ bool LayoutGenerator::create_dual_port_macro() {
         << " --bits " << cli_options_.num_data_bits
         << " --banks " << cli_options_.num_banks
         << (cli_options_.share_port_b ? " --share-port-b" : "")
+        << (cli_options_.strips_in_controller
+                ? " --band " + quote(join_path(root, "tmp/openroad_" + timestamp + "/band")) : "")
         << " --controller " << quote(controller)
         << " --work " << quote(work)
         << " --output " << quote(output)

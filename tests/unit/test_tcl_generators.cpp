@@ -278,4 +278,52 @@ TEST(OpenRoadTclGeneratorTest, DualPortProtectsDelayCellsAndRejectsNegativeHold)
     EXPECT_NE(script.find("repair_design -max_utilization 90", hold), std::string::npos);
 }
 
+// --strips-in-controller: the die is the band between the stacks, the strips
+// fixed instances in it, routed to and then removed.
+TEST(OpenRoadTclGeneratorTest, BandTakesTheStripsInAndHandsTheirPinsTheSelects) {
+    const auto dir = std::filesystem::temp_directory_path() / "or_band_plan_test";
+    std::filesystem::create_directories(dir);
+    {
+        std::ofstream plan(dir / "plan.txt");
+        plan << "width 7.3440\nreserved 7.3551\ninset 0.108\nhalo_x 0.216\nhalo_y 0.27\n";
+    }
+    BandPlan band;
+    ASSERT_TRUE(read_band_plan(dir.string(), band));
+    EXPECT_NEAR(band.reserved, 7.3551, 1e-9);
+
+    OpenRoadTclGenerator gen;
+    gen.set_design_name("ctrl_decode");
+    gen.set_site_name("asap7sc7p5t");
+    gen.set_site_height(0.27);
+    gen.set_max_utilization(0.5);
+    ASSERT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+    gen.set_band(band);
+    // Rows for the cells at 50 % and the strips' keep-outs, then both insets.
+    const double h = gen.band_die_height(band.width);
+    EXPECT_GE(h - 2 * 0.108, (123.45 / 0.5 + 7.3551) / 7.344 - 1e-9);
+    EXPECT_NEAR((h - 2 * 0.108) / 0.54, std::nearbyint((h - 2 * 0.108) / 0.54), 1e-9);
+
+    const std::string out = (dir / "run.tcl").string();
+    ASSERT_TRUE(gen.generate_run_tcl(band.width, 0.0, out, 2, 2, 4, 6, 2, false, 3.7,
+                                     "/nonexistent/platform/asap7",
+                                     std::string(REPO_ROOT) + "/tech", /*single_port=*/false));
+    const std::string script = read_file(out);
+    EXPECT_NE(script.find("-core_area \"0 0.1080 7.3440 "), std::string::npos);
+    const auto place = script.find("band_place_strips ");
+    const auto cut = script.find("cut_rows -halo_width_x 0.216 -halo_width_y 0.270");
+    const auto pins = script.find("place_pins -hor_layers M4 -ver_layers M5 -exclude bottom:* -exclude top:*");
+    const auto tap = script.find("tapcell -distance 14 -tapcell_master TAPCELL_ASAP7_75t_R -halo_width_x");
+    const auto connect = script.find("band_connect_strips");
+    const auto route = script.find("global_route");
+    const auto remove = script.find("band_remove_strips");
+    const auto def = script.find("write_def ctrl_decode.def");
+    for (auto at : {place, cut, pins, tap, connect, route, remove, def}) ASSERT_NE(at, std::string::npos);
+    EXPECT_LT(place, cut);
+    EXPECT_LT(cut, pins);
+    EXPECT_LT(pins, tap);
+    EXPECT_LT(script.find("repair_timing -hold"), connect);  // timing closed on the SDC loads first
+    EXPECT_LT(connect, route);
+    EXPECT_LT(remove, def);
+}
+
 }  // namespace OpenFinRAM
