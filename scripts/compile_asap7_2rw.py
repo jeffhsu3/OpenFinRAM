@@ -72,11 +72,13 @@ def bbox_origin(cell):
     return tuple(math.floor(float(v) * 1000) / 1000 for v in low)
 
 
-def abstract(cell, name, signal_labels, abutted=None):
+def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0)):
     """Create an exact metal abstract and a pin for every named component.
 
     Nets `abutted` names are joined by abutment, never routed: they are
     terminals for the connectivity gate but obstructions to the router.
+    `shift` moves the cell inside its master (and everything the LEF says
+    of it), for a cell that has to land between the DEF's nanometres.
     """
     graph = MetalGraph(cell)
     roots = {}
@@ -103,6 +105,7 @@ def abstract(cell, name, signal_labels, abutted=None):
     width, height = (
         math.ceil((float(v) - o) * 1000) / 1000 for v, o in zip(high, (ox, oy))
     )
+    ox, oy = ox - shift[0], oy - shift[1]
     master = gdstk.Cell(name)
     master.add(gdstk.Reference(cell, origin=(-ox, -oy)))
     groups = defaultdict(list)
@@ -121,14 +124,22 @@ def abstract(cell, name, signal_labels, abutted=None):
         "  SYMMETRY X Y ;",
     ]
 
-    def geometry(polygons):
+    # A shifted cell's metal is half a nanometre off what the LEF can say:
+    # grow its obstructions a nanometre so the router's spacing covers it
+    # (its pins stay as drawn: the router has to land on them).
+    obs_grow = 0.001 if any(shift) else 0.0
+
+    def geometry(polygons, grow=0.0):
         out = []
         by_layer = defaultdict(list)
         for poly in polygons:
             by_layer[poly.layer].append(poly)
         for layer, polys in sorted(by_layer.items()):
             out.append(f"    LAYER {LAYER_NAMES[layer]} ;")
-            for poly in gdstk.boolean(polys, [], "or", precision=1e-6):
+            merged = gdstk.boolean(polys, [], "or", precision=1e-6)
+            if grow:
+                merged = gdstk.offset(merged, grow, join="miter", precision=1e-6)
+            for poly in merged:
                 points = " ".join(f"{x - ox:.6f} {y - oy:.6f}" for x, y in poly.points)
                 out.append(f"    POLYGON {points} ;")
         return out
@@ -161,8 +172,17 @@ def abstract(cell, name, signal_labels, abutted=None):
         elif net in ("vdd", "vss"):
             # A supply component is reachable on every layer it has: the
             # router lands on a rail or a bar, not on the top stub of a via
-            # stack squeezed between the wordlines.
+            # stack squeezed between the wordlines.  A shifted cell offers
+            # only what lands on the DEF's nanometre grid: M4 up may not
+            # bend, and a landing half a nanometre off a shape leaves a
+            # sliver on any layer.
             access = polys
+            if any(shift):
+                on_grid = [p for p in polys if p.layer in METALS[:3] and all(
+                    abs(v * 1000 - round(v * 1000)) < 1e-3
+                    for x, y in p.points for v in (x - ox, y - oy))]  # fmt: skip
+                access = on_grid or [p for p in polys if p.layer in METALS[:3]] or polys
+            obstacles.extend(p for p in polys if not any(p is a for a in access))
         else:
             access_layer = max(p.layer for p in polys)
             access = [p for p in polys if p.layer == access_layer]
@@ -196,7 +216,7 @@ def abstract(cell, name, signal_labels, abutted=None):
         point = probe_point(polygon, (ox, oy))
         terminals[pin] = {"net": net, "layer": polygon.layer, "point": point}
     lef += ["  OBS"]
-    lef += geometry(obstacles)
+    lef += geometry(obstacles, obs_grow)
     lef += ["  END", f"END {name}"]
     # Freeze the partition of unnamed internal interconnect too. A route that
     # shorts into a storage node or a controller internal net must fail even
@@ -215,18 +235,12 @@ def abstract(cell, name, signal_labels, abutted=None):
     # The GDS boundary is the cell's own placement boundary where it has one,
     # so abutted blocks show one clean outline; the LEF SIZE above stays the
     # bounding box, overhangs included, which is what the router must see.
-    own = [
-        p.bounding_box() for p in cell.polygons if p.layer == 100 and p.datatype == 0
-    ]
+    own = [p for p in cell.polygons if p.layer == 100 and p.datatype == 0]
     if own:
-        (bx0, by0), (bx1, by1) = max(
-            own, key=lambda b: (b[1][0] - b[0][0]) * (b[1][1] - b[0][1])
-        )
-        master.add(
-            gdstk.rectangle((bx0 - ox, by0 - oy), (bx1 - ox, by1 - oy), layer=100)
-        )
+        outline = max(own, key=lambda p: p.area())
+        master.add(gdstk.Polygon([(x - ox, y - oy) for x, y in outline.points], layer=100))
     else:
-        master.add(gdstk.rectangle((0, 0), (width, height), layer=100))
+        master.add(gdstk.rectangle(shift, (width + shift[0], height + shift[1]), layer=100))
     return master, terminals, "\n".join(lef), (width, height)
 
 
@@ -828,15 +842,23 @@ def run(args):
     def ends_of(index):
         return (index == 0, index == half_bits - 1)
 
+    banding = args.band is not None or args.plan_band is not None
     variants = {}
     for index in range(half_bits):
         bottom, top = ends_of(index)
         if (bottom, top) in variants:
             continue
         cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top, shared_b=shared_b)
+        if banding:
+            # Over the IO columns an end tile stops at its IO blocks: the
+            # controller's band takes the rest.
+            notch_band_edges(cell, end_row_spans(cell, shared_b))
         labels = [label for label in cell.labels if not supply(label.text)]
         master = ("dp_colpair" if shared_b else "dp_column") + ends_tag(bottom, top)
-        variants[(bottom, top)] = (cell, *abstract(cell, master, labels, abutted=is_wordline))
+        variants[(bottom, top)] = (cell, *abstract(
+            cell, master, labels, abutted=is_wordline,
+            shift=(0.0, HALF_NM) if args.band is not None else (0.0, 0.0),
+        ))  # fmt: skip
     leaf = next(iter(variants.values()))[0]
     size = next(iter(variants.values()))[4]
     lef = "\n".join(v[3] for v in variants.values())
@@ -865,6 +887,9 @@ def run(args):
         pair_masters[half] = abstract(
             pair, f"dp_wl_strips_{half}", pair_labels,
             abutted=lambda net: is_wordline(net) or (in_band and is_strip_select(net)),
+            # In the controller's frame (the band's edge, on the chipforge
+            # half-nanometre phase) the slices are on its grid.
+            shift=(0.0, HALF_NM) if banding else (0.0, 0.0),
         )
 
     bank_gap = args.bank_gap
@@ -876,24 +901,38 @@ def run(args):
     tile_width = columns.boundary_box(leaf)[2]
     band_width = (units - 1) * bank_stride + tile_width
 
+    # The band's edges are the IO blocks' edges, which lie inside the end
+    # tiles: a dummy row above (below) the array, and only the block's
+    # half-fin-pitch offset of it over the IO columns.  There the rows,
+    # fins, gate grid and VSS rail of the block and a standard-cell row are
+    # the same, so the controller's first row abuts the block.
+    seam_lo, seam_hi = band_seams()
+    dummy_spans = end_row_spans(leaf, shared_b)
+
     def strip_placements(die_height):
         """Every strip pair in a band `die_height` tall, from the band's lower left: its
-        instance, drawn master, bank, side, and origin; the lower pair at the band's
-        bottom edge, the upper at its top, both in the tiles' x."""
+        instance, drawn master, bank, side, and origin; the lower pair on the lower
+        stack's dummy row, the upper under the upper stack's, both in the tiles' x."""
         placed = []
         for unit, (half, second) in itertools.product(
             range(units), itertools.product(("lo", "hi"), range(banks_per_unit))
         ):
             drawn = half + ("_r" if second else "")
             pox, poy = bbox_origin(strip_pairs[drawn])
-            y = 0.0 if half == "lo" else die_height - pair_height
+            y = seam_lo if half == "lo" else die_height - seam_hi - pair_height
             bank = unit * banks_per_unit + second
             placed.append((f"WL_{half.upper()}_{bank}", drawn, bank, half,
                            (unit * bank_stride + pox, y + poy)))  # fmt: skip
         return placed
 
+    if in_band or args.plan_band is not None:
+        if units > 1:
+            raise RuntimeError("the controller band abuts one tile column (a bank or a pair) so far: "
+                               "a second one would put its gates off the band's 54 nm grid")  # fmt: skip
     if args.plan_band is not None:
-        plan_band(args, pair_masters, strip_placements, band_width, pair_height)
+        keepouts = [(x0, x1, half) for x0, x1 in dummy_spans for half in ("lo", "hi")]
+        plan_band(args, pair_masters, strip_placements, band_width, pair_height,
+                  keepouts, (seam_lo, seam_hi))  # fmt: skip
         return
     ctrl_lib = gdstk.read_gds(str(args.controller))
     ctrl = next(c for c in ctrl_lib.cells if c.name == "ctrl_decode")
@@ -969,9 +1008,16 @@ def run(args):
         die_width, die_height = band_die(args.band)
         if abs(die_width - band_width) > 1e-3:
             raise RuntimeError(f"the controller's band is {die_width} um wide, the tiles {band_width}")
-        y_band = y_lo_tiles + stack
-        y_lo_strips, y_hi_strips = y_band, y_band + die_height - pair_height
-        y_hi_tiles = y_band + die_height
+        # The band starts at the lower stack's IO edge and ends at the
+        # upper's; the tiles and strips sit half a nanometre up in their
+        # masters, so the positions here are their DEF origins' and the
+        # boundaries are half a nanometre above them.
+        y_band = round(y_lo_tiles + stack + HALF_NM - seam_lo, 4)
+        if abs(y_band * 1000 - round(y_band * 1000)) > 1e-6:
+            raise RuntimeError(f"the band's edge {y_band} is off the DEF grid")
+        y_lo_strips = y_band + seam_lo - HALF_NM
+        y_hi_strips = y_band + die_height - seam_hi - pair_height - HALF_NM
+        y_hi_tiles = y_band + die_height - seam_hi - HALF_NM
         cox, coy = bbox_origin(ctrl)
         ctrl_origin = (margin + cox, y_band + coy)
     else:
@@ -1209,14 +1255,80 @@ def run(args):
     )
 
 
+#: The IO blocks and strips (chipforge, fins a half pitch off the bitcell's
+#: row grid) sit half a nanometre off a tile's own grid.  With the band
+#: abutting them, the tiles and strips carry half a nanometre inside their
+#: masters, which puts every chipforge shape, and so the controller's first
+#: row, on the DEF's grid; the bitcell's own metal takes the half instead.
+HALF_NM = 0.0005
+
 #: Keep-out around a strip in the controller's band: std-cell wells and
 #: implants clear of the slices', and room for the strips' supply pins.
 BAND_HALO_X, BAND_HALO_Y = 0.216, 0.27
-#: The band's rows stop this far short of the stacks it touches.
-BAND_INSET = 0.108
 
 
-def plan_band(args, pair_masters, strip_placements, band_width, pair_height):
+@functools.cache
+def _bitcell_row():
+    """The bitcell's row pitch and the IO blocks' fin-grid offset in it, um."""
+    bitcell = next(c for c in gdstk.read_gds(str(REPO / "tech/gds/sram_cell_8t.gds")).cells
+                   if c.name == "sram_cell_8t")  # fmt: skip
+    _, y0, _, y1 = columns.boundary_box(bitcell)
+    return y1 - y0, columns.fin_grid_offset(bitcell) / 1000
+
+
+def band_seams():
+    """How far into an end tile the band reaches over its IO columns: ``(lower, upper)``.
+
+    The lower stack's last tile ends a dummy row above its IO blocks, whose
+    top edge sits the fin-grid offset above the array's last row; the upper
+    stack's first tile starts a dummy row below its blocks' bottom edge,
+    which sits the offset above the array's first row.
+    """
+    pitch, offset = _bitcell_row()
+    return pitch - offset, pitch + offset
+
+
+def end_row_spans(tile, shared_b):
+    """x ranges of a tile's dummy rows (over its cap and array), in the tile."""
+    half = tile.references[0].cell if shared_b else tile
+    spans = []
+    for ref in half.references:
+        for inner in ([ref] if ref.cell.name.startswith("dp_array_end_rows") else []):
+            (x0, _), (x1, _) = inner.bounding_box()
+            spans.append((round(float(x0), 4), round(float(x1), 4)))
+    width = columns.boundary_box(tile)[2]
+    if shared_b:
+        spans += [(round(width - x1, 4), round(width - x0, 4)) for x0, x1 in spans]
+    return sorted(spans)
+
+
+def notch_band_edges(tile, spans):
+    """Cut the tile's outline back to its IO blocks over the IO columns, at each end with a dummy row."""
+    pitch, offset = _bitcell_row()
+    x0, y0, x1, y1 = columns.boundary_box(tile)
+    rows_top = y1 - pitch if y1 > 4 * pitch + 1e-6 else None  # a dummy row above the array
+    rows_bottom = y0 + pitch if y0 < -1e-6 else None
+    cut = []
+    for edge, io_edge in ((rows_top, None if rows_top is None else rows_top + offset),
+                          (rows_bottom, None if rows_bottom is None else rows_bottom + offset)):  # fmt: skip
+        if edge is None:
+            continue
+        band = (io_edge, y1) if edge is rows_top else (y0, io_edge)
+        cut.append(gdstk.rectangle((x0, band[0]), (x1, band[1])))
+    if not cut:
+        return
+    keep = [gdstk.rectangle((a, y0), (b, y1)) for a, b in spans]
+    outline = gdstk.boolean(
+        gdstk.boolean(gdstk.rectangle((x0, y0), (x1, y1)), gdstk.boolean(cut, keep, "not"), "not"), [], "or"
+    )
+    if len(outline) != 1:
+        raise RuntimeError(f"{tile.name}: the notched outline is not one polygon")
+    tile.remove(*[p for p in tile.polygons if p.layer == 100 and p.datatype == 0])
+    outline[0].layer = 100
+    tile.add(outline[0])
+
+
+def plan_band(args, pair_masters, strip_placements, band_width, pair_height, keepouts, seams):
     """What the controller's place-and-route needs to take the strips into its band.
 
     ``strips.lef`` holds the strips' abstracts; ``plan.txt`` the band's
@@ -1225,19 +1337,38 @@ def plan_band(args, pair_masters, strip_placements, band_width, pair_height):
     fixed physical instances, connects their SEL/B pins to the controller's
     ``sel_hi``/``sel_lo`` ports so it routes them, and removes the instances
     before the controller is written out.
+
+    The band's bottom and top edges are the stacks' IO block edges (`seams`
+    into the end tiles), so its rows start and end on the blocks' VSS rails;
+    over the caps and arrays the end tiles' dummy rows reach into it, and a
+    keep-out block (all of M1-M5 obstructed) stands on each (`keepouts`,
+    ``(x0, x1, side)``), removed with the strips.
     """
     out = args.plan_band
     out.mkdir(parents=True, exist_ok=True)
+    seam_lo, seam_hi = seams
+    keepout_lef, masters = [], {}
+    for x0, x1, side in keepouts:
+        size = (round(x1 - x0, 4), seam_lo if side == "lo" else seam_hi)
+        if size not in masters:
+            name = f"dp_band_keepout_{len(masters)}"
+            masters[size] = name
+            obs = "\n".join(f"    LAYER M{m} ;\n    RECT 0 0 {size[0]:.4f} {size[1]:.4f} ;" for m in range(1, 6))
+            keepout_lef.append(f"MACRO {name}\n  CLASS BLOCK ;\n  ORIGIN 0 0 ;\n"
+                               f"  SIZE {size[0]:.4f} BY {size[1]:.4f} ;\n  OBS\n{obs}\n  END\nEND {name}")  # fmt: skip
     (out / "strips.lef").write_text(
         'VERSION 5.8 ;\nBUSBITCHARS "[]" ;\nDIVIDERCHAR "/" ;\n'
-        + "\n".join(m[2] for m in pair_masters.values()) + "\nEND LIBRARY\n"
+        + "\n".join([*(m[2] for m in pair_masters.values()), *keepout_lef]) + "\nEND LIBRARY\n"
     )
     placed = strip_placements(0.0)
-    reserved = sum((pair_masters[drawn][3][0] + 2 * BAND_HALO_X) * (pair_height + BAND_HALO_Y - BAND_INSET)
+    reserved = sum((pair_masters[drawn][3][0] + 2 * BAND_HALO_X) * (pair_height + BAND_HALO_Y)
                    for _, drawn, _, _, _ in placed)  # fmt: skip
+    reserved += sum((x1 - x0 + 2 * BAND_HALO_X) * (seam_lo if side == "lo" else seam_hi)
+                    for x0, x1, side in keepouts)  # fmt: skip
     (out / "plan.txt").write_text(
-        f"width {band_width:.4f}\nreserved {reserved:.4f}\ninset {BAND_INSET}\n"
+        f"width {band_width:.4f}\nreserved {reserved:.4f}\ninset 0\n"
         f"halo_x {BAND_HALO_X}\nhalo_y {BAND_HALO_Y}\n"
+        f"seam_lo {seam_lo:.4f}\nseam_hi {seam_hi:.4f}\n"
     )
     tcl = [
         "# Generated by compile_asap7_2rw.py --plan-band: the wordline strips in the controller's band.",
@@ -1249,11 +1380,22 @@ def plan_band(args, pair_masters, strip_placements, band_width, pair_height):
         "  set dbu [$block getDbUnitsPerMicron]",
     ]
     for inst, drawn, bank, half, (x, y) in placed:
-        # strip_placements(0) puts an upper pair `pair_height` below a zero-height band's top.
+        # strip_placements(0) puts an upper pair `pair_height` below a zero-height
+        # band's top; the strips' LEF carries half a nanometre of the placement.
+        y = round(y - HALF_NM, 4)
         y_expr = f"{y:.4f}" if half == "lo" else f"$die_height + ({y:.4f})"
         tcl += [
             f"  set inst [odb::dbInst_create $block [[ord::get_db] findMaster dp_wl_strips_{drawn}] {inst}]",
             f"  $inst setLocation [expr {{round({x:.4f} * $dbu)}}] [expr {{round(({y_expr}) * $dbu)}}]",
+            "  $inst setPlacementStatus FIRM",
+            "  lappend band_strips $inst",
+        ]
+    for k, (x0, x1, side) in enumerate(keepouts):
+        size = (round(x1 - x0, 4), seam_lo if side == "lo" else seam_hi)
+        y_expr = "0" if side == "lo" else f"$die_height - {seam_hi:.4f}"
+        tcl += [
+            f"  set inst [odb::dbInst_create $block [[ord::get_db] findMaster {masters[size]}] KEEPOUT_{k}]",
+            f"  $inst setLocation [expr {{round({x0:.4f} * $dbu)}}] [expr {{round(({y_expr}) * $dbu)}}]",
             "  $inst setPlacementStatus FIRM",
             "  lappend band_strips $inst",
         ]

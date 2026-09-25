@@ -386,8 +386,12 @@ dict for {net pins} $dp_reset_nets {
         // Timing is closed on the ports' SDC loads; now route the select
         // outputs onto the strips' pins themselves.
         file << "band_connect_strips\n";
+        // The strips have no timing model: timing-driven global routing
+        // asks STA for their nets' slack and crashes once it maze-routes.
+        file << "global_route -critical_nets_percentage 0\n";
+    } else {
+        file << "global_route\n";
     }
-    file << "global_route\n";
     file << "detailed_route -output_drc detailed_route_drc.rpt\n\n";
     if (!single_port) {
         file << "if {![file exists detailed_route_drc.rpt] || [file size detailed_route_drc.rpt] != 0} { error \"PERIPHERY_DRC: routing violations remain\" }\n";

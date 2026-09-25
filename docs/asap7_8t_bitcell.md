@@ -689,27 +689,53 @@ two stacks and the strips sit inside it:
   writes the band's width, the core area the strips and their halos take, the
   strips' abstracts (`strips.lef`) and `band.tcl`;
 * the controller's place-and-route (`OpenRoadManager`) sizes the die from its
-  cells at the utilization cap plus that keep-out, places the strips at its
-  bottom and top edges as fixed physical instances, cuts the rows around them
-  (`cut_rows`, and `tapcell` with the same halos: 0.216 um across, one row
-  along), and keeps its rows 0.108 um short of the edges the tiles touch. Its
-  pins stand on the side edges only. After timing closure on the ports' SDC
-  loads it connects every strip's `SEL`/`B<j>` pin to its `sel_hi`/`sel_lo`
-  port net, routes them, and removes the instances before writing out, so
-  its GDS keeps only the wires it landed on the strip pins;
+  cells at the utilization cap plus that keep-out, places the strips as fixed
+  physical instances, and cuts the rows around them (`cut_rows`, and
+  `tapcell` with the same halos: 0.216 um across, one row along). Its pins
+  stand on the side edges only. After timing closure on the ports' SDC loads
+  it connects every strip's `SEL`/`B<j>` pin to its `sel_hi`/`sel_lo` port
+  net, routes them (`global_route -critical_nets_percentage 0`: the strips
+  have no timing model, and timing-driven routing asks STA for their slack
+  and crashes), and removes the instances before writing out, so its GDS
+  keeps only the wires it landed on the strip pins;
 * the assembler (`--band DIR`, reading back `die.txt`) abuts the stacks to
   the band's edges and puts the strips where the plan did. The select nets
   are joined by the controller's own wires, so like the wordlines they are
   probed by the connectivity gate and not routed again.
 
-`sram_x4x2x2` shared: 7.99 x 14.42 um against 7.94 x 16.31 um (-11 %); the
-band is 6.70 um where controller, strips and channels took 8.55. Strict LVS
-matches; DRC 559 against 562, with nothing between the strips and the
-controller's cells (one `M1.S.2` where top-level supply routing reaches a
-strip's rail inside its halo); both Xyce programs pass as before. The rows cut
-around the strips are fragmented enough that the controller does not
-legalize at 50 % (one flop finds no gap after clock-tree and hold repair), so
-it builds on the 44 % retry.
+The band's edges are the stacks' IO block edges, not the tiles'. An end tile
+carries a dummy row above (below) its array, but its IO blocks are four rows
+tall, so over the IO columns the tile was a dummy row of empty space. The
+IO blocks already keep standard-cell conventions at their edges: the gate
+grid 27 nm (mod 54) from the tile's edge, the gate cut centred on the edge,
+the first fin 13.5 nm in, an 18 nm VSS rail on the edge and the p-well
+against it. So the band starts at the lower stack's IO top edge (0.5805 um
+into its last tile) and ends at the upper stack's IO bottom edge (0.6075 um
+into its first), with its first row N and its last FS: the gates run
+straight through a shared gate cut, the fins stay on pitch and the rails
+merge. Over each half's cap and array the dummy row reaches into the band;
+a keep-out block (M1-M5 obstructed) stands on it, removed with the strips,
+and the end tiles' outline steps back to the IO blocks over the IO columns.
+
+The IO blocks and strips sit half a fin pitch off the bitcell's row grid,
+so on a tile's own grid they are at half nanometres; abutting them to a
+controller on the DEF's 1 nm grid left their rails, local interconnect and
+fins half a nanometre apart (`V0.LIG.EN.4` at every gate pitch along both
+seams, `FIN.S.1`). The tiles and strips therefore carry half a nanometre
+inside their masters (`abstract(..., shift=)`), which puts every chipforge
+shape, and the controller's first row, on the grid, and the bitcell's own
+metal on the half. A shifted master offers as supply pins only shapes on the
+grid in M1-M3 (M4 up may not bend, and a landing half a nanometre off a
+shape leaves a sliver), and its obstructions are grown a nanometre.
+(Shifting the controller instead put its M4 pins half a nanometre off every
+landing: 138 `M4.AUX.3` bends; its pins on M2 did not route.)
+
+`sram_x4x2x2` shared: 7.99 x 13.02 um, against 7.94 x 16.31 um without the
+band (-20 %); the band is 6.48 um where controller, strips and channels took
+8.55, and the extra room lets the controller legalize at 50 %. Strict LVS
+matches; DRC 537 against 562, nothing at the seams. The band abuts one tile
+column so far: with several banks or pairs the stride would also have to keep
+the gate grid, a multiple of 54 nm.
 
 `scripts/mapped_verilog_to_spice.py` parses the routed controller through
 Yosys and orders every instance using the actual CDL formal pins, including

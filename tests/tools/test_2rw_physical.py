@@ -232,6 +232,31 @@ class PhysicalMacroTests(unittest.TestCase):
             self.assertIn("{sel_hi_B[1]}", tcl)  # bank 1's slice
             self.assertNotIn("findBTerm {wl_", tcl)  # wordlines stay abutted
             self.assertIn("odb::dbInst_destroy", tcl)
+            # The band's edges are the IO blocks' edges, a dummy row less a
+            # half fin pitch into the lower tile, plus one into the upper.
+            self.assertEqual((plan["inset"], plan["seam_lo"], plan["seam_hi"]), ("0", "0.5805", "0.6075"))
+            # A keep-out on each half's dummy rows, at each edge.
+            self.assertEqual(tcl.count("] KEEPOUT_"), 4)
+            # The lower strips stand on the dummy row, on the nanometre grid.
+            self.assertIn("round((0.5710) * $dbu)", tcl)
+
+    def test_an_end_tile_stops_at_its_io_blocks_over_the_io_columns(self):
+        import generate_asap7_8t_iocolumn as columns
+        from compile_asap7_2rw import end_row_spans, notch_band_edges
+
+        tile = build_leaf(4, 4, bottom=True, top=True, shared_b=True)
+        spans = end_row_spans(tile, True)
+        self.assertEqual(len(spans), 2)  # each half's dummy rows
+        notch_band_edges(tile, spans)
+        (outline,) = [p for p in tile.polygons if p.layer == 100]
+        x0, y0, x1, y1 = columns.boundary_box(tile)
+        self.assertEqual((y0, y1), (-0.594, 2.97))  # the dummy rows still bound it
+        inside = lambda x, y: gdstk.inside([(x, y)], [outline])[0]  # noqa: E731
+        self.assertTrue(inside(sum(spans[0]) / 2, 2.9))  # over the dummy row
+        self.assertFalse(inside(0.5, 2.9))  # over port A's IO: the band's
+        self.assertTrue(inside(0.5, 2.38))  # the IO block itself
+        self.assertFalse(inside(3.6, -0.3))  # under port B's shared block
+        self.assertTrue(inside(3.6, 0.02))
 
     def test_strip_pair_pins_map_onto_the_controller_and_its_stack(self):
         # NUM_WL = 4: eight wordlines a bank, two slices; bank 1's slices

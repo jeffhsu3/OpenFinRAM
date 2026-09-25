@@ -314,7 +314,7 @@ TEST(OpenRoadTclGeneratorTest, BandTakesTheStripsInAndHandsTheirPinsTheSelects) 
     const auto pins = script.find("place_pins -hor_layers M4 -ver_layers M5 -exclude bottom:* -exclude top:*");
     const auto tap = script.find("tapcell -distance 14 -tapcell_master TAPCELL_ASAP7_75t_R -halo_width_x");
     const auto connect = script.find("band_connect_strips");
-    const auto route = script.find("global_route");
+    const auto route = script.find("global_route -critical_nets_percentage 0");
     const auto remove = script.find("band_remove_strips");
     const auto def = script.find("write_def ctrl_decode.def");
     for (auto at : {place, cut, pins, tap, connect, route, remove, def}) ASSERT_NE(at, std::string::npos);
