@@ -91,7 +91,8 @@ def check(folder):
     lib = gdstk.read_gds(str(folder / f"{name}.gds"))
 
     def cells(cell):
-        if cell.name == "sram_cell_8t":
+        # The storage bitcell and its variant B, which the mirrored slots take.
+        if cell.name in ("sram_cell_8t", "sram_cell_8t_b"):
             return 1
         return sum(
             cells(ref.cell) * max(1, ref.repetition.size) for ref in cell.references

@@ -523,6 +523,9 @@ def build_library(
         "openfinram_asap7_8t_iocolumn", unit=unit, precision=precision
     )
     library.add(bitcell, *(edges[name] for name in sorted(edge_names)))
+    # The arrays' mirrored slots take the bitcell's variant B.
+    if "sram_cell_8t_b" in arrays:
+        library.add(arrays["sram_cell_8t_b"])
     selected_arrays: dict[int, gdstk.Cell] = {}
     for count in wordline_counts:
         row_name = f"sramcol_x{count}_sram_8t"
@@ -564,7 +567,7 @@ def verify_gds(path: Path, wordline_counts: list[int], spice: Path | None = None
         raise RuntimeError(f"{path}: missing sram_cell_8t")
     specs = io_block_specs(bitcell)
     expected = {
-        "sram_cell_8t", "FILLER_BLANK_8t", "FILLER_cgedge_8t",
+        "sram_cell_8t", "sram_cell_8t_b", "FILLER_BLANK_8t", "FILLER_cgedge_8t",
         port_io_name("A"), port_io_name("B"), port_io_name("B2"), "col_cap_x4_sram_8t",
     }
     expected.update(topbot_name(False, my) for my in (False, True))

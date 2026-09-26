@@ -410,7 +410,7 @@ class PhysicalMacroTests(unittest.TestCase):
                 def count(cell):
                     return (
                         1
-                        if cell.name == "sram_cell_8t"
+                        if cell.name in ("sram_cell_8t", "sram_cell_8t_b")
                         else sum(count(ref.cell) for ref in cell.references)
                     )
 
