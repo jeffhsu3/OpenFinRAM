@@ -375,12 +375,12 @@ def build_library(
     )
     library.add(bitcell_8t, bitcell_6t)
     bitcells = {"8t": bitcell_8t, "6t": bitcell_6t}
-    # Variant B for the mirrored slots, where the source has one (an older
-    # bitcell library does not: its mirrored slots take the bitcell).
+    # Variant B is the standard for the mirrored slots: a bitcell library
+    # without it is out of date, not an alternative.
     mirrored = {}
     for contract in CONTRACTS:
-        cell = next((c for c in source_lib_8t.cells if c.name == contract.mirrored_bitcell_name), None)
-        if cell is not None:
+        if contract.mirrored_bitcell_name:
+            _lib, cell = load_cell(source_8t, contract.mirrored_bitcell_name)
             library.add(cell)
             mirrored[contract.key] = cell
 
