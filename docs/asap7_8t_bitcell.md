@@ -724,16 +724,26 @@ fins half a nanometre apart (`V0.LIG.EN.4` at every gate pitch along both
 seams, `FIN.S.1`). The tiles and strips therefore carry half a nanometre
 inside their masters (`abstract(..., shift=)`), which puts every chipforge
 shape, and the controller's first row, on the grid, and the bitcell's own
-metal on the half. A shifted master offers as supply pins only shapes on the
-grid in M1-M3 (M4 up may not bend, and a landing half a nanometre off a
-shape leaves a sliver), and its obstructions are grown a nanometre.
+metal on the half. What a shifted master's LEF says is snapped to the grid
+the safe way, only where a shape has a half-nanometre edge: obstructions
+out, so the router never sees less metal than there is, and pins in, so it
+never lands beyond it (growing every obstruction a nanometre instead crowded
+the strips' own supply pins; leaving them to the LEF reader's rounding let
+the router short supplies in the tiles). As supply pins it offers only shapes
+on the grid in M1-M3 (M4 up may not bend, and a landing half a nanometre off
+a shape leaves a sliver); a component with none, a dummy row's tied stubs,
+keeps its 18 nm landings whole for the reader to round.
 (Shifting the controller instead put its M4 pins half a nanometre off every
 landing: 138 `M4.AUX.3` bends; its pins on M2 did not route.)
 
 `sram_x4x2x2` shared: 7.99 x 13.02 um, against 7.94 x 16.31 um without the
 band (-20 %); the band is 6.48 um where controller, strips and channels took
 8.55, and the extra room lets the controller legalize at 50 %. Strict LVS
-matches; DRC 537 against 562, nothing at the seams. The band abuts one tile
+matches; DRC 547 against 562, nothing at the seams. `sram_x8x8x2` shared:
+8.86 x 27.82 um, against 28.68 with the inset band and 31.54 without (-12 %),
+controller at 50 %, strict LVS, DRC 902 against 876 without the band (router
+classes on M1/M4/M5, the controller's own placement), the spaced program
+passing on all 512 cells. The band abuts one tile
 column so far: with several banks or pairs the stride would also have to keep
 the gate grid, a multiple of 54 nm.
 

@@ -124,12 +124,15 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0)):
         "  SYMMETRY X Y ;",
     ]
 
-    # A shifted cell's metal is half a nanometre off what the LEF can say:
-    # grow its obstructions a nanometre so the router's spacing covers it
-    # (its pins stay as drawn: the router has to land on them).
-    obs_grow = 0.001 if any(shift) else 0.0
+    # A shifted cell's metal has edges half a nanometre off what the LEF can
+    # say.  Snap each shape to the nanometre the safe way: an obstruction
+    # out (the router never sees less metal than there is), a pin in (it
+    # never lands beyond the metal).  Each moves only the half it has: a
+    # quarter-nanometre offset then rounding leaves an edge on the grid
+    # where it is and takes a half-nanometre edge the chosen way.
+    snap = 0.00025 if any(shift) else 0.0
 
-    def geometry(polygons, grow=0.0):
+    def geometry(polygons, outward=True, snapped=True):
         out = []
         by_layer = defaultdict(list)
         for poly in polygons:
@@ -137,10 +140,13 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0)):
         for layer, polys in sorted(by_layer.items()):
             out.append(f"    LAYER {LAYER_NAMES[layer]} ;")
             merged = gdstk.boolean(polys, [], "or", precision=1e-6)
-            if grow:
-                merged = gdstk.offset(merged, grow, join="miter", precision=1e-6)
+            if snap and snapped:
+                merged = gdstk.offset(merged, snap if outward else -snap, join="miter", precision=1e-7)
             for poly in merged:
-                points = " ".join(f"{x - ox:.6f} {y - oy:.6f}" for x, y in poly.points)
+                coords = [(x - ox, y - oy) for x, y in poly.points]
+                if snap and snapped:
+                    coords = [(round(x * 1000) / 1000, round(y * 1000) / 1000) for x, y in coords]
+                points = " ".join(f"{x:.6f} {y:.6f}" for x, y in coords)
                 out.append(f"    POLYGON {points} ;")
         return out
 
@@ -176,12 +182,16 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0)):
             # only what lands on the DEF's nanometre grid: M4 up may not
             # bend, and a landing half a nanometre off a shape leaves a
             # sliver on any layer.
-            access = polys
+            access, exact = polys, True
             if any(shift):
                 on_grid = [p for p in polys if p.layer in METALS[:3] and all(
                     abs(v * 1000 - round(v * 1000)) < 1e-3
                     for x, y in p.points for v in (x - ox, y - oy))]  # fmt: skip
                 access = on_grid or [p for p in polys if p.layer in METALS[:3]] or polys
+                # Nothing on the grid (a dummy row's tied stubs): narrowing
+                # its 18 nm landings to 17 would leave no access; let the
+                # reader round them whole instead.
+                exact = bool(on_grid)
             obstacles.extend(p for p in polys if not any(p is a for a in access))
         else:
             access_layer = max(p.layer for p in polys)
@@ -210,13 +220,13 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0)):
             "    USE SIGNAL ;",
             "    PORT",
         ]
-        lef += geometry(access)
+        lef += geometry(access, outward=False, snapped=net not in ("vdd", "vss") or exact)
         lef += ["    END", f"  END {pin}"]
         polygon = max(access, key=lambda p: p.area())
         point = probe_point(polygon, (ox, oy))
         terminals[pin] = {"net": net, "layer": polygon.layer, "point": point}
     lef += ["  OBS"]
-    lef += geometry(obstacles, obs_grow)
+    lef += geometry(obstacles)
     lef += ["  END", f"END {name}"]
     # Freeze the partition of unnamed internal interconnect too. A route that
     # shorts into a storage node or a controller internal net must fail even
@@ -1167,13 +1177,18 @@ def run(args):
     ]
     (work / "route.tcl").write_text("\n".join(tcl) + "\n")
     with (work / "route.log").open("w") as log:
-        result = subprocess.run(
-            [args.openroad, "-exit", "route.tcl"],
-            cwd=work,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            timeout=args.route_timeout,
-        )
+        try:
+            result = subprocess.run(
+                [args.openroad, "-exit", "route.tcl"],
+                cwd=work,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=args.route_timeout,
+            )
+        except subprocess.TimeoutExpired as error:
+            # A route that does not converge in time is a failed one: widen.
+            raise RoutingFailed(f"macro routing timed out after {args.route_timeout} s; "
+                                f"see {work}/route.log") from error
     if result.returncode:
         raise RoutingFailed(f"macro routing failed; see {work}/route.log")
     # Distribution KLayout bindings may target system Python, while gdstk is
@@ -1476,7 +1491,9 @@ def main():
     parser.add_argument("--output", type=Path)
     parser.add_argument("--openroad", default="openroad")
     parser.add_argument("--route-iterations", type=int, default=64)
-    parser.add_argument("--route-timeout", type=int, default=900)
+    # The band's shifted abstracts leave the router a few stubborn tiles:
+    # x8x8x2 takes about half an hour.
+    parser.add_argument("--route-timeout", type=int, default=3600)
     parser.add_argument("--channel-width", type=float, default=0.3,
                         help="um between the controller and each strip pair")  # fmt: skip
     parser.add_argument("--margin", type=float, default=0.3,

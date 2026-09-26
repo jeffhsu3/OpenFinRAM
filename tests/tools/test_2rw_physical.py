@@ -313,6 +313,28 @@ class PhysicalMacroTests(unittest.TestCase):
                     and any(a < seam - 0.05 and b > seam + 0.05 for seam in seams[:-1])]  # fmt: skip
         self.assertEqual(crossing, [])
 
+    def test_a_shifted_abstract_says_exactly_what_the_metal_covers_on_the_grid(self):
+        from compile_asap7_2rw import HALF_NM
+
+        cell = gdstk.Cell("half")
+        # a signal pin on the grid, one half a nanometre off, an obstruction off it too, and supplies
+        cell.add(gdstk.rectangle((0.1, 0.0), (0.118, 0.2), layer=20), gdstk.rectangle((0.2005, 0.0), (0.2185, 0.2), layer=20))
+        cell.add(gdstk.rectangle((0.3005, 0.0), (0.3185, 0.2), layer=40))
+        # supplies on the grid once shifted up half a nanometre
+        cell.add(gdstk.rectangle((0, 0.2995), (0.4, 0.3175), layer=19), gdstk.rectangle((0, 0.3995), (0.4, 0.4175), layer=19))
+        labels = [gdstk.Label("A", (0.109, 0.1), layer=20), gdstk.Label("B", (0.2095, 0.1), layer=20)]
+        cell.add(*labels, gdstk.Label("VDD", (0.1, 0.309), layer=19), gdstk.Label("VSS", (0.1, 0.409), layer=19))
+        _, _, lef, _ = abstract(cell, "half", labels, shift=(0.0, HALF_NM))
+        values = [float(v) for v in re.findall(r"-?\d+\.\d+", lef.split("SIZE")[1])]
+        self.assertTrue(all(abs(v * 1000 - round(v * 1000)) < 1e-6 for v in values))  # all on the grid
+        pins = {m[0]: m[1] for m in re.findall(r"PIN (P\d+).*?POLYGON ([^;]*);", lef, re.S)}
+        xs = lambda text: sorted({float(v) for v in text.split()[0::2]})  # noqa: E731
+        self.assertEqual(xs(pins["P0"]), [0.1, 0.118])  # on the grid: as drawn
+        self.assertEqual(xs(pins["P1"]), [0.201, 0.218])  # off it: only the metal that is there
+        obs = lef.split("OBS")[1]
+        # an obstruction half a nanometre off: out to cover all of it
+        self.assertEqual(sorted({float(v) for v in re.findall(r"POLYGON ([^;]*)", obs)[0].split()[0::2]}), [0.3, 0.319])
+
     def test_abutted_nets_are_probed_but_not_pins(self):
         cell = gdstk.Cell("abutted")
         cell.add(gdstk.rectangle((0, 0), (0.018, 0.5), layer=30))  # a wordline stub
