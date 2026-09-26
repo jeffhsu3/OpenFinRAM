@@ -99,38 +99,34 @@ class EdgeFrameTests(unittest.TestCase):
             row = arrays.build_row(
                 lib, self.bitcell, arrays.CONTRACTS[0], count, self.tap, tap_pitch
             )
+            reference_end = gdstk.Cell("expected_end")
             width = arrays.boundary_box(self.bitcell)[2] - arrays.boundary_box(self.bitcell)[0]
-            # Where a slot ends up mirrored in x the end row takes variant B's
-            # landings: its base is the x-mirrored master mirrored back.
-            variant = {
-                base: edges.oriented_cell(self.cells[edges.oriented_name(name, True, False)], base + "_b", True, False)
-                for base, name in (("sram_cell_8t_row_cap", "dummy_vertical_8t"),
-                                   ("sram_cell_8t_corner", "sram_cell_8t_corner"))
-            }
-
-            def expected_end(mx):
-                end = gdstk.Cell("expected_end")
-
-                def cap(base, mirrored):
-                    return variant[base] if mirrored != mx else self.cells[base]
-
-                for ref in row.references:
-                    if ref.cell_name == edges.CELL_NAME:
-                        end.add(gdstk.Reference(cap("sram_cell_8t_row_cap", bool(ref.x_reflection)),
-                                                origin=ref.origin, rotation=ref.rotation,
-                                                x_reflection=ref.x_reflection))  # fmt: skip
-                        continue
-                    # A tap is two slots: a corner over each, the second mirrored
-                    # as the bitcell after it would be.
-                    x, y = ref.origin
-                    end.add(gdstk.Reference(cap("sram_cell_8t_corner", False), origin=(x, y)))
-                    end.add(gdstk.Reference(cap("sram_cell_8t_corner", True),
-                                            origin=(x + edges.TAP_SLOTS * width, y),
-                                            rotation=math.pi, x_reflection=True))  # fmt: skip
-                edges.rect(end, arrays.boundary_box(row), edges.BOUNDARY)
-                return end
-
+            for ref in row.references:
+                if ref.cell_name == edges.CELL_NAME:
+                    reference_end.add(
+                        gdstk.Reference(
+                            self.cells["sram_cell_8t_row_cap"],
+                            origin=ref.origin,
+                            rotation=ref.rotation,
+                            x_reflection=ref.x_reflection,
+                        )
+                    )
+                    continue
+                # A tap is two slots: a corner over each, the second mirrored
+                # as the bitcell after it would be.
+                corner = self.cells["sram_cell_8t_corner"]
+                x, y = ref.origin
+                reference_end.add(gdstk.Reference(corner, origin=(x, y)))
+                reference_end.add(
+                    gdstk.Reference(
+                        corner,
+                        origin=(x + edges.TAP_SLOTS * width, y),
+                        rotation=math.pi,
+                        x_reflection=True,
+                    )
+                )
             boundary = arrays.boundary_box(row)
+            edges.rect(reference_end, boundary, edges.BOUNDARY)
             for mx, my in edges.ORIENTATIONS:
                 with self.subTest(count=count, tap_pitch=tap_pitch, mx=mx, my=my):
                     end = edges.build_dummy_vertical_array(
@@ -148,7 +144,7 @@ class EdgeFrameTests(unittest.TestCase):
                         )
                     )
                     expected = gdstk.Reference(
-                        expected_end(mx),
+                        reference_end,
                         origin=(boundary[2] if mx else 0, boundary[3] if my else 0),
                         rotation=math.pi if mx else 0,
                         x_reflection=mx != my,

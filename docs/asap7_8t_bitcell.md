@@ -50,26 +50,6 @@ ASAP7 pull-down devices already present in the published core.
 The matching schematic is `tech/spice/sram_cell_8t.sp`, which is also the
 topology emitted by `SpiceTemplates::get_cell_8t()`.
 
-### Variant B: the mirrored slots' WLB landings
-
-Each WLB gate contact reaches the M5 trunk over an M4 landing, from V3 on
-its M3 bridge to the V4 under the trunk. A column places the cell mirrored
-in every other slot, so at every other seam two neighbours' landings, on
-different wordlines, meet face to face on one track. In a 108 nm cell an
-84 nm landing (the LEF's M4 area) cannot stand 20 nm (half the 40 nm
-tip-to-tip, `M4.S.2`) from both seams; nor could it enclose its V3 by the
-11 nm `V3.M4.EN.2` wants, V3 sitting 9 nm from the seam. So the arrays put
-`sram_cell_8t_b` in the mirrored slots: the same cell, every shape a
-neighbour or the array sees unchanged, but with its landings on other M4
-tracks (-0.036 um, bridged east on M3 to x 0.090, and 0.300, its bridge run
-down), so no two neighbours' landings share a track
-(`WLB_LANDINGS` in `generate_asap7_8t_bitcell.py`). Both variants' landings
-now enclose V3 and V4 by 11 nm. The end rows' masters mirrored in x
-(`dummy_vertical_8t_lr`, `sram_cell_8t_corner_lr` and their `_v2`) are built
-from the variant the same way. In a tapped array this clears every
-`M4.S.2` and `V3.M4.EN.2`, the `M3.S.2` and half the `M3.S.6`; the shared
-`sram_x4x2x2` went from 516 to 392 markers, strict LVS still matching.
-
 ## Edge-cell family
 
 The edge library follows the roles of OpenRAM's public `openram_dp_cell_dummy`,

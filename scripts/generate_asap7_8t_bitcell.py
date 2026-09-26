@@ -303,16 +303,9 @@ def add_via_stack_to_m4(
 
 
 def add_gate_to_m5(
-    cell: gdstk.Cell, gate_via_x: float, bridge_x: float, y: float,
-    landing_y: float | None = None,
+    cell: gdstk.Cell, gate_via_x: float, bridge_x: float, y: float
 ) -> None:
-    """Connect an LIG wordline contact to the vertical WLB route on M5.
-
-    The contact climbs to M2, runs to the M3 bridge, and the bridge carries
-    it to the M4 landing on `landing_y` (the contact's own track unless
-    given), where a V4 reaches the WLB trunk.
-    """
-    landing_y = y if landing_y is None else landing_y
+    """Connect an LIG wordline contact to the vertical WLB route on M5."""
     rect(cell, (gate_via_x - 0.009, y - 0.009,
                 gate_via_x + 0.009, y + 0.009), V0)
     rect(cell, (gate_via_x - 0.009, y - 0.019,
@@ -323,20 +316,13 @@ def add_gate_to_m5(
                 max(gate_via_x, bridge_x) + 0.014, y + 0.009), M2)
     rect(cell, (bridge_x - 0.009, y - 0.009,
                 bridge_x + 0.009, y + 0.009), V2)
-    rect(cell, (bridge_x - 0.009, min(y, landing_y) - 0.017,
-                bridge_x + 0.009, max(y, landing_y) + 0.017), M3)
-    rect(cell, (bridge_x - 0.009, landing_y - 0.012,
-                bridge_x + 0.009, landing_y + 0.012), V3)
-    # The M4 landing runs from V3 to the V4 under the trunk, 11 nm past
-    # each (V3.M4.EN.2), and at least 2,000 nm^2 on the 48 nm grid.
-    v4 = (0.048, 0.072)
-    x0 = min(bridge_x - 0.009, v4[0]) - 0.011
-    x1 = max(bridge_x + 0.009, v4[1]) + 0.011
-    if x1 - x0 < 0.084:
-        x1 = x0 + 0.084 if bridge_x < v4[0] else x1
-        x0 = x1 - 0.084 if bridge_x > v4[1] else x0
-    rect(cell, (x0, landing_y - 0.012, x1, landing_y + 0.012), M4)
-    rect(cell, (v4[0], landing_y - 0.012, v4[1], landing_y + 0.012), V4)
+    rect(cell, (bridge_x - 0.009, y - 0.017,
+                bridge_x + 0.009, y + 0.017), M3)
+    rect(cell, (bridge_x - 0.009, y - 0.012,
+                bridge_x + 0.009, y + 0.012), V3)
+    # At least 2,000 nm^2 of M4, on the 48 nm routing grid.
+    rect(cell, (0.003, y - 0.012, 0.087, y + 0.012), M4)
+    rect(cell, (0.048, y - 0.012, 0.072, y + 0.012), V4)
 
 
 def add_wla_routes(cell: gdstk.Cell) -> None:
@@ -419,35 +405,21 @@ def add_storage_straps(cell: gdstk.Cell) -> None:
     )
 
 
-#: M4 tracks of the two WLB landings: the cell's, and variant B's.  Mirrored
-#: neighbours meet at a seam with their landings face to face; a 108 nm cell
-#: cannot hold an 84 nm landing 20 nm (half the 40 nm tip-to-tip) from both
-#: seams, so a column alternates the cell (unmirrored) with variant B
-#: (mirrored), whose landings are on other tracks: the lower one bridged
-#: east on M3 to -0.036, the upper one down its bridge to 0.300.  Both
-#: variants keep every shape a neighbour or the array sees.
-WLB_LANDINGS = {False: (-0.132, 0.396), True: (-0.036, 0.300)}
-VARIANT_B_NAME = CELL_NAME + "_b"
-
-
-def add_wlb_routes(cell: gdstk.Cell, variant: bool = False) -> None:
+def add_wlb_routes(cell: gdstk.Cell) -> None:
     """Add the two WLB gate contacts and their common M5 route."""
     rect(cell, (0.017, -0.140, 0.054, -0.124), LIG)
     rect(cell, (0.054, 0.388, 0.086, 0.404), LIG)
-    lower, upper = WLB_LANDINGS[variant]
     add_gate_to_m5(
         cell,
         gate_via_x=0.0395,
-        bridge_x=0.090 if variant else 0.018,
+        bridge_x=0.018,
         y=-0.132,
-        landing_y=lower,
     )
     add_gate_to_m5(
         cell,
         gate_via_x=0.0685,
         bridge_x=0.018,
         y=0.396,
-        landing_y=upper,
     )
     rect(cell, WLB_M5, M5)
 
@@ -457,7 +429,7 @@ def add_storage_straps_and_wla(cell: gdstk.Cell) -> None:
     add_storage_straps(cell)
 
 
-def add_port_b(cell: gdstk.Cell, variant: bool = False) -> None:
+def add_port_b(cell: gdstk.Cell) -> None:
     """Add the two access devices and their independent B-side routing."""
     # Two-fin access devices.  Their storage-side LISD terminals extend the
     # core's Q/QB local-interconnect rails; the outside terminals are BLBN/BLB.
@@ -496,7 +468,7 @@ def add_port_b(cell: gdstk.Cell, variant: bool = False) -> None:
 
     # WLB gate stacks occupy the neighboring M4 tracks, leaving exactly the
     # required 24 nm M4 spacing to the port-B bitlines.
-    add_wlb_routes(cell, variant)
+    add_wlb_routes(cell)
 
     cell.add(gdstk.Label("BLBN", (-0.018, -0.084), layer=M4,
                            texttype=PIN_TEXTTYPE))
@@ -519,23 +491,21 @@ def build_cell(source_gds: Path) -> gdstk.Library:
 
     lib = gdstk.Library("openfinram_asap7_8t", unit=source_lib.unit,
                         precision=source_lib.precision)
-    # The cell, and variant B for the mirrored slots of a column (WLB_LANDINGS).
-    for name, variant in ((CELL_NAME, False), (VARIANT_B_NAME, True)):
-        cell = lib.new_cell(name)
-        clone_base(source, cell)
-        add_storage_straps_and_wla(cell)
-        add_port_b(cell, variant)
+    cell = lib.new_cell(CELL_NAME)
+    clone_base(source, cell)
+    add_storage_straps_and_wla(cell)
+    add_port_b(cell)
 
-        for layer in sorted(MARKER_LAYERS):
-            rect(cell, MARKER, layer)
+    for layer in sorted(MARKER_LAYERS):
+        rect(cell, MARKER, layer)
 
-        # Maintain exact 27 nm fin pitch throughout the expanded SRAM marker.
-        existing_centers = {round((bbox(p)[1] + bbox(p)[3]) / 2, 6)
-                            for p in cell.polygons if p.layer == FIN and p.datatype == 0}
-        for index in range(-6, 17):
-            center = round(index * 0.027, 6)
-            if center not in existing_centers:
-                rect(cell, (-0.027, center - 0.0035, 0.135, center + 0.0035), FIN)
+    # Maintain exact 27 nm fin pitch throughout the expanded SRAM marker.
+    existing_centers = {round((bbox(p)[1] + bbox(p)[3]) / 2, 6)
+                        for p in cell.polygons if p.layer == FIN and p.datatype == 0}
+    for index in range(-6, 17):
+        center = round(index * 0.027, 6)
+        if center not in existing_centers:
+            rect(cell, (-0.027, center - 0.0035, 0.135, center + 0.0035), FIN)
 
     return lib
 
@@ -679,48 +649,42 @@ def build_edge_library(
     # mask/load continuity, but ACTIVE is deliberately absent, so this cell is
     # electrically empty just like OpenRAM's cap_row.
     row_cap = lib.new_cell("sram_cell_8t_row_cap")
-    # The masters mirrored in x stand in a row where the bitcell would be
-    # mirrored, so they take variant B's WLB landings (WLB_LANDINGS).
-    row_cap_b = gdstk.Cell("sram_cell_8t_row_cap_b")
-    for cap, variant in ((row_cap, False), (row_cap_b, True)):
-        add_process_frame(bitcell, cap)
-        add_ground_rails(bitcell, cap)
-        add_wla_routes(cap)
-        add_wlb_routes(cap, variant)
-        cap.add(
-            gdstk.Label("WLA", (0.054, -0.028), layer=M3,
-                         texttype=PIN_TEXTTYPE),
-            gdstk.Label("WLB", (0.060, -0.150), layer=M5,
-                         texttype=PIN_TEXTTYPE),
-        )
-        copy_labels(bitcell, cap, {"vss!"})
+    add_process_frame(bitcell, row_cap)
+    add_ground_rails(bitcell, row_cap)
+    add_wla_routes(row_cap)
+    add_wlb_routes(row_cap)
+    row_cap.add(
+        gdstk.Label("WLA", (0.054, -0.028), layer=M3,
+                     texttype=PIN_TEXTTYPE),
+        gdstk.Label("WLB", (0.060, -0.150), layer=M5,
+                     texttype=PIN_TEXTTYPE),
+    )
+    copy_labels(bitcell, row_cap, {"vss!"})
 
     # Corner cap carries both sets of terminating routes, all grounded, but no
     # ACTIVE. Bake each orientation into a separate master: placement must
     # select the matching process-band orientation, not mirror a reference.
     corner = lib.new_cell("sram_cell_8t_corner")
-    corner_b = gdstk.Cell("sram_cell_8t_corner_b")
-    for cap, variant in ((corner, False), (corner_b, True)):
-        add_process_frame(bitcell, cap)
-        add_full_rails(bitcell, cap)
-        add_wla_routes(cap)
-        add_wlb_routes(cap, variant)
-        copy_labels(
-            bitcell,
-            cap,
-            {"BLA", "BLAN", "BLB", "BLBN", "vdd!", "vss!"},
-            {"BLA": "vss!", "BLAN": "vss!", "BLB": "vss!", "BLBN": "vss!"},
-        )
-        cap.add(
-            gdstk.Label("vss!", (0.054, -0.028), layer=M3,
-                         texttype=PIN_TEXTTYPE),
-            gdstk.Label("vss!", (0.060, -0.150), layer=M5,
-                         texttype=PIN_TEXTTYPE),
-        )
+    add_process_frame(bitcell, corner)
+    add_full_rails(bitcell, corner)
+    add_wla_routes(corner)
+    add_wlb_routes(corner)
+    copy_labels(
+        bitcell,
+        corner,
+        {"BLA", "BLAN", "BLB", "BLBN", "vdd!", "vss!"},
+        {"BLA": "vss!", "BLAN": "vss!", "BLB": "vss!", "BLBN": "vss!"},
+    )
+    corner.add(
+        gdstk.Label("vss!", (0.054, -0.028), layer=M3,
+                     texttype=PIN_TEXTTYPE),
+        gdstk.Label("vss!", (0.060, -0.150), layer=M5,
+                     texttype=PIN_TEXTTYPE),
+    )
     for mx, my in ORIENTATIONS:
         if mx or my:
-            lib.add(oriented_cell(corner_b if mx else corner, oriented_name(corner.name, mx, my), mx, my))
-        lib.add(oriented_cell(row_cap_b if mx else row_cap, oriented_name("dummy_vertical_8t", mx, my), mx, my))
+            lib.add(oriented_cell(corner, oriented_name(corner.name, mx, my), mx, my))
+        lib.add(oriented_cell(row_cap, oriented_name("dummy_vertical_8t", mx, my), mx, my))
         lib.add(oriented_cell(col_cap, topbot_name(mx, my), mx, my))
 
     # Like FILLER_BLANK_6t122, the blank is a half-width FIN/poly tile with
@@ -1547,27 +1511,15 @@ def verify_rules(cell: gdstk.Cell) -> None:
     _assert(not uncovered_sdt, "SDT must be completely contained by LISD")
 
 
-def wlb_landing_tracks(cell: gdstk.Cell) -> set[float]:
-    """y of every M4 shape that is not a full-width bitline: the WLB landings."""
-    return {round((bbox(p)[1] + bbox(p)[3]) / 2, 4) for p in _layer_polygons(cell, M4)
-            if not is_bitline_m4_rail(p)}
-
-
 def verify_gds(path: Path) -> str:
     lib = gdstk.read_gds(str(path))
-    cells = {candidate.name: candidate for candidate in lib.cells}
-    _assert(set(cells) == {CELL_NAME, VARIANT_B_NAME},
-            f"{path} must contain {CELL_NAME} and {VARIANT_B_NAME}, found {sorted(cells)}")
-    for cell in cells.values():
-        verify_rules(cell)
-        verify_topology(cell)
-    # A column alternates the two, mirrored: their WLB landings must not share
-    # a track, or they meet face to face at every other seam.
-    tracks = {name: wlb_landing_tracks(cell) for name, cell in cells.items()}
-    _assert(tracks[CELL_NAME] == set(WLB_LANDINGS[False]) and tracks[VARIANT_B_NAME] == set(WLB_LANDINGS[True]),
-            f"WLB landings are not on their tracks: {tracks}")
-    _assert(not tracks[CELL_NAME] & tracks[VARIANT_B_NAME], "the variants' WLB landings share a track")
-    return hashlib.sha256("".join(polygon_fingerprint(cells[n]) for n in sorted(cells)).encode()).hexdigest()
+    cell = next((candidate for candidate in lib.cells if candidate.name == CELL_NAME), None)
+    if cell is None:
+        raise ValueError(f"{CELL_NAME!r} not found in {path}")
+    _assert(len(lib.cells) == 1, f"{path} must contain only {CELL_NAME}")
+    verify_rules(cell)
+    verify_topology(cell)
+    return polygon_fingerprint(cell)
 
 
 def verify_strap_topology(strap: gdstk.Cell, tap: gdstk.Cell) -> None:
@@ -1706,24 +1658,10 @@ def verify_edge_gds(path: Path, row_counts: tuple[int, ...] = (64,)) -> dict[str
                 for poly in _layer_polygons(row_cap, M5)),
             "row cap is missing the full-height WLB M5 trunk")
 
-    # The masters mirrored in x are built from variant B (WLB_LANDINGS): their
-    # canonical is the x-mirrored master restored, which must keep the row
-    # cap's and corner's routes identical as the plain ones do, and take
-    # the variant's landings.
-    row_cap_b = oriented_cell(cells[oriented_name("dummy_vertical_8t", True, False)], row_cap.name, True, False)
-    corner_b = oriented_cell(cells[oriented_name("sram_cell_8t_corner", True, False)], corner.name, True, False)
-    _assert(
-        filtered_polygon_fingerprint(row_cap_b, wordline_predicate)
-        == filtered_polygon_fingerprint(corner_b, wordline_predicate),
-        "variant row and corner cap wordline routes do not abut identically",
-    )
-    _assert(wlb_landing_tracks(row_cap) == set(WLB_LANDINGS[False])
-            and wlb_landing_tracks(row_cap_b) == set(WLB_LANDINGS[True]),
-            "the x-mirrored edge masters do not take variant B's WLB landings")
     for mx, my in ORIENTATIONS:
         for name, kind, canonical in (
-            (oriented_name("dummy_vertical_8t", mx, my), "row", row_cap_b if mx else row_cap),
-            (oriented_name("sram_cell_8t_corner", mx, my), "corner", corner_b if mx else corner),
+            (oriented_name("dummy_vertical_8t", mx, my), "row", row_cap),
+            (oriented_name("sram_cell_8t_corner", mx, my), "corner", corner),
             (topbot_name(mx, my), "col", col_cap),
         ):
             cell = cells[name]
