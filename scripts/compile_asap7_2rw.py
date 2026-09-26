@@ -947,6 +947,8 @@ def run(args):
     ctrl_lib = gdstk.read_gds(str(args.controller))
     ctrl = next(c for c in ctrl_lib.cells if c.name == "ctrl_decode")
     add_pin_conductors(ctrl)
+    # Its router did not know the run-length rule either.
+    ctrl_prl = fix_short_parallel_runs(ctrl)
     ctrl_labels = [
         label
         for label in ctrl.labels
@@ -1217,6 +1219,9 @@ def run(args):
     # KLayout writes DEF BPin rectangles on purpose 251. They are real
     # conductor landings as well as LEF pin markers, not label-only geometry.
     add_pin_conductors(top)
+    # The router does not know ASAP7's run-length rule on M4-M7; the gate
+    # below proves the lengthened wires changed no net.
+    top_prl = fix_short_parallel_runs(top)
     lib.write_gds(str(work / "routed.gds"), timestamp=columns.FIXED_GDS_TIMESTAMP)
     # No final artifact is published until every physical terminal is joined
     # to its net and every distinct named net remains isolated.
@@ -1255,6 +1260,8 @@ def run(args):
         "wordline_strip_pairs": 2 * args.banks,
         "checked_net_partitions": len(probes),
         "routing_drc_violations": 0,
+        "short_parallel_runs_fixed": {"controller": ctrl_prl[0], "macro": top_prl[0]},
+        "short_parallel_runs_left": ctrl_prl[1] + top_prl[1],
         "physical_connectivity": "PASS",
         "signoff_lvs": "not_run",
         "device_drc": "not_run",
@@ -1433,6 +1440,109 @@ def band_die(band):
     """The controller's die, as its place-and-route wrote it beside the plan: ``(width, height)``."""
     values = dict(line.split() for line in (band / "die.txt").read_text().splitlines() if line.strip())
     return float(values["width"]), float(values["height"])
+
+
+#: ASAP7's run-length rule on the one-direction layers M4-M7 (M4.S.5 ...):
+#: two wires on adjacent tracks either do not overlap or overlap by 44 nm.
+#: The router does not know it; `fix_short_parallel_runs` mends its wires.
+PRL_LAYERS = {40: True, 50: False, 60: True, 70: False}  # layer: horizontal
+MIN_PRL, ADJACENT_GAP, TIP_SPACE = 44, 25, 40  # nm
+
+
+def fix_short_parallel_runs(top):
+    """Lengthen the macro's own wires where two on adjacent tracks overlap by under 44 nm.
+
+    Of each such pair, a wire the router drew (never a block's metal) is
+    extended along its track just far enough to overlap its neighbour by
+    44 nm, if its track is clear (tip-to-tip spacing) and the extension
+    leaves every other neighbour it now runs beside either clear of it or
+    at 44 nm.  The extension is the wire's own metal, so no net changes.
+    Returns ``(fixed, left)`` pair counts.
+    """
+    fixed_total = left_total = 0
+    for layer, horizontal in PRL_LAYERS.items():
+        def nm(poly):
+            (a, b), (c, d) = poly.bounding_box()
+            return [round(float(v) * 1000) for v in (a, b, c, d)]
+
+        routed = top.get_polygons(layer=layer, datatype=0, depth=0)
+        routed += [q for r in top.references if r.cell.name.startswith("VIA")
+                   for q in r.get_polygons(layer=layer, datatype=0)]  # fmt: skip
+        blocks = [q for r in top.references if not r.cell.name.startswith("VIA")
+                  for q in r.get_polygons(layer=layer, datatype=0, depth=None)]  # fmt: skip
+        shapes = [(nm(q), True) for q in gdstk.boolean(routed, [], "or", precision=1e-4)]
+        shapes += [(nm(q), False) for q in gdstk.boolean(blocks, [], "or", precision=1e-4)]
+        # along: (start, end) on the track; across: (low, high) across it
+        def along(b):
+            return (b[0], b[2]) if horizontal else (b[1], b[3])
+
+        def across(b):
+            return (b[1], b[3]) if horizontal else (b[0], b[2])
+
+        def overlap(a, b):
+            return min(along(a)[1], along(b)[1]) - max(along(a)[0], along(b)[0])
+
+        def gap(a, b):
+            return max(across(a)[0], across(b)[0]) - min(across(a)[1], across(b)[1])
+
+        def short(a, b):
+            return 0 < gap(a, b) < ADJACENT_GAP and 0 < overlap(a, b) < MIN_PRL
+
+        def extended(b, lo, hi):
+            return [lo, b[1], hi, b[3]] if horizontal else [b[0], lo, b[2], hi]
+
+        added = []
+        fixed = 0
+        for i in range(len(shapes)):
+            for j in range(len(shapes)):
+                if j == i or not shapes[i][1]:
+                    continue
+                x, y = shapes[i][0], shapes[j][0]
+                if not short(x, y):
+                    continue
+                width = across(x)[1] - across(x)[0]
+                if width != (24 if layer in (40, 50) else 32):
+                    continue  # one track wide only
+                (x0, x1), (y0, y1) = along(x), along(y)
+                options = []
+                if y1 - max(x0, y0) >= MIN_PRL:  # extend x's far end towards y's
+                    options.append((x0, max(x1, max(x0, y0) + MIN_PRL)))
+                if min(x1, y1) - y0 >= MIN_PRL:  # or its near end
+                    options.append((min(x0, min(x1, y1) - MIN_PRL), x1))
+                for lo, hi in sorted(options, key=lambda o: (o[1] - o[0])):
+                    new = extended(x, lo, hi)
+                    ok = True
+                    for k, (z, _) in enumerate(shapes):
+                        if k == i:
+                            continue
+                        g = gap(new, z)
+                        if g <= 0:  # the same track (or touching): keep the tip spacing
+                            if overlap(new, z) > -TIP_SPACE and overlap(x, z) <= -TIP_SPACE:
+                                ok = False
+                                break
+                            if overlap(new, z) > 0 and overlap(x, z) <= 0:
+                                ok = False
+                                break
+                        elif g < ADJACENT_GAP:
+                            before, after = overlap(x, z), overlap(new, z)
+                            if after != before and not (after >= MIN_PRL or after <= -TIP_SPACE):
+                                ok = False
+                                break
+                    if ok:
+                        shapes[i] = (new, True)
+                        a, b = along(x), (lo, hi)
+                        for seg in ((b[0], a[0]), (a[1], b[1])):
+                            if seg[1] > seg[0]:
+                                added.append(extended(x, *seg))
+                        fixed += 1
+                        break
+        for b in added:
+            top.add(gdstk.rectangle((b[0] / 1000, b[1] / 1000), (b[2] / 1000, b[3] / 1000), layer=layer))
+        left = sum(1 for i in range(len(shapes)) for j in range(i + 1, len(shapes))
+                   if (shapes[i][1] or shapes[j][1]) and short(shapes[i][0], shapes[j][0]))  # fmt: skip
+        fixed_total += fixed
+        left_total += left
+    return fixed_total, left_total
 
 
 def add_pin_conductors(cell):

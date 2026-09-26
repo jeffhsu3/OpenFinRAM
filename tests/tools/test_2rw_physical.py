@@ -335,6 +335,29 @@ class PhysicalMacroTests(unittest.TestCase):
         # an obstruction half a nanometre off: out to cover all of it
         self.assertEqual(sorted({float(v) for v in re.findall(r"POLYGON ([^;]*)", obs)[0].split()[0::2]}), [0.3, 0.319])
 
+    def test_short_parallel_runs_are_lengthened_along_their_own_tracks(self):
+        from compile_asap7_2rw import fix_short_parallel_runs
+
+        cell = gdstk.Cell("prl")
+        # M4 tracks 48 nm apart: A runs 0-100, B on the next track 80-300 (a 20 nm run)
+        cell.add(gdstk.rectangle((0.0, 0.0), (0.1, 0.024), layer=40))
+        cell.add(gdstk.rectangle((0.08, 0.048), (0.3, 0.072), layer=40))
+        # C and D likewise, but a wire sits right after C's end on its track
+        cell.add(gdstk.rectangle((1.0, 0.0), (1.1, 0.024), layer=40), gdstk.rectangle((1.13, 0.0), (1.2, 0.024), layer=40))
+        cell.add(gdstk.rectangle((1.08, 0.048), (1.3, 0.072), layer=40))
+        fixed, left = fix_short_parallel_runs(cell)
+        merged = sorted(tuple(round(v, 3) for xy in p.bounding_box() for v in xy)
+                        for p in gdstk.boolean(cell.polygons, [], "or"))  # fmt: skip
+        self.assertEqual((fixed, left), (2, 0))
+        # A and B now run 44 nm side by side, one lengthened 24 nm on its own track
+        a = next(b for b in merged if b[1] == 0.0 and b[0] < 0.5)
+        b = next(b for b in merged if b[1] == 0.048 and b[0] < 0.5)
+        self.assertEqual(round(min(a[2], b[2]) - max(a[0], b[0]), 3), 0.044)
+        self.assertAlmostEqual((a[2] - a[0]) + (b[2] - b[0]), 0.344, places=6)
+        # C cannot grow into its neighbour on its track; D grows back instead
+        self.assertIn((1.0, 0.0, 1.1, 0.024), merged)
+        self.assertIn((1.056, 0.048, 1.3, 0.072), merged)
+
     def test_abutted_nets_are_probed_but_not_pins(self):
         cell = gdstk.Cell("abutted")
         cell.add(gdstk.rectangle((0, 0), (0.018, 0.5), layer=30))  # a wordline stub
