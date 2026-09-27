@@ -764,13 +764,18 @@ def tie_end_row_stubs(cell):
             # 18 mod 36 nm) inside both bars and clear of every other M3.
             y_bar = (ty0 + ty1) / 2
             first = math.ceil((x0 + 2 * HALF - 0.018) / 0.036) * 0.036 + 0.018
-            for x in (first + k * 0.036 for k in range(40)):
+            # Every track along the two bars' overlap; none free is an error,
+            # never a pair of vias with no jog between them.
+            k = 0
+            while True:
+                x = first + k * 0.036
                 if x + 2 * HALF > x1:
                     raise RuntimeError(
                         f"no free M3 track over the {net} bar at ({x0:.3f}..{x1:.3f}, {y_stub:.3f})"
                     )
                 if m3_jog(x, y_stub, y_bar, (root, target)):
                     break
+                k += 1
             for y in (y_stub, y_bar):
                 cell.add(
                     gdstk.rectangle(
