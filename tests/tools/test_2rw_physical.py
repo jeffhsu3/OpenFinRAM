@@ -309,7 +309,10 @@ class PhysicalMacroTests(unittest.TestCase):
                 (_, a), (_, b) = polygon.bounding_box()
                 e = extent[graph.root(i)]
                 e[0], e[1] = min(e[0], a), max(e[1], b)
-        crossing = [r for r, (a, b) in extent.items() if r not in nets
+        # The IO blocks' supply straps meet end to end across the seams.
+        supplies = {graph.label_root(lab) for lab in stack.get_labels(depth=None)
+                    if lab.layer in METALS and supply(lab.text)}  # fmt: skip
+        crossing = [r for r, (a, b) in extent.items() if r not in nets and r not in supplies
                     and any(a < seam - 0.05 and b > seam + 0.05 for seam in seams[:-1])]  # fmt: skip
         self.assertEqual(crossing, [])
 

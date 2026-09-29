@@ -262,6 +262,94 @@ def build_io_blocks(specs: dict[str, IoColumnSpec]) -> tuple[dict[str, gdstk.Cel
     return {port: cells[name] for port, name in names.items()}, "\n".join(netlists) + ".END\n"
 
 
+#: A supply strap: an M3 line the IO column's height, landing on every M1
+#: rail of its net through V1, an M2 pad and V2.  The pad runs 6 nm past the
+#: vias: the public deck's V1.M2.EN.2 opening drops an end cap of exactly 5.
+STRAP_HALF, PAD_HALF_X, VIA_HALF, M3_SPACE, M2_SPACE, VIA_SPACE = 0.009, 0.015, 0.009, 0.018, 0.018, 0.018
+RAIL_OVERHANG = 0.005  # M1 past the V1 on each side
+
+
+def supply_rails(cell: gdstk.Cell) -> dict[str, list[float]]:
+    """y of every M1 supply rail of the placed block, by net: the long horizontal M1 its labels name."""
+    from asap7_connectivity import MetalGraph
+
+    graph = MetalGraph(cell)
+    net_of = {}
+    for label in cell.get_labels(depth=None):
+        net = label.text.upper().rstrip("!")
+        if net in ("VDD", "VSS") and label.layer == M1:
+            try:
+                net_of[graph.label_root(label)] = net
+            except (KeyError, RuntimeError, ValueError):
+                pass
+    rails: dict[str, list[tuple[float, float, float]]] = {"VDD": [], "VSS": []}
+    for index, poly in enumerate(graph.polygons):
+        x0, y0, x1, y1 = bbox(poly)
+        net = net_of.get(graph.root(index))
+        if poly.layer == M1 and net and x1 - x0 > 0.3 and y1 - y0 < 0.03:
+            rails[net].append((x0, x1, round((y0 + y1) / 2, 4)))
+    return rails
+
+
+def add_supply_straps(cell: gdstk.Cell, prefer: str) -> dict[str, float]:
+    """Tie each supply's rails together with a full-height M3 strap; ``{net: x}``.
+
+    The block's rows each have their own VDD and VSS rails, so without this
+    each row's rails are a separate supply island the macro router has to
+    reach.  A strap goes where its M3 clears the block's by 18 nm for the
+    whole height and every rail of its net can take a V1, M2 pad and V2
+    under it: the free x nearest the block's outer edge (`prefer` ``low``
+    or ``high``) or its middle (``middle``, the two-sided block's logic
+    column).  The straps meet end to end across abutted tiles.
+    """
+    x_lo, y_lo, x_hi, y_hi = boundary_box(cell)
+    polys = cell.get_polygons(depth=None)
+    m1 = [bbox(q) for q in polys if q.layer == M1]
+    m2 = [bbox(q) for q in polys if q.layer == M2]
+    m3 = [bbox(q) for q in polys if q.layer == M3]
+    vias = [bbox(q) for q in polys if q.layer in (V1, V2, V3)]
+    # The block's rows sit 13.5 nm up its boundary (the fin grid), so its top
+    # VSS rail lies past the boundary: it is the next tile's bottom rail,
+    # which that tile's strap lands on.
+    rails = {net: [r for r in found if y_lo + VIA_HALF <= r[2] <= y_hi - VIA_HALF]
+             for net, found in supply_rails(cell).items()}  # fmt: skip
+
+    def near(boxes, x0, y0, x1, y1, space):
+        return any(a < x1 + space and c > x0 - space and b < y1 + space and d > y0 - space for a, b, c, d in boxes)
+
+    def fits(x, net, taken):
+        if near(m3 + taken, x - STRAP_HALF, y_lo, x + STRAP_HALF, y_hi, M3_SPACE):
+            return False
+        ys = sorted({y for x0, x1, y in rails[net]})
+        for y in ys:
+            if not any(x0 <= x - VIA_HALF - RAIL_OVERHANG and x1 >= x + VIA_HALF + RAIL_OVERHANG
+                       for x0, x1, yy in rails[net] if abs(yy - y) < 1e-4):  # fmt: skip
+                return False
+            if near(m2, x - PAD_HALF_X, y - VIA_HALF, x + PAD_HALF_X, y + VIA_HALF, M2_SPACE):
+                return False
+            if near(vias, x - VIA_HALF, y - VIA_HALF, x + VIA_HALF, y + VIA_HALF, VIA_SPACE):
+                return False
+        return bool(ys)
+
+    steps = [round(x_lo + STRAP_HALF + k * 0.001, 4) for k in range(int((x_hi - x_lo - 2 * STRAP_HALF) * 1000) + 1)]
+    order = {"low": steps, "high": steps[::-1],
+             "middle": sorted(steps, key=lambda x: abs(x - (x_lo + x_hi) / 2))}[prefer]  # fmt: skip
+    chosen: dict[str, float] = {}
+    taken: list[tuple[float, float, float, float]] = []
+    for net in ("VSS", "VDD"):
+        x = next((x for x in order if fits(x, net, taken)), None)
+        if x is None:
+            raise RuntimeError(f"{cell.name}: no room for a {net} strap reaching every rail")
+        chosen[net] = x
+        taken.append((x - STRAP_HALF, y_lo, x + STRAP_HALF, y_hi))
+        rect(cell, (x - STRAP_HALF, y_lo, x + STRAP_HALF, y_hi), M3)
+        for y in sorted({y for _, _, y in rails[net]}):
+            rect(cell, (x - VIA_HALF, y - VIA_HALF, x + VIA_HALF, y + VIA_HALF), V1)
+            rect(cell, (x - PAD_HALF_X, y - VIA_HALF, x + PAD_HALF_X, y + VIA_HALF), M2)
+            rect(cell, (x - VIA_HALF, y - VIA_HALF, x + VIA_HALF, y + VIA_HALF), V2)
+    return chosen
+
+
 def build_port_io(
     library: gdstk.Library, port: str, block: gdstk.Cell, spec: IoColumnSpec
 ) -> gdstk.Cell:
@@ -304,6 +392,10 @@ def build_port_io(
             cell.add(gdstk.Label(name, (px, py), layer=gds_layer, texttype=PIN_TEXTTYPE))
 
     rect(cell, (0.0, 0.0, width, height), BOUNDARY)
+    # Port A's outer edge is its west one (its block is mirrored), port B's
+    # the east; the two-sided block faces arrays both ways, so its straps
+    # go in its logic column.
+    add_supply_straps(cell, {"A": "low", "B": "high", "B2": "middle"}[port])
     return cell
 
 
@@ -615,10 +707,15 @@ def verify_gds(path: Path, wordline_counts: list[int], spice: Path | None = None
                 row = spec.mux.height / 1000
                 want = (index + 1) * row - y_leaf / 1000 if index % 2 else index * row + y_leaf / 1000
                 assert_close(float(label.origin[1]), want, f"{io.name}: {label.text} height")
-        # The column draws nothing of its own: the array's bars reach into the block.
-        own = {poly.layer for poly in io.polygons} - {BOUNDARY}
+        # The column draws nothing of its own but its supply straps: the
+        # array's bars reach into the block.
+        own = {poly.layer for poly in io.polygons} - {BOUNDARY, M1, V1, M2, V2, M3}
         if own:
             raise RuntimeError(f"{io.name}: unexpected routing layers {sorted(own)}")
+        straps = [bbox(q) for q in io.polygons if q.layer == M3]
+        if len(straps) != 2 or any(abs((y1 - y0) - (io_boxes[port][3] - io_boxes[port][1])) > 1e-6
+                                   for _, y0, _, y1 in straps):  # fmt: skip
+            raise RuntimeError(f"{io.name}: expected a full-height VDD and VSS strap")
         names = [label.text for label in io.labels]
         required = set(iocol_pins(port))
         if not required <= set(names):
