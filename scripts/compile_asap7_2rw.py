@@ -72,11 +72,13 @@ def bbox_origin(cell):
     return tuple(math.floor(float(v) * 1000) / 1000 for v in low)
 
 
-def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0)):
+def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_supply=None):
     """Create an exact metal abstract and a pin for every named component.
 
     Nets `abutted` names are joined by abutment, never routed: they are
     terminals for the connectivity gate but obstructions to the router.
+    `abutted_supply` does the same for the supply components whose
+    polygons it accepts.
     `shift` moves the cell inside its master (and everything the LEF says
     of it), for a cell that has to land between the DEF's nanometres.
     """
@@ -153,7 +155,9 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0)):
     for root, net in sorted(roots.items(), key=lambda item: (item[1], item[0])):
         pin = f"P{len(terminals)}"
         polys = groups[root]
-        if abutted is not None and abutted(net):
+        if (abutted is not None and abutted(net)) or (
+            net in ("vdd", "vss") and abutted_supply is not None and abutted_supply(polys)
+        ):
             obstacles.extend(polys)
             polygon = max(polys, key=lambda p: p.area())
             terminals[pin] = {
@@ -870,9 +874,20 @@ def run(args):
             notch_band_edges(cell, end_row_spans(cell, shared_b))
         labels = [label for label in cell.labels if not supply(label.text)]
         master = ("dp_colpair" if shared_b else "dp_column") + ends_tag(bottom, top)
+        # A tile between a stack's ends meets tiles above and below: its IO
+        # blocks' supply straps (and the top rail past the block, the next
+        # tile's bottom one) join theirs end to end, so only the end tiles'
+        # are routed.
+        _, y_lo, _, y_hi = columns.boundary_box(cell)
+
+        def through(polys, y_lo=y_lo, y_hi=y_hi):
+            return (min(p.bounding_box()[0][1] for p in polys) <= y_lo + 0.001
+                    or max(p.bounding_box()[1][1] for p in polys) >= y_hi - 0.001)  # fmt: skip
+
         variants[(bottom, top)] = (cell, *abstract(
             cell, master, labels, abutted=is_wordline,
             shift=(0.0, HALF_NM) if args.band is not None else (0.0, 0.0),
+            abutted_supply=None if bottom or top else through,
         ))  # fmt: skip
     leaf = next(iter(variants.values()))[0]
     size = next(iter(variants.values()))[4]
