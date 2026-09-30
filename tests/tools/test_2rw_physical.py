@@ -270,6 +270,30 @@ class PhysicalMacroTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unmapped"):
             strip_net("ysel_A[0]", 0, "hi", 4)
 
+    def test_a_middle_tiles_supplies_are_one_vdd_and_one_vss(self):
+        # The IO blocks' straps join their rails, the seam ties the array's
+        # bars to them: what is left is the top row's upper VSS bar, tied to
+        # the rail past the block that the next tile's strap lands on.
+        for shared_b in (False, True):
+            tile = build_leaf(8, 8, bottom=False, top=False, shared_b=shared_b)
+            graph = MetalGraph(tile)
+            roots = {}
+            for lab in tile.get_labels(depth=None):
+                if lab.layer in METALS and supply(lab.text):
+                    roots.setdefault(graph.label_root(lab), supply(lab.text))
+            top = max(q.bounding_box()[1][1] for q in tile.polygons if q.layer == 100)
+            spans = defaultdict(lambda: [9.0, -9.0])
+            for i, polygon in enumerate(graph.polygons):
+                if graph.root(i) in roots:
+                    (_, a), (_, b) = polygon.bounding_box()
+                    span = spans[graph.root(i)]
+                    span[0], span[1] = min(span[0], a), max(span[1], b)
+            whole = sorted(roots[r] for r, (a, b) in spans.items() if a < 0.001)
+            past = [roots[r] for r, (a, b) in spans.items() if a >= 0.001]
+            self.assertEqual(whole, ["vdd", "vss"], tile.name)
+            self.assertTrue(past and set(past) == {"vss"} and all(spans[r][1] > top for r in spans if spans[r][0] >= 0.001),
+                            tile.name)  # fmt: skip
+
     def test_tiles_between_a_stacks_ends_carry_no_dummy_rows(self):
         import generate_asap7_8t_iocolumn as columns
         from asap7_connectivity import MetalGraph

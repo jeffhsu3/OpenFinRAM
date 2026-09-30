@@ -350,6 +350,78 @@ def add_supply_straps(cell: gdstk.Cell, prefer: str) -> dict[str, float]:
     return chosen
 
 
+#: A seam tie's V1 sits this far inside the IO block from the seam.
+SEAM_TIE_INSET = 0.012
+M2_END_CAP = 0.006  # past a V1 along its bar: the deck drops a cap of exactly 5
+
+
+def tie_seam_supplies(cell: gdstk.Cell, seam_x: float, io_side: str, every: bool = True) -> int:
+    """Tie the array's supply bars to the IO block's rails at a seam; the number of ties.
+
+    The array's VDD and VSS arrive as horizontal M2 bars, 13.5 nm and more
+    off the IO block's M1 rails, so each side's supplies were separate
+    islands.  At every bar ending at the seam a V1 goes just inside the IO
+    block (`io_side` ``left`` or ``right`` of `seam_x`), the bar extended
+    over it when it stops short, and an M1 jumper runs from it to the
+    nearest rail of its net.  An untapped array ends in a bitcell whose own
+    M1 takes that spot: with `every` false such bars are left untied.
+    """
+    from asap7_connectivity import MetalGraph
+
+    graph = MetalGraph(cell)
+    net_of = {}
+    for label in cell.get_labels(depth=None):
+        net = label.text.upper().rstrip("!")
+        if net in ("VDD", "VSS") and label.layer in (M1, M2):
+            try:
+                net_of[graph.label_root(label)] = net
+            except (KeyError, RuntimeError, ValueError):
+                pass
+    sign = -1.0 if io_side == "left" else 1.0
+    x_via = seam_x + sign * SEAM_TIE_INSET
+    bars, rails = [], []
+    for index, poly in enumerate(graph.polygons):
+        net = net_of.get(graph.root(index))
+        x0, y0, x1, y1 = bbox(poly)
+        if net is None or y1 - y0 > 0.03 or x1 - x0 < 0.1:
+            continue
+        if poly.layer == M2:
+            # A bar reaching the seam from the array's side.
+            near = x0 if io_side == "left" else x1
+            if abs(near - seam_x) < 0.1 and (x1 - seam_x if io_side == "left" else seam_x - x0) > 0.1:
+                bars.append((net, x0, x1, round((y0 + y1) / 2, 4)))
+        elif poly.layer == M1 and x0 <= x_via - VIA_HALF and x1 >= x_via + VIA_HALF:
+            rails.append((net, round((y0 + y1) / 2, 4)))
+    polys = cell.get_polygons(depth=None)
+    others = {layer: [bbox(q) for q in polys if q.layer == layer] for layer in (M1, V1)}
+    ties = 0
+    for net, x0, x1, y in sorted(set(bars), key=lambda bar: bar[3]):
+        candidates = [ry for rnet, ry in rails if rnet == net]
+        if not candidates:
+            raise RuntimeError(f"{cell.name}: no {net} rail at the seam x {seam_x:.3f} for the bar at y {y:.4f}")
+        rail_y = min(candidates, key=lambda ry: abs(ry - y))
+        via = (x_via - VIA_HALF, y - VIA_HALF, x_via + VIA_HALF, y + VIA_HALF)
+        jumper = (x_via - VIA_HALF, min(y - VIA_HALF - RAIL_OVERHANG, rail_y - VIA_HALF),
+                  x_via + VIA_HALF, max(y + VIA_HALF + RAIL_OVERHANG, rail_y + VIA_HALF))  # fmt: skip
+        if any(a < box[2] + space and c > box[0] - space and b < box[3] + space and d > box[1] - space
+               and not (layer == M1 and abs((b + d) / 2 - rail_y) < 1e-4)
+               for layer, box, space in ((V1, via, VIA_SPACE), (M1, jumper, 0.018))
+               for a, b, c, d in others[layer]):  # fmt: skip
+            if every:
+                raise RuntimeError(f"{cell.name}: no room for the {net} seam tie at y {y:.4f}")
+            continue
+        rect(cell, via, V1)
+        rect(cell, jumper, M1)
+        if io_side == "left" and x0 > via[0] - M2_END_CAP:
+            rect(cell, (via[0] - M2_END_CAP, y - VIA_HALF, x0 + 0.001, y + VIA_HALF), M2)
+        elif io_side == "right" and x1 < via[2] + M2_END_CAP:
+            rect(cell, (x1 - 0.001, y - VIA_HALF, via[2] + M2_END_CAP, y + VIA_HALF), M2)
+        ties += 1
+    if every and not ties:
+        raise RuntimeError(f"{cell.name}: no supply bars at the seam x {seam_x:.3f}")
+    return ties
+
+
 def build_port_io(
     library: gdstk.Library, port: str, block: gdstk.Cell, spec: IoColumnSpec
 ) -> gdstk.Cell:
@@ -521,6 +593,11 @@ def build_colgrp(
             point = (io_x + float(label.origin[0]) - ox, float(label.origin[1]) - oy)
             cell.add(clone_label(label, colgrp_control_name(label.text), point))
 
+    # Port A meets the cap, port B the array's last column: a tap in a
+    # tapped array, a bitcell (no room for every tie) in a bare one.
+    tie_seam_supplies(cell, cap_x, "left")
+    if io_b is not None:
+        tie_seam_supplies(cell, io_b_x, "right", every=False)
     rect(cell, (0.0, 0.0, total_width, array_height), BOUNDARY)
     return cell
 
@@ -584,6 +661,8 @@ def build_colgrp_pair(
             continue
         point = (half_width + float(label.origin[0]) - bx0, float(label.origin[1]) - by0)
         cell.add(clone_label(label, colgrp_control_name(label.text), point))
+    tie_seam_supplies(cell, half_width, "right", every=False)
+    tie_seam_supplies(cell, half_width + block_width, "left", every=False)
     rect(cell, (0.0, hy0, total_width, hy1), BOUNDARY)
     return cell
 
@@ -791,10 +870,18 @@ def verify_gds(path: Path, wordline_counts: list[int], spice: Path | None = None
                 raise RuntimeError(f"{colgrp.name}: incomplete {prefix} bus")
             if any(label.layer != layer for label in labels.values()):
                 raise RuntimeError(f"{colgrp.name}: {prefix} is on wrong layer")
-        # Port A's bitlines are strapped across the metal-free filler.
-        straps = [bbox(poly) for poly in colgrp.polygons if poly.layer == M2]
+        # Port A's bitlines are strapped across the metal-free filler; the
+        # array's supply bars reach its rails the same way, one per bar and
+        # row (VSS, VDD, VSS), ending over their seam ties.
+        seam_x = boundary_box(cells[port_io_name("A")])[2]
+        tie_x0 = seam_x - SEAM_TIE_INSET - VIA_HALF - M2_END_CAP
+        m2 = [bbox(poly) for poly in colgrp.polygons if poly.layer == M2]
+        straps = [box for box in m2 if abs(box[0] - tie_x0) > 1e-6]
         if len(straps) != 2 * MUX_ROWS:
             raise RuntimeError(f"{colgrp.name}: expected eight port-A bitline straps")
+        port_a_ties = [box for box in (bbox(poly) for poly in colgrp.polygons if poly.layer == V1) if box[2] < seam_x]
+        if len(m2) - len(straps) != 3 * MUX_ROWS or len(port_a_ties) != 3 * MUX_ROWS:
+            raise RuntimeError(f"{colgrp.name}: expected a port-A seam tie per supply bar")
         required_colgrp = {
             "DA", "QA", "DB", "QB",
             "wrenaA", "wrenanA", "wrenaB", "wrenanB",
