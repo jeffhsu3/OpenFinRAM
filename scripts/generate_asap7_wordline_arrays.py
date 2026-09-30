@@ -57,6 +57,12 @@ class CellContract:
     wordlines: tuple[str, ...]
     bitlines: tuple[str, ...]
     pin_layers: dict[str, int]
+    #: The master of the slots mirrored in x, if not the bitcell: the 8T's
+    #: variant B, whose WLB landings are on other M4 tracks so mirrored
+    #: neighbours never meet landing to landing.
+    mirrored_bitcell_name: str | None = None
+    #: Untapped mirrored end: keep its bitline via stack inside the array.
+    terminal_mirrored_bitcell_name: str | None = None
 
 
 CONTRACTS = (
@@ -68,6 +74,8 @@ CONTRACTS = (
         bitlines=("BLA", "BLAN", "BLB", "BLBN"),
         pin_layers={"WLA": 30, "WLB": 50, "BLA": 20, "BLAN": 20,
                     "BLB": 40, "BLBN": 40},
+        mirrored_bitcell_name="sram_cell_8t_b",
+        terminal_mirrored_bitcell_name="sram_cell_8t_b_end",
     ),
     CellContract(
         key="6t",
@@ -192,8 +200,13 @@ def build_row(
     tap_pitch: int = 0,
     strap_cell: gdstk.Cell | None = None,
     strap_pitch: int = 0,
+    mirrored_bitcell: gdstk.Cell | None = None,
+    terminal_mirrored_bitcell: gdstk.Cell | None = None,
 ) -> gdstk.Cell:
     x0, y0, x1, y1 = boundary_box(bitcell)
+    for master in (mirrored_bitcell, terminal_mirrored_bitcell):
+        if master is not None and boundary_box(master) != (x0, y0, x1, y1):
+            raise RuntimeError(f"{master.name} does not share the bitcell's boundary")
     width = x1 - x0
     height = y1 - y0
     if tap_pitch:
@@ -221,8 +234,11 @@ def build_row(
             (slot + 1) * width + x0 if mirror_x else slot * width - x0,
             -y0,
         )
+        master = mirrored_bitcell if mirror_x and mirrored_bitcell is not None else bitcell
+        if mirror_x and index == wordlines - 1 and not tap_pitch and terminal_mirrored_bitcell is not None:
+            master = terminal_mirrored_bitcell
         row.add(gdstk.Reference(
-            bitcell,
+            master,
             origin=origin,
             rotation=math.pi if mirror_x else 0,
             x_reflection=mirror_x,
@@ -367,6 +383,19 @@ def build_library(
     )
     library.add(bitcell_8t, bitcell_6t)
     bitcells = {"8t": bitcell_8t, "6t": bitcell_6t}
+    # A missing alternate master would silently restore the M4 tip violations.
+    mirrored, terminal = {}, {}
+    for contract in CONTRACTS:
+        cell = next((c for c in source_lib_8t.cells if c.name == contract.mirrored_bitcell_name), None)
+        if contract.mirrored_bitcell_name is not None:
+            if cell is None:
+                raise RuntimeError(f"Missing {contract.mirrored_bitcell_name}; regenerate the bitcell library")
+            library.add(cell)
+            mirrored[contract.key] = cell
+        if contract.terminal_mirrored_bitcell_name is not None:
+            _, cell = load_cell(source_8t, contract.terminal_mirrored_bitcell_name)
+            library.add(cell)
+            terminal[contract.key] = cell
 
     # Only the 8T tap hands every bitline through, so only the 8T rows can
     # take an interleaved tap.  The published 6T tap terminates its column.
@@ -386,7 +415,9 @@ def build_library(
         for count in wordline_counts:
             row = build_row(library, bitcells[contract.key], contract, count,
                             tap_cell=tap_cell, tap_pitch=pitch,
-                            strap_cell=strap_cell, strap_pitch=straps)
+                            strap_cell=strap_cell, strap_pitch=straps,
+                            mirrored_bitcell=mirrored.get(contract.key),
+                            terminal_mirrored_bitcell=terminal.get(contract.key))
             build_array(library, row, contract, count, mux_rows, pitch, straps)
     return library
 
@@ -550,7 +581,16 @@ def verify_contract(
     first_tap_slots = tap_slots(wordlines, tap_pitch)
     if len(row.references) != wordlines + len(first_tap_slots):
         raise RuntimeError(f"{row.name}: expected {wordlines + len(first_tap_slots)} cell references")
-    allowed = {contract.bitcell_name}
+    allowed = {contract.bitcell_name} | ({contract.mirrored_bitcell_name, contract.terminal_mirrored_bitcell_name} - {None})
+    # Mirrored slots take the variant, the others the bitcell.
+    for index, reference in enumerate(row.references):
+        if reference.cell_name in allowed:
+            want = (contract.mirrored_bitcell_name if reference.x_reflection
+                    and contract.mirrored_bitcell_name else contract.bitcell_name)
+            if reference.x_reflection and not tap_pitch and index == wordlines - 1 and contract.terminal_mirrored_bitcell_name:
+                want = contract.terminal_mirrored_bitcell_name
+            if reference.cell_name != want:
+                raise RuntimeError(f"{row.name}: {reference.cell_name} where {want} belongs")
     if tap_pitch:
         allowed |= {TAP_CELL_NAME, STRAP_CELL_NAME}
     if any(reference.cell_name not in allowed
@@ -676,6 +716,8 @@ def verify_gds(path: Path, wordline_counts: list[int], mux_rows: int,
     library = gdstk.read_gds(str(path))
     cells = {cell.name: cell for cell in library.cells}
     expected = {contract.bitcell_name for contract in CONTRACTS}
+    expected |= {name for contract in CONTRACTS for name in
+                 (contract.mirrored_bitcell_name, contract.terminal_mirrored_bitcell_name)} - {None}
     if tap_pitch:
         expected.add(TAP_CELL_NAME)
         if strap_pitch:

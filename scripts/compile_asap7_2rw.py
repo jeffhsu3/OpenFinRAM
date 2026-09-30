@@ -519,7 +519,7 @@ def mirrored(lib, cell, name, width):
     return out
 
 
-def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False):
+def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, strap_pitch=0):
     """``iocol A | cap | array of `wordlines` | iocol B``, with a dummy row below and/or above.
 
     In a stack of abutted tiles only the stack's two ends need a dummy row
@@ -528,6 +528,9 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False):
 
     With `shared_b` it is a pair's tile: the half without port B's IO, then
     the two-sided port-B block, then the half mirrored (`build_colgrp_pair`).
+
+    With `strap_pitch` every that many taps is a strap cell, whose M5 supply
+    spines run down the tap column through every row and abutted tile.
     """
     gds = REPO / "tech/gds"
     lib = arrays.build_library(
@@ -537,6 +540,7 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False):
         4,
         gds / "sram_cell_8t_tap.gds",
         tap_pitch,
+        strap_pitch,
     )
     cells = {c.name: c for c in lib.cells}
     edges = {
@@ -552,7 +556,7 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False):
     io_a = columns.build_port_io(lib, "A", blocks["A"], specs["A"])
     io_b = columns.build_port_io(lib, "B", blocks["B"], specs["B"])
     caps = columns.build_cap_array(lib, edges)
-    array = cells[f"array_x{wordlines}x4_tap{tap_pitch}_sram_8t"]
+    array = cells[arrays.array_name(arrays.CONTRACTS[0], wordlines, 4, tap_pitch, strap_pitch)]
     leaf = columns.build_colgrp(lib, array, io_a, None if shared_b else io_b, caps, wordlines)
     capped = lib.new_cell("capped_" + leaf.name + ends_tag(bottom, top))
     capped.add(gdstk.Reference(leaf))
@@ -574,13 +578,33 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False):
     array_x = io_a_width + cap_width
     corner_x = array_x - slot_width
     filler_x = io_a_width
+    # Over a strap the dummy row's corners must not keep their M5 stripe:
+    # the strap's supply spines run up to the tap's edge, and the second
+    # corner's stripe lands on the VDD spine.  Over a tap nothing below it
+    # uses that stripe.
+    row_edges = edges
+    if strap_pitch:
+        row_edges = dict(edges)
+        for name, master in edges.items():
+            if name.startswith("sram_cell_8t_corner"):
+                bare = gdstk.Cell(name + "_strap")
+                bare.add(*[q.copy() for q in master.polygons if q.layer not in (50, 45)])
+                bare.add(*[lab.copy() for lab in master.labels if lab.layer != 50])
+                row_edges[name] = bare
     for bottom in [b for b, wanted in ((False, top), (True, bottom)) if wanted]:
         y = -pitch if bottom else 4 * pitch
         row = edge_cells.build_dummy_vertical_array(
-            lib, edges, wordlines, tap_pitch, mirror_x=False, mirror_y=bottom
+            lib, row_edges, wordlines, tap_pitch, mirror_x=False, mirror_y=bottom
         )
         ends.add(gdstk.Reference(row, origin=(array_x, y)))
-        corner = edges[edge_cells.oriented_name("sram_cell_8t_corner", False, bottom)]
+        # The corner immediately left of slot A needs B's landing tracks.
+        # Restore the x orientation of the B master so its process frame still
+        # matches the column cap below; only its wordline routing differs.
+        corner = edge_cells.oriented_cell(
+            edges[edge_cells.oriented_name("sram_cell_8t_corner", True, bottom)],
+            edge_cells.oriented_name("sram_cell_8t_corner", False, bottom) + "_b",
+            mirror_x=True,
+        )
         ends.add(gdstk.Reference(corner, origin=(corner_x - bx0, y - by0)))
         for col in range(2):
             ends.add(
@@ -867,7 +891,8 @@ def run(args):
         bottom, top = ends_of(index)
         if (bottom, top) in variants:
             continue
-        cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top, shared_b=shared_b)
+        cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top, shared_b=shared_b,
+                          strap_pitch=args.strap_pitch)
         if banding:
             # Over the IO columns an end tile stops at its IO blocks: the
             # controller's band takes the rest.
@@ -1629,6 +1654,8 @@ def main():
     parser.add_argument("--margin", type=float, default=0.3,
                         help="um from the blocks to the macro edge, where the pins land")  # fmt: skip
     parser.add_argument("--bank-gap", type=float, default=0.3, help="um between banks")
+    parser.add_argument("--strap-pitch", type=int, default=0,
+                        help="every this many array taps is a supply strap (M5 spines down the tap column)")
     parser.add_argument("--share-port-b", action="store_true",
                         help="banks in pairs, mirrored about one two-sided port-B IO block "
                         "(the controller built with SHARED_B)")  # fmt: skip

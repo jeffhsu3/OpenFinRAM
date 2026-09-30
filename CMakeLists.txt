@@ -76,7 +76,18 @@ install(
 #   tests/run_equiv_check.sh  : post-synthesis RTL<->netlist equivalence (Yosys)
 # ---------------------------------------------------------------------------
 include(CTest)
+add_custom_target(install_gdscheck
+    COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/install_gdscheck.sh
+    COMMENT "Install the pinned gdscheck DRC executable under build/tools/gdscheck"
+    USES_TERMINAL
+)
 if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME gdscheck_adapter_check
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s ${CMAKE_SOURCE_DIR}/tests -p test_drc.py
+    )
+    set_tests_properties(gdscheck_adapter_check PROPERTIES TIMEOUT 120 LABELS unit)
     add_subdirectory(third_party/googletest EXCLUDE_FROM_ALL)
     add_subdirectory(tests)
 
@@ -208,6 +219,20 @@ if(BUILD_TESTING)
     set_tests_properties(asap7_8t_wl_slices_check PROPERTIES
         TIMEOUT 600
         SKIP_RETURN_CODE 77
+    )
+
+    # Device-level DRC over the handcrafted cell libraries.  OpenROAD's
+    # detailed_route DRC only covers what the router drew; nothing checked the
+    # cell interiors or their abutment until this gate.  It is a ratchet
+    # against tests/golden/asap7_8t_drc_gdscheck.json, not a clean-DRC claim.
+    add_test(
+        NAME asap7_8t_device_drc_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_device_drc_check.sh
+    )
+    set_tests_properties(asap7_8t_device_drc_check PROPERTIES
+        TIMEOUT 900
+        SKIP_RETURN_CODE 77
+        LABELS "drc;integration"
     )
 
     add_test(

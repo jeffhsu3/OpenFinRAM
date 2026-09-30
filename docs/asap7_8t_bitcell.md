@@ -497,6 +497,74 @@ Their V0 contacts follow the LIG displacement so the landing-stack enclosure is
 unchanged. The lower BLBN V0 alone is shifted 4.5 nm north within its M1 landing
 so it is fully contained by the outside LISD terminal.
 
+## Device DRC
+
+Until now nothing checked the drawn geometry. OpenROAD's `detailed_route
+-output_drc` covers only what the router drew, so the handcrafted cells --
+bitcell, tap, strap, edge frame, IO wrappers -- and their abutment went
+unverified, and the macro's own `.physical.json` records `device_drc:
+"not_run"`.
+
+`tech/drc/asap7_device.drc` is a conservative subset run by
+`tests/run_8t_device_drc_check.sh`. ASAP7's real DRM is not redistributable,
+so each threshold is the tightest geometry the published ASAP7 libraries
+actually draw, measured by `scripts/derive_asap7_drc_rules.rb`. The deck is
+then calibrated: it must run clean on the vendor's own SRAM cells, and the
+check script re-verifies that calibration on every run. A violation therefore
+means "tighter than anything the published library does" -- a strong signal
+without inventing a rule. It is not a signoff deck and does not replace one.
+
+Because the existing cells already carry violations, the gate is a ratchet
+against `tests/golden/asap7_8t_drc_baseline.json`: it fails on a new violation,
+a higher count, or a tighter worst-case distance. Regenerate deliberately with
+`WRITE_BASELINE=1`.
+
+The tap, strap and IO/precharge wrappers pass the calibrated subset.
+Other findings remain; the significant ones are:
+
+| Rule | Worst | Limit | Where |
+| --- | --- | --- | --- |
+| `M2.S` | 8 nm | 18 nm | array abutment |
+| `M1.S` | 12 nm | 18 nm | array abutment |
+
+The former `GCUT.S` finding (10 nm against a blanket 37 nm spacing) was a
+checker error: the public rule measures 35 nm vertical spacing between
+projecting edges. Staggered cuts on adjacent gates do not violate it. The
+v2 simplified deck and its KLayout reference use that directional rule;
+see `docs/gdscheck.md` for the corrected gate and its tests.
+
+The former 6 nm M4 tip gaps are removed by alternating `sram_cell_8t` with
+`sram_cell_8t_b` in mirrored slots. Their WLB landings use different tracks:
+A at y=-132/396 nm, B at y=12/300 nm. Each landing encloses V3 and V4 by
+11 nm horizontally. Both WLB bridges stay at x=18 nm, preserving the x=90 nm
+macro routing corridor that the earlier alternating-cell attempt blocked.
+
+BLBN moves one M4 track, from y=-84 to -36 nm. Its upper via stack sits 18 nm
+inside A and outside B, so the shared stack coincides across the mirror seam.
+An untapped terminal B uses `sram_cell_8t_b_end`, with that stack inside the
+cell at x=90 nm, to avoid a 5 nm M2 gap to the IO. All three masters have the
+same devices, pin contract and 108 x 594 nm boundary. The IO entry heights,
+taps, straps and dummy rows follow the new bitline position; the corner left
+of the array takes B's landing tracks while retaining its process orientation.
+
+The native ASAP7 main suite reports zero M4 and V3-to-M4 enclosure markers in
+the 32x4 array and column group (formerly 120 `M4.S.2`, 30 `M4.S.3`, and 256
+`V3.M4.EN.2`). The full public KLayout deck also reports zero M4 markers there.
+A capped, tapped 4x4 compiler tile is clean for native M4 rules; the public
+deck still reports 24 pre-existing `M4.S.5` short parallel-run markers in its
+end rows (down from 32). This is not a claim of full device DRC closure.
+
+`tests/run_8t_bitcell_check.sh` now exercises native gdscheck M4 rules on a
+mirrored array and capped tiles with taps and straps. Restoring the original
+unstaggered landing geometry is a positive control that must fail. The 16x16
+macro also routes at its original 0.3 um margin with zero router violations
+and passes metal connectivity and transistor-level LVS.
+
+The calibrated baselines tighten the eliminated M3/M4 findings and record
+the alternate masters' inherited M1 finding. Pre-existing discrepancies
+between current M2 counts and the saved baseline remain failures; this change
+does not raise those limits.
+
 ## Rebuild and verification
 
 From the repository root:

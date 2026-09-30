@@ -126,7 +126,8 @@ def _merge_findings(parts: list[dict]) -> dict:
     }
 
 
-def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = True) -> dict:
+def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = True,
+           drc_engine: str = "klayout") -> dict:
     from chipforge_asap7.verification import drc_counts, run_drc, run_hierarchical_lvs
 
     result_dir = result_dir.resolve()
@@ -159,10 +160,20 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
     if relaxed:
         verdict["lvs_without_double_implant_taps"] = relaxed[0] if units == 1 else _merge_findings(relaxed)
     if drc:
-        counts = drc_counts(run_drc(gds, out / "drc", cell_name=cell, timeout=7200))
-        verdict["drc"] = {"markers": sum(counts.values()), "rules": dict(sorted(counts.items()))}
-        print(f"\nDRC: {sum(counts.values())} markers in {len(counts)} rules; "
-              f"implant overlap (NSELECT.PSELECT.AUX.1): {counts.get('NSELECT.PSELECT.AUX.1', 0)}")  # fmt: skip
+        if drc_engine == "gdscheck":
+            from drc import find_gdscheck, provenance, run_device_drc
+
+            binary = find_gdscheck()
+            verdict["drc"] = {**provenance(binary),
+                              **run_device_drc(gds, cell, out / "drc", binary=binary, timeout=7200)}
+            print(f"\nDRC (gdscheck calibrated device subset): {verdict['drc']['markers']} markers")
+        elif drc_engine == "klayout":
+            counts = drc_counts(run_drc(gds, out / "drc", cell_name=cell, timeout=7200))
+            verdict["drc"] = {"markers": sum(counts.values()), "rules": dict(sorted(counts.items()))}
+            print(f"\nDRC (public KLayout runset): {sum(counts.values())} markers in {len(counts)} rules; "
+                  f"implant overlap (NSELECT.PSELECT.AUX.1): {counts.get('NSELECT.PSELECT.AUX.1', 0)}")
+        else:
+            raise ValueError(f"Unknown DRC engine: {drc_engine}")
     verdict["seconds"] = round(time.time() - started, 1)
     out.mkdir(parents=True, exist_ok=True)
     (out / "verification.json").write_text(json.dumps(verdict, indent=1) + "\n")
@@ -172,18 +183,24 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
 def known_findings(verdict: dict) -> dict:
     """What a baseline pins: LVS findings exactly, DRC as a ceiling per rule."""
     relaxed = verdict.get("lvs_without_double_implant_taps", {})
-    return {
+    findings = {
         "lvs_matched": verdict["lvs"]["matched"],
         "series_order_cells": verdict["lvs"]["series_order_cells"],
         "supply_shorts": verdict["lvs"]["supply_shorts"],
         "supply_shorts_without_double_implant_taps": relaxed.get("supply_shorts", []),
         "drc_rules": verdict.get("drc", {}).get("rules", {}),
     }
+    if verdict.get("drc", {}).get("engine") == "gdscheck":
+        findings["drc_identity"] = {key: verdict["drc"][key]
+                                    for key in ("engine", "profile", "version", "deck_sha256")}
+    return findings
 
 
 def compare(found: dict, baseline: dict) -> tuple[list[str], list[str]]:
     """``(new, gone)`` against `baseline`."""
     new, gone = [], []
+    if found.get("drc_identity") != baseline.get("drc_identity"):
+        return ["DRC engine/deck differs from baseline; use a separate baseline for this profile"], []
     if baseline["lvs_matched"] and not found["lvs_matched"]:
         new.append("LVS no longer matches")
     if found["lvs_matched"] and not baseline["lvs_matched"]:
@@ -205,12 +222,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cell", default=None, help="Top cell; read from <cell>.physical.json when omitted.")
     parser.add_argument("--out", type=Path, default=None, help="Work and report folder (default tmp/verify_<name>).")
     parser.add_argument("--no-drc", action="store_true")
+    parser.add_argument("--drc-engine", choices=("klayout", "gdscheck"), default="klayout",
+                        help="Public full runset (klayout), or calibrated device subset (gdscheck).")
     parser.add_argument("--baseline", type=Path, default=None, help="Known findings to hold the line against.")
     parser.add_argument("--write-baseline", type=Path, default=None, help="Record this run's findings as known.")
     args = parser.parse_args(argv)
 
     out = args.out or REPO_ROOT / "tmp" / f"verify_{args.result_dir.resolve().name}"
-    verdict = verify(args.result_dir, out, cell=args.cell, drc=not args.no_drc)
+    if args.no_drc and (args.baseline or args.write_baseline):
+        parser.error("A DRC baseline requires DRC; remove --no-drc")
+    verdict = verify(args.result_dir, out, cell=args.cell, drc=not args.no_drc, drc_engine=args.drc_engine)
     found = known_findings(verdict)
     print(f"\nwrote {out / 'verification.json'}")
     if args.write_baseline:

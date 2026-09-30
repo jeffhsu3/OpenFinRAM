@@ -4,6 +4,8 @@ import argparse
 import math
 from pathlib import Path
 import sys
+import subprocess
+import xml.etree.ElementTree as ET
 import tempfile
 import unittest
 
@@ -14,6 +16,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 import generate_asap7_8t_bitcell as edges  # noqa: E402
 import generate_asap7_wordline_arrays as arrays  # noqa: E402
 from compile_asap7_2rw import build_leaf  # noqa: E402
+from drc import find_gdscheck, run_device_drc  # noqa: E402
 
 
 class EdgeFrameTests(unittest.TestCase):
@@ -99,34 +102,38 @@ class EdgeFrameTests(unittest.TestCase):
             row = arrays.build_row(
                 lib, self.bitcell, arrays.CONTRACTS[0], count, self.tap, tap_pitch
             )
-            reference_end = gdstk.Cell("expected_end")
             width = arrays.boundary_box(self.bitcell)[2] - arrays.boundary_box(self.bitcell)[0]
-            for ref in row.references:
-                if ref.cell_name == edges.CELL_NAME:
-                    reference_end.add(
-                        gdstk.Reference(
-                            self.cells["sram_cell_8t_row_cap"],
-                            origin=ref.origin,
-                            rotation=ref.rotation,
-                            x_reflection=ref.x_reflection,
-                        )
-                    )
-                    continue
-                # A tap is two slots: a corner over each, the second mirrored
-                # as the bitcell after it would be.
-                corner = self.cells["sram_cell_8t_corner"]
-                x, y = ref.origin
-                reference_end.add(gdstk.Reference(corner, origin=(x, y)))
-                reference_end.add(
-                    gdstk.Reference(
-                        corner,
-                        origin=(x + edges.TAP_SLOTS * width, y),
-                        rotation=math.pi,
-                        x_reflection=True,
-                    )
-                )
+            # Where a slot ends up mirrored in x the end row takes variant B's
+            # landings: its base is the x-mirrored master mirrored back.
+            variant = {
+                base: edges.oriented_cell(self.cells[edges.oriented_name(name, True, False)], base + "_b", True, False)
+                for base, name in (("sram_cell_8t_row_cap", "dummy_vertical_8t"),
+                                   ("sram_cell_8t_corner", "sram_cell_8t_corner"))
+            }
+
+            def expected_end(mx):
+                end = gdstk.Cell("expected_end")
+
+                def cap(base, mirrored):
+                    return variant[base] if mirrored != mx else self.cells[base]
+
+                for ref in row.references:
+                    if ref.cell_name == edges.CELL_NAME:
+                        end.add(gdstk.Reference(cap("sram_cell_8t_row_cap", bool(ref.x_reflection)),
+                                                origin=ref.origin, rotation=ref.rotation,
+                                                x_reflection=ref.x_reflection))  # fmt: skip
+                        continue
+                    # A tap is two slots: a corner over each, the second mirrored
+                    # as the bitcell after it would be.
+                    x, y = ref.origin
+                    end.add(gdstk.Reference(cap("sram_cell_8t_corner", False), origin=(x, y)))
+                    end.add(gdstk.Reference(cap("sram_cell_8t_corner", True),
+                                            origin=(x + edges.TAP_SLOTS * width, y),
+                                            rotation=math.pi, x_reflection=True))  # fmt: skip
+                edges.rect(end, arrays.boundary_box(row), edges.BOUNDARY)
+                return end
+
             boundary = arrays.boundary_box(row)
-            edges.rect(reference_end, boundary, edges.BOUNDARY)
             for mx, my in edges.ORIENTATIONS:
                 with self.subTest(count=count, tap_pitch=tap_pitch, mx=mx, my=my):
                     end = edges.build_dummy_vertical_array(
@@ -144,12 +151,67 @@ class EdgeFrameTests(unittest.TestCase):
                         )
                     )
                     expected = gdstk.Reference(
-                        reference_end,
+                        expected_end(mx),
                         origin=(boundary[2] if mx else 0, boundary[3] if my else 0),
                         rotation=math.pi if mx else 0,
                         x_reflection=mx != my,
                     )
                     self.assert_same_geometry(end, expected)
+
+    def test_native_m4_rules_on_mirrored_arrays_and_capped_taps(self):
+        try:
+            binary = find_gdscheck()
+        except FileNotFoundError as exc:
+            self.skipTest(str(exc))
+        with tempfile.TemporaryDirectory() as scratch:
+            scratch = Path(scratch)
+
+            def markers(cell, tag):
+                library = gdstk.Library(unit=1e-6, precision=1e-10)
+                library.add(cell, *cell.dependencies(True))
+                gds, report = scratch / f"{tag}.gds", scratch / f"{tag}.lyrdb"
+                library.write_gds(str(gds))
+                result = subprocess.run(
+                    [str(binary), "run", "--input", str(gds), "--process", "asap7",
+                     "--suite", "main", "--topcell", cell.name, "--threads", "1",
+                     "--memory", "512M", "--report", str(report)],
+                    capture_output=True, text=True, timeout=120,
+                )
+                self.assertIn(result.returncode, (0, 2), result.stdout + result.stderr)
+                items = ET.parse(report).getroot().findall("./items/item")
+                self.assertTrue(all(not i.findtext("tags", "").strip() for i in items))
+                return {i.findtext("category", "").strip("'\"") for i in items}
+
+            lib = arrays.build_library(
+                REPO / "tech/gds/sram_cell_8t.gds",
+                REPO / "tech/gds/srambank_32b_boundary_2.gds", [4], 4,
+            )
+            array = next(c for c in lib.cells if c.name == "array_x4x4_sram_8t")
+            for tag, cell in (("array", array), ("taps", build_leaf(4, 2)),
+                              ("straps", build_leaf(4, 2, strap_pitch=1))):
+                with self.subTest(tag=tag):
+                    self.assertFalse({rule for rule in markers(cell, tag) if "M4" in rule})
+
+            # The untapped end master must keep the IO seam free of the
+            # 5 nm M2 gap caused by using the interior B stack at the edge.
+            seam = run_device_drc(
+                REPO / "tech/gds/sram_8t_iocolumn.gds", "colgrp_x2x4_sram_8t",
+                scratch / "io_seam", binary=binary,
+            )
+            self.assertNotIn("M2.S", seam["rules"])
+
+            # Restore the original unstaggered 84 nm pads as a positive
+            # control: the deck must find the mirrored 6 nm tip spacing.
+            legacy = self.bitcell.copy("legacy_m4")
+            for poly in list(legacy.polygons):
+                if poly.layer == edges.M4 and not edges.is_bitline_m4_rail(poly):
+                    _, y0, _, y1 = edges.bbox(poly)
+                    legacy.remove(poly)
+                    edges.rect(legacy, (0.003, y0, 0.087, y1), edges.M4)
+            row = array.references[0].cell
+            for ref in row.references:
+                ref.cell = legacy
+            self.assertIn("M4.S.2", markers(array, "original_landings"))
 
     def test_invalid_counts_and_tap_pitches_fail(self):
         for count, tap_pitch in (
@@ -212,9 +274,9 @@ class EdgeFrameTests(unittest.TestCase):
                 )
                 self.assertFalse(end_ref.rotation or end_ref.x_reflection)
                 # One unsplit array has one capped end, port A's on the left:
-                # a corner above and below it, and no mirrored-in-x master.
+                # a B-track corner above and below it with the original process frame.
                 corners = {
-                    edges.oriented_name("sram_cell_8t_corner", False, my)
+                    edges.oriented_name("sram_cell_8t_corner", False, my) + "_b"
                     for my in (False, True)
                 }
                 refs = [r for r in end_ref.cell.references if r.cell_name in corners]
