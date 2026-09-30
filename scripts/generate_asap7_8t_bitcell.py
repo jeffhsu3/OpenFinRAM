@@ -296,7 +296,9 @@ def add_via_stack_to_m4(
     )
     rect(cell, (cx - 0.009, cy - 0.014, cx + 0.009, cy + 0.014), M1)
     rect(cell, (cx - 0.009, cy - 0.009, cx + 0.009, cy + 0.009), V1)
-    rect(cell, (cx - 0.014, cy - 0.009, cx + 0.014, cy + 0.009), M2)
+    # 6 nm of M2 past V1/V2 each side: the public deck's V1.M2.EN.2 opening
+    # drops an end cap of exactly 5 nm.
+    rect(cell, (cx - 0.015, cy - 0.009, cx + 0.015, cy + 0.009), M2)
     rect(cell, (cx - 0.009, cy - 0.009, cx + 0.009, cy + 0.009), V2)
     rect(cell, (cx - 0.009, cy - 0.017, cx + 0.009, cy + 0.017), M3)
     rect(cell, (cx - 0.009, cy - 0.012, cx + 0.009, cy + 0.012), V3)
