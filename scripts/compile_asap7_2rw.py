@@ -605,6 +605,18 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, stra
             edge_cells.oriented_name("sram_cell_8t_corner", False, bottom) + "_b",
             mirror_x=True,
         )
+        # The bitcell's two gates end 12 nm apart at a dummy row's outer
+        # edge, the array's columns in pairs: short, long, long, short.  The
+        # corner's long gate stood beside the row's short first gate, whose
+        # other neighbour is long too, and in that 12 nm GATE.S.1 measures
+        # the 88 nm across it.  The corner's gates end short together.
+        gates = [q for q in corner.polygons if q.layer == edge_cells.GATE]
+        outer = (max if bottom else min)(q.bounding_box()[0 if bottom else 1][1] for q in gates)
+        for q in gates:
+            (gx0, gy0), (gx1, gy1) = q.bounding_box()
+            corner.remove(q)
+            corner.add(gdstk.rectangle((gx0, max(gy0, outer) if bottom else gy0),
+                                       (gx1, gy1 if bottom else min(gy1, outer)), layer=edge_cells.GATE))
         ends.add(gdstk.Reference(corner, origin=(corner_x - bx0, y - by0)))
         for col in range(2):
             ends.add(
@@ -620,6 +632,11 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, stra
     if ends.references:
         capped.add(gdstk.Reference(ends))
         tie_end_row_stubs(capped)
+        # A bitline bar runs 27 nm past its cell to overlap the next cell's;
+        # in a dummy row the next cell (a dummy, past the corner or before
+        # the far tap) has only a WLB landing beside that stub, a run under
+        # 44 nm (M4.S.5).  The bars lengthen to overlap it by 44.
+        fix_short_parallel_runs(capped, blocks_too=True)
     columns.rect(
         capped, (0, -pitch if bottom else 0, width, (5 if top else 4) * pitch), 100
     )
@@ -1494,10 +1511,11 @@ PRL_LAYERS = {40: True, 50: False, 60: True, 70: False}  # layer: horizontal
 MIN_PRL, ADJACENT_GAP, TIP_SPACE = 44, 25, 40  # nm
 
 
-def fix_short_parallel_runs(top):
+def fix_short_parallel_runs(top, blocks_too=False):
     """Lengthen the macro's own wires where two on adjacent tracks overlap by under 44 nm.
 
-    Of each such pair, a wire the router drew (never a block's metal) is
+    Of each such pair, a wire the router drew (never a block's metal, unless
+    `blocks_too`: a hard cell's own bars, for a cell assembled from them) is
     extended along its track just far enough to overlap its neighbour by
     44 nm, if its track is clear (tip-to-tip spacing) and the extension
     leaves every other neighbour it now runs beside either clear of it or
@@ -1515,8 +1533,11 @@ def fix_short_parallel_runs(top):
                    for q in r.get_polygons(layer=layer, datatype=0)]  # fmt: skip
         blocks = [q for r in top.references if not r.cell.name.startswith("VIA")
                   for q in r.get_polygons(layer=layer, datatype=0, depth=None)]  # fmt: skip
-        shapes = [(nm(q), True) for q in gdstk.boolean(routed, [], "or", precision=1e-4)]
-        shapes += [(nm(q), False) for q in gdstk.boolean(blocks, [], "or", precision=1e-4)]
+        if blocks_too:
+            shapes = [(nm(q), True) for q in gdstk.boolean(routed + blocks, [], "or", precision=1e-4)]
+        else:
+            shapes = [(nm(q), True) for q in gdstk.boolean(routed, [], "or", precision=1e-4)]
+            shapes += [(nm(q), False) for q in gdstk.boolean(blocks, [], "or", precision=1e-4)]
         # along: (start, end) on the track; across: (low, high) across it
         def along(b):
             return (b[0], b[2]) if horizontal else (b[1], b[3])
