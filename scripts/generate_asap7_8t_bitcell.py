@@ -12,14 +12,18 @@ ASAP7 SRAM GDS and two 2-fin access NMOS devices are added on the same 27 nm
 fin / 54 nm gate grid.  Port A retains the core's M2 bitlines and M3 wordline;
 port B is routed on M4/M5 to avoid disturbing the compact 6T-core routing.
 
+:TODO should we just use the OpenRAM reference for the pins?
+
 Pin mapping from the OpenRAM reference is:
 
   WL0  BL0  BR0  WL1  BL1  BR1
-   |    |    |    |    |    |
   WLA  BLA  BLAN  WLB  BLB  BLBN
 
 The second generated GDS contains the forced-state dummy, explicit oriented
 edge masters, parameterized dummy rows, and blank fillers at the 8T pitch.
+
+:TODO have some of the functions import from chipforge_asap7
+:TODO clean this file up by like a third of the code. 
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import hashlib
+import math
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -527,6 +532,90 @@ def add_port_b(cell: gdstk.Cell, variant: bool = False, terminal: bool = False) 
                            texttype=PIN_TEXTTYPE))
 
 
+def clip_gcut_to_cell(cell: gdstk.Cell) -> None:
+    """Trim GCUT to the cell's 0..108 nm width.
+
+    The published core's cut at y=0 runs to x=108.5 nm, relying on the
+    mirrored neighbour's copy to overlap it.  Where a tap, cap or corner
+    meets it instead, the half nanometre is a lone sliver 10 nm under that
+    neighbour's cut (GCUT.S.3) and 16.5 nm from its gate (GCUT.GATE.S.2).
+    Trimmed, two mirrored cells' cuts still abut and merge at the seam.
+    """
+    x0, _, x1, _ = MARKER
+    for poly in [p for p in cell.polygons if p.layer == GCUT]:
+        px0, py0, px1, py1 = bbox(poly)
+        if px0 < x0 - 1e-9 or px1 > x1 + 1e-9:
+            cell.remove(poly)
+            rect(cell, (max(px0, x0), py0, min(px1, x1), py1), GCUT)
+
+
+#: SDT heights are whole fin pitches (SDT.W.3); a trench keeps this far
+#: from gate contacts on other nets (LIG.SDT.S.8).
+SDT_PITCH, SDT_LIG_SPACE = 0.027, 0.014
+LISD_LIG_SPACE = 0.015  # LIG.LISD.S.7, corner to corner (S.6 is 14 nm)
+
+
+def snap_sdt_heights(cell: gdstk.Cell) -> None:
+    """Give every SDT a height of a whole number of fin pitches.
+
+    The published core (and the port-B terminals drawn to match it) cut its
+    trenches to the local-interconnect contacts: 23.5 to 48 nm tall.  Each
+    becomes the shortest 27 nm multiple that still covers the original,
+    keeping 14 nm from any gate contact it did not already touch (its
+    LISD, if it has to grow, 15 nm) and
+    covering at least the ACTIVE it did.  Among those placements it takes
+    the least LISD growth (the storage terminals keep theirs), then the
+    most ACTIVE; LISD grows to cover the trench where it has to, as an
+    ASAP7 standard cell's LISD always does.
+    """
+    def box_gap(a, b):
+        dx = max(0.0, b[0] - a[2], a[0] - b[2])
+        dy = max(0.0, b[1] - a[3], a[1] - b[3])
+        return math.hypot(dx, dy)
+
+    actives = [bbox(p) for p in cell.polygons if p.layer == ACTIVE]
+    ligs = [bbox(p) for p in cell.polygons if p.layer == LIG]
+    for poly in [p for p in cell.polygons if p.layer == SDT]:
+        x0, y0, x1, y1 = bbox(poly)
+        pitches = (y1 - y0) / SDT_PITCH
+        if abs(pitches - round(pitches)) < 1e-6:
+            continue
+        height = math.ceil(pitches - 1e-6) * SDT_PITCH
+        lisd_poly = next(p for p in cell.polygons if p.layer == LISD and bbox(p)[0] <= x0 + 1e-9
+                         and bbox(p)[2] >= x1 - 1e-9 and bbox(p)[1] <= y0 + 1e-9 and bbox(p)[3] >= y1 - 1e-9)  # fmt: skip
+        lisd = bbox(lisd_poly)
+        others = [lig for lig in ligs if box_gap(lig, (x0, y0, x1, y1)) > 1e-9]
+        lisd_others = [lig for lig in ligs if box_gap(lig, lisd) > 1e-9]
+
+        def on_active(lo, hi):
+            return sum(max(0.0, min(hi, a[3]) - max(lo, a[1])) for a in actives if a[0] < x1 and a[2] > x0)
+
+        covered = on_active(y0, y1)
+        best = None
+        for step in range(round((height - (y1 - y0)) / 0.0005) + 1):
+            lo = round(y1 - height + step * 0.0005, 4)
+            window = (x0, lo, x1, lo + height)
+            if any(box_gap(window, lig) < SDT_LIG_SPACE - 1e-9 for lig in others):
+                continue
+            growth = max(0.0, lisd[1] - lo) + max(0.0, window[3] - lisd[3])
+            grown = (lisd[0], min(lisd[1], lo), lisd[2], max(lisd[3], window[3]))
+            if growth and any(box_gap(grown, lig) < LISD_LIG_SPACE - 1e-9 for lig in lisd_others):
+                continue
+            area = on_active(lo, window[3])
+            if area < covered - 1e-9:
+                continue
+            key = (round(growth, 4), -round(area, 4))
+            if best is None or key < best[0]:
+                best = (key, window)
+        if best is None:
+            raise RuntimeError(f"{cell.name}: no {height * 1000:.0f} nm SDT window for x {x0:.3f} y {y0:.4f}")
+        cell.remove(poly)
+        rect(cell, best[1], SDT)
+        if best[0][0] > 0:
+            cell.remove(lisd_poly)
+            rect(cell, (lisd[0], min(lisd[1], best[1][1]), lisd[2], max(lisd[3], best[1][3])), LISD)
+
+
 def build_cell(source_gds: Path) -> gdstk.Library:
     source_lib = gdstk.read_gds(str(source_gds))
     source = next((c for c in source_lib.cells if c.name == SOURCE_CELL), None)
@@ -541,8 +630,10 @@ def build_cell(source_gds: Path) -> gdstk.Library:
                                     (VARIANT_B_END_NAME, True, True)):
         cell = lib.new_cell(name)
         clone_base(source, cell)
+        clip_gcut_to_cell(cell)
         add_storage_straps_and_wla(cell)
         add_port_b(cell, variant, terminal)
+        snap_sdt_heights(cell)
 
         for layer in sorted(MARKER_LAYERS):
             rect(cell, MARKER, layer)
