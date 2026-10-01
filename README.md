@@ -27,40 +27,96 @@ then assembles the macro. Requires `yosys`, `openroad` (or `--openroad-path`),
 and KLayout's Python bindings — see External Dependencies.
 
 Notes:
-- The commercial flow remains the default when `--openroad` is omitted; dual-port falls back to it.
+- The commercial flow remains the default when `--openroad` is omitted.
 - The build hard-fails on missing timing paths, setup/hold, or slew/capacitance/fanout violations.
 - STA uses routed global parasitics at TT only — a conservative implementation target, not a characterized frequency claim. Use `scripts/characterize_read.py` for the array datapath.
 
-## Dual-port 8T bitcell (ASAP7)
+## Dual-port 8T flow (2RW, ASAP7)
 
-The dual-port physical foundation is available as the generated native ASAP7
-hard cell `tech/gds/sram_cell_8t.gds`, the matching dummy/row-cap/column-cap/
-corner family in `tech/gds/sram_cell_8t_edges.gds`, and independent port-A and
-port-B IO/precharge wrappers in `tech/gds/sram_8t_ioprech.gds`. Schematics live
-under `tech/spice/`. It uses the public OpenRAM dual-port topology; the layout
-itself is built from the published ASAP7 6T core and ASAP7-native geometry. See
-[docs/asap7_8t_bitcell.md](docs/asap7_8t_bitcell.md) for the pin map,
-provenance, rebuild command, and verification scope.
+Dual-port is the default mode (omit `--single-port`): two independent
+read/write ports on an 8T bitcell. Run it from the repository root, since the
+binary finds `scripts/`, `tech/` and `.venv/` there and writes `results/`
+beside them:
 
-`tech/gds/sram_wordline_arrays.gds` adds academic-style parameterized
-`sramcol_xN` and `array_xNxM` hierarchy for both 8T and 6T. The tracked ladder
-contains 2/32/64/128 wordlines; `scripts/generate_asap7_wordline_arrays.py`
-accepts any positive wordline count for non-standard macro sizes. Wordline
-count and column-mux height are separate parameters, and the default four-row
-8T arrays are checked directly against both IO-wrapper pin pitches.
+```
+./build/OpenFinRAM --num-wls 8 --num-data-bits 16 --num-banks 1 --openroad
+```
 
-`tech/gds/sram_8t_iocolumn.gds` joins both physical IO wrappers to the same
-pair of capped 8T half-arrays. The A and B cores are side by side rather than
-overlaid: port B crosses the A core on M4, while port A crosses the B core on
-M5 through dedicated via-stack gaps. The generated `colgrp_x{2N}x4_sram_8t`
-ladder follows the same 2/32/64/128 half-array sizes and accepts non-standard N
-when supplied a matching parameterized-array GDS.
+1. Yosys and OpenROAD synthesize, place, route and time the controller and
+   decoders (`tmp/openroad_<timestamp>/`). Without `--openroad` the commercial
+   flow builds the controller instead (`tmp/innovus_<timestamp>/`).
+2. `scripts/compile_asap7_2rw.py` assembles and routes the macro with OpenROAD
+   (`tmp/macro_2rw_<timestamp>/`) and re-extracts every pin connection from
+   the streamed GDS before publishing it.
+3. The macro lands in `results/sram_x<2*wls>x<bits>x<banks>_<timestamp>/`:
+   `.gds`, `.lef`, estimated `.lib`, `.sp` and `.physical.json`.
 
-The layout compiler still fails closed in dual-port mode until the matching
-replica/tap cells and final macro-level placement/power integration exist; the
-active-array and routed dual-port IO-column hierarchy itself is now available.
-Dual-port preflight loads this library and validates the requested wordline
-variant and fixed four-row mux contract before reporting those later blockers.
+Sizes: `--num-wls` is the rows one row-select address field covers; each
+array has twice that, so the example is `sram_x16x16x1`. Wordlines and bits
+must be even and at least 2, banks a power of two, and the column mux four
+rows.
+
+Options:
+- `--share-port-b`: banks in pairs, mirrored about one two-sided port-B IO
+  block (needs an even bank count).
+- `--strips-in-controller`: put the wordline driver strips in the controller's
+  band, abutting the IO blocks. Supported for one column of tiles (one bank,
+  or one shared pair) so far.
+
+Floorplan: each data bit is a column tile, `port-A IO | cap | array | port-B
+IO`, with port A's IO at one end of the bitlines and port B's at the other.
+The tiles form two abutted stacks with the controller band between them;
+wordlines run through each stack by abutment from a pair of driver strips at
+its edge. Each IO block carries full-height VDD/VSS M3 straps, tied to the
+array's supply bars at every seam, so a stack's supplies join end to end and
+only its end tiles' are routed.
+
+The assembler can be run on its own against an existing controller GDS, which
+skips synthesis; it then writes only the `.gds` and `.physical.json`:
+
+```
+.venv/bin/python scripts/compile_asap7_2rw.py --wordlines 8 --bits 16 --banks 1 \
+  --controller tmp/openroad_<timestamp>/ctrl_decode.gds \
+  --work tmp/macro_2rw_manual --output results/manual/sram_x16x16x1.gds
+```
+
+It starts at a 0.3 um pin margin and doubles it up to `--max-margin` if
+routing fails. Python needs `gdstk`, KLayout's bindings and `chipforge_asap7`
+(the driver strips); `.venv/bin/python` is used when present.
+
+Verify a result (transistor-level LVS plus the public KLayout DRC runset, or
+`--drc-engine gdscheck` for the calibrated device subset):
+
+```
+.venv/bin/python scripts/verify_macro.py results/sram_x16x16x1_<timestamp>
+```
+
+Known limits: the public DRC is not clean (remaining findings are mostly the
+dummy end rows' gate pitch and router-level M1/V1/M4 spacing); the band
+controller fails max-fanout on larger macros such as x32x8x2 and x16x32x2;
+middle tiles take their supply only through the IO straps, so IR drop on tall
+stacks is unmeasured.
+
+### 8T cell libraries
+
+The flow builds on generated native ASAP7 cells (schematics in `tech/spice/`):
+
+- `tech/gds/sram_cell_8t.gds`: the 8T bitcell and its mirrored-slot variants,
+  built from the published ASAP7 6T core with ASAP7-native port-B geometry and
+  the public OpenRAM dual-port topology. The matching dummy, row-cap,
+  column-cap and corner family is in `tech/gds/sram_cell_8t_edges.gds`. See
+  [docs/asap7_8t_bitcell.md](docs/asap7_8t_bitcell.md) for the pin map,
+  provenance, rebuild commands and verification scope.
+- `tech/gds/sram_wordline_arrays.gds`: parameterized `sramcol_xN` and
+  `array_xNxM` hierarchy for 8T and 6T. The tracked ladder has 2/32/64/128
+  wordlines; `scripts/generate_asap7_wordline_arrays.py` accepts any positive
+  count, and the macro compiler generates the tapped arrays it needs on demand.
+- `tech/gds/sram_8t_iocolumn.gds`: the port-A, port-B and two-sided port-B IO
+  blocks (`iocol_sram_8t_a/b/b2`) and the `colgrp_x{N}x4_sram_8t` column
+  groups that join them to an array, written with their SPICE by
+  `scripts/generate_asap7_8t_iocolumn.py`.
+- `tech/gds/sram_8t_ioprech.gds`: standalone port-A and port-B IO/precharge
+  wrappers.
 
 ## Tests
 
@@ -91,6 +147,10 @@ cmake -S . -B build && ctest --test-dir build --output-on-failure
   wordline-row and array hierarchy, including a non-standard x18/mux-2 case.
 - `tests/run_8t_iocolumn_check.sh`: deterministic dual-port IO-column routing,
   capped array abutment, internal read-port ties, and a non-standard x18 case.
+- `asap7_2rw_physical_check` (`tests/tools/test_2rw_physical.py`): the 2RW
+  assembler's tiles, abstracts and abutments without running the router.
+- `asap7_2rw_macro_check`: builds and routes a small 2RW macro end to end and
+  checks its GDS, LEF, Liberty and SPICE agree (slow; needs OpenROAD).
 
 ## Commercial Flow (Cadence / Synopsys, default)
 
