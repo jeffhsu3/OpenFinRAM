@@ -126,8 +126,52 @@ def _merge_findings(parts: list[dict]) -> dict:
     }
 
 
+#: Markers reported but not counted: tech/drc/asap7/waivers.yml.
+DEFAULT_WAIVERS = Path(__file__).resolve().parents[1] / "tech/drc/asap7/waivers.yml"
+
+
+def load_waivers(path: Path | None) -> list[dict]:
+    if path is None:
+        return []
+    import yaml
+
+    waivers = (yaml.safe_load(path.read_text()) or {}).get("waivers", [])
+    for waiver in waivers:
+        if not waiver.get("cells") or not waiver.get("reason"):
+            raise ValueError(f"{path}: every waiver needs cells and a reason")
+    return waivers
+
+
+def waive(report: Path, waivers: list[dict]) -> tuple[dict, dict, list[dict]]:
+    """Split a KLayout report's markers into ``(counted, waived)`` per rule, and per waiver.
+
+    The runset files a marker under the cell whose own geometry produced it
+    (``cell:orientation``); a waiver covers it when that cell matches one of
+    its globs and its rule is listed.  The runset sometimes repeats a rule
+    id in its category ("LIG.LISD.S.7LIG.LISD.S.7"); either form matches.
+    """
+    import fnmatch
+    import xml.etree.ElementTree as ET
+
+    counted, waived = {}, {}
+    used = [0] * len(waivers)
+    for item in ET.parse(report).getroot().findall("./items/item"):
+        rule = (item.findtext("category") or "").strip("'\"").split(" ")[0]
+        owner = (item.findtext("cell") or "").split(":")[0]
+        hit = next((i for i, w in enumerate(waivers)
+                    if any(fnmatch.fnmatchcase(owner, glob) for glob in w["cells"])
+                    and (not w.get("rules") or any(rule in (r, r + r) for r in w["rules"]))), None)  # fmt: skip
+        target = counted if hit is None else waived
+        target[rule] = target.get(rule, 0) + 1
+        if hit is not None:
+            used[hit] += 1
+    applied = [{"cells": w["cells"], "rules": w.get("rules"), "reason": w["reason"], "markers": n}
+               for w, n in zip(waivers, used)]  # fmt: skip
+    return dict(sorted(counted.items())), dict(sorted(waived.items())), applied
+
+
 def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = True,
-           drc_engine: str = "klayout") -> dict:
+           drc_engine: str = "klayout", waivers: Path | None = DEFAULT_WAIVERS) -> dict:
     from chipforge_asap7.verification import drc_counts, run_drc, run_hierarchical_lvs
 
     result_dir = result_dir.resolve()
@@ -168,10 +212,21 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
                               **run_device_drc(gds, cell, out / "drc", binary=binary, timeout=7200)}
             print(f"\nDRC (gdscheck calibrated device subset): {verdict['drc']['markers']} markers")
         elif drc_engine == "klayout":
-            counts = drc_counts(run_drc(gds, out / "drc", cell_name=cell, timeout=7200))
-            verdict["drc"] = {"markers": sum(counts.values()), "rules": dict(sorted(counts.items()))}
-            print(f"\nDRC (public KLayout runset): {sum(counts.values())} markers in {len(counts)} rules; "
+            violations = run_drc(gds, out / "drc", cell_name=cell, timeout=7200)
+            reports = sorted((out / "drc").glob("*.lyrdb"))
+            if len(reports) != 1:
+                raise RuntimeError(f"expected one KLayout report in {out / 'drc'}, found {len(reports)}")
+            counts, waived, applied = waive(reports[0], load_waivers(waivers))
+            if sum(counts.values()) + sum(waived.values()) != len(violations):
+                raise RuntimeError("waiver split lost markers")
+            verdict["drc"] = {"markers": sum(counts.values()), "rules": counts,
+                              "waived": {"markers": sum(waived.values()), "rules": waived, "waivers": applied}}
+            print(f"\nDRC (public KLayout runset): {sum(counts.values())} markers in {len(counts)} rules, "
+                  f"{sum(waived.values())} waived; "
                   f"implant overlap (NSELECT.PSELECT.AUX.1): {counts.get('NSELECT.PSELECT.AUX.1', 0)}")
+            for waiver in applied:
+                if waiver["markers"]:
+                    print(f"  waived {waiver['markers']}: {waiver['reason']}")
         else:
             raise ValueError(f"Unknown DRC engine: {drc_engine}")
     verdict["seconds"] = round(time.time() - started, 1)
@@ -224,6 +279,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-drc", action="store_true")
     parser.add_argument("--drc-engine", choices=("klayout", "gdscheck"), default="klayout",
                         help="Public full runset (klayout), or calibrated device subset (gdscheck).")
+    parser.add_argument("--waivers", type=Path, default=DEFAULT_WAIVERS,
+                        help="DRC waivers (KLayout engine); reported but not counted.")
+    parser.add_argument("--no-waivers", action="store_true", help="Count every DRC marker.")
     parser.add_argument("--baseline", type=Path, default=None, help="Known findings to hold the line against.")
     parser.add_argument("--write-baseline", type=Path, default=None, help="Record this run's findings as known.")
     args = parser.parse_args(argv)
@@ -231,7 +289,8 @@ def main(argv: list[str] | None = None) -> int:
     out = args.out or REPO_ROOT / "tmp" / f"verify_{args.result_dir.resolve().name}"
     if args.no_drc and (args.baseline or args.write_baseline):
         parser.error("A DRC baseline requires DRC; remove --no-drc")
-    verdict = verify(args.result_dir, out, cell=args.cell, drc=not args.no_drc, drc_engine=args.drc_engine)
+    verdict = verify(args.result_dir, out, cell=args.cell, drc=not args.no_drc, drc_engine=args.drc_engine,
+                     waivers=None if args.no_waivers else args.waivers)
     found = known_findings(verdict)
     print(f"\nwrote {out / 'verification.json'}")
     if args.write_baseline:

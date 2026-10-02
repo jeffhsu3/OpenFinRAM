@@ -363,3 +363,19 @@ The compiled macro now also carries a label on every named net at a point the
 connectivity gate verified, so nets are named in a viewer and LVS has names to
 start from. The two-bank controller's place-and-route left one 1 nm M1 spacing
 at 50 % utilization; the flow now retries at 44 % and 38 %.
+
+## Waivers (2026-10-01)
+
+`verify_macro.py` reads `tech/drc/asap7/waivers.yml` (gdscheck's waiver
+shape: cell globs, rule ids, a reason). A KLayout marker is waived when the
+runset files it under a cell matching a waiver, i.e. it came from that cell's
+own geometry, and its rule is listed; it is reported apart and not counted, so
+baselines pin only the rest. `--no-waivers` counts everything. Two waivers:
+ASAP7 standard cells as delivered (DFFASRHQNx1, TIEHIx1 and TIELOx1 trip
+V1.S.4, V0.S.1, LIG.SDT.S.8 and LIG.LISD.S.7) and the runset's V5.M6.AUX.2,
+which checks horizontal M6 with V5's vertical-edge selection.
+
+x16x16x1 is then 0 markers (27 waived). x4x2x1 keeps four at the macro's top
+level: two 17.5 nm M1.W.1 slivers and two M1.S.6 corners where router M1
+meets a tile's half-nanometre-shifted M1; the baseline was rewritten from a
+fresh x4x2x1 build.
