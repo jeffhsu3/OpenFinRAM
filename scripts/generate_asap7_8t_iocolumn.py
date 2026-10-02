@@ -56,6 +56,11 @@ M1, V1, M2, V2, M3, V3, M4, V4, M5, V5, M6, V6, M7 = (
     19, 21, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70
 )
 MUX_ROWS = 4
+GATE, LIG, V0 = 7, 16, 18
+#: Where a rail's LIG stops short of the block's array-facing edge: the end
+#: tile's dummy row puts a WLB gate contact 17 nm past that edge, level with
+#: the block's top rail, and two short LIG edges want 31 nm (LIG.S.4-5).
+RAIL_LIG_INSET = 0.014
 #: ASAP7's fin pitch, and where chipforge's cells (and ASAP7's standard cells)
 #: centre their first fin above a row boundary.
 FIN_PITCH, LEAF_FIN_PHASE = 27.0, 13.5
@@ -249,6 +254,7 @@ def build_io_blocks(specs: dict[str, IoColumnSpec]) -> tuple[dict[str, gdstk.Cel
         nm.write_gds(str(path))
         um = gdstk.read_gds(str(path), unit=1e-6)
     cells = {cell.name: cell for cell in um.cells}
+    trim_rail_lig([cells[name] for name in names.values()])
     netlists = []
     for port, spec in specs.items():
         block = f"iocol_block_{port.lower()}"
@@ -260,6 +266,38 @@ def build_io_blocks(specs: dict[str, IoColumnSpec]) -> tuple[dict[str, gdstk.Cel
             f".ENDS {port_io_name(port)}\n"
         )
     return {port: cells[name] for port, name in names.items()}, "\n".join(netlists) + ".END\n"
+
+
+def trim_rail_lig(blocks: list[gdstk.Cell]) -> int:
+    """Start the rows' rail LIG RAIL_LIG_INSET in from the blocks' array-facing edge.
+
+    chipforge runs an LI line under every supply rail, full width, so a V0
+    on the rail lands on local interconnect.  At the edge that meets the
+    array (x = 0 of each bitline-mux row; the two-sided block places its
+    mux twice, the second mirrored, so both its edges) nothing lands that
+    close, and the top rail's line, past the block's boundary, would sit
+    17 nm from the end row's WLB contact.  Returns the lines trimmed.
+    """
+    rows = {c.name: c for block in blocks for c in block.dependencies(True) if c.name.endswith("__row")}
+    trimmed = 0
+    for row in rows.values():
+        inner = row.get_polygons(depth=None)
+        for poly in [q for q in row.polygons if q.layer == LIG]:
+            x0, y0, x1, y1 = bbox(poly)
+            if y1 - y0 > 0.017 or x1 - x0 < 0.3 or abs(x0) > 1e-6:
+                continue  # not a rail line reaching the array-facing edge
+            lo = x0 + RAIL_LIG_INSET
+            for q in inner:
+                if q.layer in (V0, GATE):
+                    a, b, c, d = bbox(q)
+                    if b < y1 and d > y0 and a < lo and c > x0:
+                        raise RuntimeError(f"{row.name}: a {'V0' if q.layer == V0 else 'GATE'} uses the rail LIG's end")
+            row.remove(poly)
+            rect(row, (lo, y0, x1, y1), LIG)
+            trimmed += 1
+    if not trimmed:
+        raise RuntimeError("no rail LIG reaches the IO blocks' array-facing edge")
+    return trimmed
 
 
 #: A supply strap: an M3 line the IO column's height, landing on every M1
