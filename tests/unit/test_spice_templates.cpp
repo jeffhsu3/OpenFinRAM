@@ -684,3 +684,28 @@ TEST(SpiceTemplates6T, DividedWordlinesSizeTheSlicesForASegment) {
     EXPECT_EQ(count_occurrences(stack, "end_row_6t"), 2U);
     EXPECT_FALSE(subckt_text(deck, "wl_strip_c8_x1").empty());
 }
+
+TEST(SpiceTemplates6T, DeeperMuxesTakeTheirOwnIoBlock) {
+    for (unsigned mux : {8U, 16U}) {
+        ScopedCurrentPath cwd(REPO_ROOT);
+        MainCliOptions config;
+        config.bitcell_6t = true;
+        config.num_wls = 2;
+        config.num_data_bits = 2;
+        config.num_banks = 2;
+        config.num_rows_per_mux = mux;
+        const std::string deck = OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+        const std::string io = "iocol_sram_6t_x" + std::to_string(mux);
+        const std::string colgrp = subckt_text(deck, "colgrp_sram_6t");
+        const std::string wrapper = subckt_text(deck, io);
+        ASSERT_FALSE(wrapper.empty()) << io;
+        EXPECT_EQ(count_occurrences(colgrp, io + "\n"), 1U);
+        EXPECT_EQ(instance_node_count(colgrp, "XIO_A"), subckt_port_count(wrapper));
+        EXPECT_EQ(count_occurrences(subckt_text(deck, "array_sram_6t"), "sram_cell_row_6t"), mux);
+        // Every bank its own mux's selects.
+        const std::string stack = subckt_text(deck, "stacked_colgrp_x4x1x2");
+        EXPECT_NE(stack.find("yselA[" + std::to_string(2 * mux - 1) + "]"), std::string::npos);
+        // A cell per mux row along the wordline: one bit a stack, `mux` cells.
+        EXPECT_FALSE(subckt_text(deck, "wl_strip_c" + std::to_string(mux) + "_x1").empty());
+    }
+}

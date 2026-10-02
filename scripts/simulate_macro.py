@@ -337,10 +337,13 @@ def default_program(g: Geometry, *, spaced: bool = False) -> list[tuple[Op, Op]]
     last = (
         g.mux - 1
     )  # ... and the last column, the other way round, on a word that is not what Q holds
-    last_bottom = next(addr for addr in range(g.words)
-                       if g.split(addr)[:2] == (0, last) and pattern_of(addr) != pattern_of(col0_top_hint(g)))  # fmt: skip
-    last_top = next(addr for addr in range(g.words)
-                    if g.split(addr)[:2] == (1, last) and pattern_of(addr) != pattern_of(col0_bottom))  # fmt: skip
+    # With few rows a column half may hold no word of another pattern: then any of its words.
+    def in_column(half: int, avoid: str) -> int:
+        words = [addr for addr in range(g.words) if g.split(addr)[:2] == (half, last)]
+        return next((addr for addr in words if pattern_of(addr) != avoid), words[0])
+
+    last_bottom = in_column(0, pattern_of(col0_top_hint(g)))
+    last_top = in_column(1, pattern_of(col0_bottom))
     col0_top = next(
         addr
         for addr in range(g.words)
@@ -554,6 +557,25 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
         found = crossings(t, waves[signal], vdd / 2, rise, rise + 0.45 * period)
         return None if not found else (found[-1] if last else found[0]) - rise
 
+    supply_trace = waves.get("I(VVDD)", [])
+
+    def cycle_energy_fj(rise: float) -> float | None:
+        """Supply energy over the clock period that starts at `rise`."""
+        if not supply_trace:
+            return None
+        charge = sum((t[i] - t[i - 1]) * -(supply_trace[i] + supply_trace[i - 1]) / 2
+                     for i in range(1, len(t)) if rise <= t[i - 1] and t[i] <= rise + period)  # fmt: skip
+        return round(charge * vdd * 1e15, 2)
+
+    def slew_ps(signal: str, rising: bool, rise: float) -> float | None:
+        """20-80 % transition of `signal` in the clock-high phase after `rise` (its last such edge)."""
+        lo = crossings(t, waves[signal], 0.2 * vdd, rise, rise + 0.45 * period)
+        hi = crossings(t, waves[signal], 0.8 * vdd, rise, rise + 0.45 * period)
+        if not lo or not hi:
+            return None
+        start, stop = (lo[-1], hi[-1]) if rising else (hi[-1], lo[-1])
+        return ps(stop - start) if stop > start else None
+
     for cycle, ops in enumerate(program, start=1):
         rise = first + cycle * period
         sample = rise + 0.45 * period
@@ -593,7 +615,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             fired = None if any(f is None for f in fired_each) else max(fired_each)
             if op.kind == "W":
                 writes.append({"cycle": cycle, "port": port, "address": op.address, "data": op.data,
-                               "clk_to_wl_ps": ps(fired)})  # fmt: skip
+                               "clk_to_wl_ps": ps(fired), "energy_fJ": cycle_energy_fj(rise)})  # fmt: skip
                 continue
             expected = [memory[(op.address, bit)] for bit in range(g.bits)]
             volts = [
@@ -618,6 +640,12 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
                           "volts": [round(v, 4) for v in volts], "bits_sensed": len(flipped),
                           "clk_to_wl_ps": ps(fired), "clk_to_sae_ps": ps(sensed),
                           "clk_to_q_ps": ps(max(arrivals)) if arrivals else None,
+                          # Q's 20-80 % edges, rising and falling, over the bits that moved after SAE.
+                          "q_rise_ps": max((x for x in (slew_ps(f"V(Q_{port}[{bit}])", True, rise)
+                                                         for bit in flipped if expected[bit]) if x), default=None),
+                          "q_fall_ps": max((x for x in (slew_ps(f"V(Q_{port}[{bit}])", False, rise)
+                                                         for bit in flipped if not expected[bit]) if x), default=None),
+                          "energy_fJ": cycle_energy_fj(rise),
                           "ok": clean and got == expected})  # fmt: skip
         for op in ops:  # writes land after this cycle's reads are judged
             if op.kind == "W":
@@ -673,7 +701,7 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     subckts = parse_subckts(source)
     single = BITCELL_6T in subckts  # the single-port 6T macro's deck
     g = Geometry(
-        wordlines=described["wordlines_per_half"], mux=4, bits=described["bits"],
+        wordlines=described["wordlines_per_half"], mux=described.get("column_mux", 4), bits=described["bits"],
         banks=described.get("banks", 1), shared_b=described.get("shared_port_b", False),
         ports="A" if single else "AB",
     )  # fmt: skip
@@ -727,7 +755,7 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
             f"Xyce failed (exit {completed.returncode}); see {out / 'xyce.log'}\n{tail}"
         )
     verdict = evaluate(read_csv(waves_path), plan, program, cells, g, vdd)
-    verdict.update(cell=top, period_ns=period * 1e9, vdd=vdd, corner=corner, spaced=spaced,
+    verdict.update(cell=top, result_dir=str(result_dir), period_ns=period * 1e9, vdd=vdd, corner=corner, spaced=spaced,
                    program=[[f"{op.kind}{op.address}" + (f"={op.data:0{g.bits}b}" if op.kind == "W" else "")
                              for op in ops] for ops in program],
                    xyce_seconds=round(time.time() - started, 1), deck=str(deck))  # fmt: skip

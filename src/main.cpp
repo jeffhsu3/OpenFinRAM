@@ -67,7 +67,8 @@ int main(int argc, char **argv) {
     // Run synthesis flow (open-source Yosys or commercial Design Compiler)
     if (cli_options.use_yosys || cli_options.openroad_only) {
         LOGI << "=== Running Yosys Synthesis (OpenROAD ASAP7"
-             << (cli_options.single_port ? " single-port" : " dual-port") << ") ===";
+             << (cli_options.single_port ? " single-port"
+                 : cli_options.bitcell_6t ? " single-port 6T" : " dual-port") << ") ===";
         YosysManager yosys_manager(cli_options);
         if (!yosys_manager.run_synthesis()) {
             LOGE << "Yosys periphery synthesis/signoff failed.";
@@ -83,7 +84,8 @@ int main(int argc, char **argv) {
     // Run P&R flow (OpenROAD or Innovus)
     if (cli_options.use_openroad || cli_options.openroad_only) {
         LOGI << "=== Running OpenROAD P&R ("
-             << (cli_options.single_port ? "single-port" : "dual-port")
+             << (cli_options.single_port ? "single-port"
+                 : cli_options.bitcell_6t ? "single-port 6T" : "dual-port")
              << " ASAP7, platform/asap7) ===";
         OpenRoadManager openroad_manager(cli_options);
         if (!openroad_manager.run_openroad_flow()) {
@@ -152,9 +154,31 @@ int main(int argc, char **argv) {
         std::string liberty_error;
         OpenFinRAM::CharacterizationData char_data;
         OpenFinRAM::CharacterizationData* char_ptr = nullptr;
-        if (!cli_options.liberty_from_json.empty()) {
+        std::string liberty_from = cli_options.liberty_from_json;
+        // The 6T macro's timing and energy follow its size: with no measured
+        // JSON, scripts/timing_model_6t.py estimates them for this geometry
+        // from the model fit to whole-macro simulations (tech/timing/).
+        const std::string model = "tech/timing/sram_6t_timing.json";
+        if (liberty_from.empty() && cli_options.bitcell_6t && file_exists(model)) {
+            const std::string local_python = ".venv/bin/python";
+            const std::string estimate = result_dir + "/" + cell_name + ".timing.json";
+            const std::string command =
+                (file_exists(local_python) ? local_python : std::string("python3")) +
+                " scripts/timing_model_6t.py estimate --model " + model +
+                " --wordlines " + std::to_string(cli_options.num_wls) +
+                " --bits " + std::to_string(cli_options.num_data_bits) +
+                " --mux " + std::to_string(cli_options.num_rows_per_mux) +
+                " --segment-bits " + std::to_string(cli_options.segment_bits) +
+                " --output '" + estimate + "' > /dev/null";
+            if (std::system(command.c_str()) == 0) {
+                liberty_from = estimate;
+            } else {
+                LOGW << "6T timing model estimate failed; keeping the estimated constants";
+            }
+        }
+        if (!liberty_from.empty()) {
             if (OpenFinRAM::load_characterization_json(
-                    cli_options.liberty_from_json, char_data, &liberty_error)) {
+                    liberty_from, char_data, &liberty_error)) {
                 char_ptr = &char_data;
             } else {
                 LOGW << "Characterization JSON load failed, falling back to "

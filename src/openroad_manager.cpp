@@ -71,7 +71,9 @@ bool OpenRoadManager::run_openroad_flow() {
         gdstk::ErrorCode error = gdstk::ErrorCode::NoError;
         auto lib = gdstk::read_gds(join_path(get_current_dir_name(),
             "tech/gds/sram_6t_iocolumn.gds").c_str(), 0, 1e-2, nullptr, &error);
-        auto* io = lib.get_cell("iocol_sram_6t");
+        const std::string io_name = cli_options_.num_rows_per_mux == 4
+            ? std::string("iocol_sram_6t") : "iocol_sram_6t_x" + std::to_string(cli_options_.num_rows_per_mux);
+        auto* io = lib.get_cell(io_name.c_str());
         auto* bitcell = lib.get_cell("sram_cell_6t_122");
         auto io_size = io ? OpenFinRAM::get_cell_size_from_boundary(io, map) : OpenFinRAM::CellSize{};
         auto bit_size = bitcell ? OpenFinRAM::get_cell_size_from_boundary(bitcell, map) : OpenFinRAM::CellSize{};

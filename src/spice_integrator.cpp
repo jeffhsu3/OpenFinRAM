@@ -438,7 +438,7 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                 ? std::vector<const char*>{"yseln_A", "ysel_A"}
                 : std::vector<const char*>{"yseln_A", "ysel_A", "yseln_B", "ysel_B"};
             for (const char* bus : buses) {
-                for (int index = 0; index < cli_options_.num_banks * 4; ++index) {
+                for (int index = 0; index < static_cast<int>(cli_options_.num_banks * cli_options_.num_rows_per_mux); ++index) {
                     oss << " " << bus << "[" << index << "]";
                 }
                 oss << "\n+";

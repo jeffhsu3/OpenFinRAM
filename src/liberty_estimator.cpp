@@ -309,12 +309,14 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  delay_model : table_lookup;\n";
     out << "  revision : \"OpenFinRAM estimated-1\";\n";
     const std::string port_comment =
-        options.single_port
+        options.bitcell_6t
+            ? "ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Single-port 6T macro (one read/write port, A). Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled."
+        : options.single_port
             ? "ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled."
             : "ESTIMATED EARLY-PPA DUAL-PORT MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline per port; power is not modeled. True-dual-port 8T bitcell; ports A and B both support read and write. Same-address concurrent A/B accesses are illegal when either port writes; same-address read/read is supported.";
     if (data && !data->comment.empty()) {
         out << "  comment : \"" << liberty_quote(data->comment);
-        if (!options.single_port) {
+        if (!options.single_port && !options.bitcell_6t) {
             out << " Same-address concurrent A/B accesses are illegal when either port writes; same-address read/read is supported.";
         }
         out << "\";\n";

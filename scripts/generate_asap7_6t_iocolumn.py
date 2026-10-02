@@ -44,6 +44,8 @@ SOURCE = REPO / "tech/gds/srambank_32b_boundary_2.gds"
 BOUNDARY, M2, M3, M4 = 100, 20, 30, 40
 PIN_TEXTTYPE = 251
 MUX_ROWS = 4
+#: Column mux ratios a tile is built for: the edge filler covers four rows.
+MUXES = (4, 8, 16)
 BITCELL, DUMMY, TAP = "sram_cell_6t_122", "dummy_sram_6t122", "tapcell_sram_6t122"
 CAPS = ("dummy_topbot_v1", "dummy_topbot_v2")  # even rows, odd rows (drawn mirrored)
 EDGE_FILLER = "FILLER_cgedge"
@@ -53,6 +55,11 @@ BLOCK_PIN = {
     "WRENA": "wrenaA", "WRENAN": "wrenanA", "OE": "oe_outA", "OEB": "oeb_outA",
 }
 IO_NAME = "iocol_sram_6t"
+
+
+def io_name(mux: int = MUX_ROWS) -> str:
+    """The IO column's cell and subcircuit: ``iocol_sram_6t`` at 4:1, ``iocol_sram_6t_x8`` ..."""
+    return IO_NAME if mux == MUX_ROWS else f"{IO_NAME}_x{mux}"
 
 
 def boundary_box(cell: gdstk.Cell) -> tuple[float, float, float, float]:
@@ -127,19 +134,21 @@ def build_io_block(spec: StaggeredIoColumnSpec) -> tuple[gdstk.Cell, list[gdstk.
     cells = {cell.name: cell for cell in um.cells}
     block = cells[name]
     pins = io_column_pins(spec)
-    netlist = staggered_block_netlist(spec, name="iocol_block_6t").replace(".END\n", "")
+    name = io_name(spec.selects)
+    block_name = name.replace("iocol_sram_6t", "iocol_block_6t")
+    netlist = staggered_block_netlist(spec, name=block_name).replace(".END\n", "")
     wrapper_pins = [iocol_pin_name(pin) for pin in pins]
     netlist += (
-        f".SUBCKT {IO_NAME} {' '.join(wrapper_pins)}\n"
-        f"X_block {' '.join(wrapper_pins)} iocol_block_6t\n"
-        f".ENDS {IO_NAME}\n.END\n"
+        f".SUBCKT {name} {' '.join(wrapper_pins)}\n"
+        f"X_block {' '.join(wrapper_pins)} {block_name}\n"
+        f".ENDS {name}\n.END\n"
     )
     return block, list(block.dependencies(True)), netlist
 
 
 def build_io(library: gdstk.Library, block: gdstk.Cell, spec: StaggeredIoColumnSpec) -> gdstk.Cell:
     """The tile's IO column: the block, labelled with the tile's names."""
-    cell = library.new_cell(IO_NAME)
+    cell = library.new_cell(io_name(spec.selects))
     cell.add(gdstk.Reference(block))
     layers = {"M1": 19, "M2": M2, "M3": M3, "M4": M4}
     for pin, (metal, (x, y)) in spec.pin_positions.items():
@@ -173,14 +182,15 @@ def build_row(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: i
     return row
 
 
-def build_array(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: int) -> gdstk.Cell:
-    """``cap | rows``: `MUX_ROWS` rows, alternate ones mirrored in y, the cap column at their left (x < 0)."""
-    if (found := existing(library, f"array_x{wordlines}x{MUX_ROWS}_6t")) is not None:
+def build_array(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: int,
+                mux: int = MUX_ROWS) -> gdstk.Cell:
+    """``cap | rows``: `mux` rows, alternate ones mirrored in y, the cap column at their left (x < 0)."""
+    if (found := existing(library, f"array_x{wordlines}x{mux}_6t")) is not None:
         return found
     row = build_row(library, cells, wordlines)
     _, _, row_width, pitch = boundary_box(row)
-    array = library.new_cell(f"array_x{wordlines}x{MUX_ROWS}_6t")
-    for r in range(MUX_ROWS):
+    array = library.new_cell(f"array_x{wordlines}x{mux}_6t")
+    for r in range(mux):
         if r % 2:
             array.add(gdstk.Reference(row, origin=(0.0, (r + 1) * pitch), x_reflection=True))
         else:
@@ -191,7 +201,7 @@ def build_array(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines:
         array.add(gdstk.Reference(cap, origin=(cx0, r * pitch - cy0), rotation=math.pi, x_reflection=True))
     for label_ in row.labels:
         label(array, label_.text, tuple(label_.origin), label_.layer)
-    rect(array, (0.0, 0.0, row_width, MUX_ROWS * pitch), BOUNDARY)
+    rect(array, (0.0, 0.0, row_width, mux * pitch), BOUNDARY)
     return array
 
 
@@ -267,17 +277,21 @@ def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: 
     In a stack of abutted tiles only the stack's two ends carry a dummy row;
     the tile's boundary is then `END_ROW_MARGIN` past it.
     """
-    array = build_array(library, cells, wordlines)
+    mux = spec.selects
+    array = build_array(library, cells, wordlines, mux)
     _, _, array_width, height = boundary_box(array)
     cap_width = boundary_box(cells[CAPS[0]])[2] - boundary_box(cells[CAPS[0]])[0]
     filler = cells[EDGE_FILLER]
     fx0, fy0, fx1, fy1 = boundary_box(filler)
-    if abs((fy1 - fy0) - height) > 1e-6:
+    # The released edge filler covers four rows; a taller tile takes it again.
+    copies = round(height / (fy1 - fy0))
+    if abs(copies * (fy1 - fy0) - height) > 1e-6:
         raise RuntimeError(f"{EDGE_FILLER} is {fy1 - fy0} um, the array {height}")
     array_x = (fx1 - fx0) + cap_width
     io_x = array_x + array_width
-    tile = library.new_cell(f"colgrp_x{wordlines}x{MUX_ROWS}_6t{ends_tag(bottom, top)}")
-    tile.add(gdstk.Reference(filler, origin=(-fx0, -fy0)))
+    tile = library.new_cell(f"colgrp_x{wordlines}x{mux}_6t{ends_tag(bottom, top)}")
+    for k in range(copies):
+        tile.add(gdstk.Reference(filler, origin=(-fx0, k * (fy1 - fy0) - fy0)))
     tile.add(gdstk.Reference(array, origin=(array_x, 0.0)))
     tile.add(gdstk.Reference(io, origin=(io_x, 0.0)))
 
@@ -287,7 +301,7 @@ def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: 
     bitcell = cells[BITCELL]
     pitch = boundary_box(bitcell)[3] - boundary_box(bitcell)[1]
     dummy_x = array_x + wordlines * (boundary_box(bitcell)[2] - boundary_box(bitcell)[0])
-    for r in range(MUX_ROWS):
+    for r in range(mux):
         for net, y in spec.bitline_ys(r).items():
             y = y / 1000
             rect(tile, (dummy_x + 0.054, y - 0.009, io_x + 0.054, y + 0.009), M2)
@@ -305,8 +319,8 @@ def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: 
     if bottom:
         tile.add(gdstk.Reference(end_row))
     if top:
-        # The row above row 3 is the row below row 0 mirrored about the
-        # array's top edge, as row 3 is row 0 mirrored there.
+        # The row above the last (odd) row is the row below row 0 mirrored
+        # about the array's top edge, as that row is row 0 mirrored there.
         tile.add(gdstk.Reference(end_row, origin=(0.0, height), x_reflection=True))
     reach = END_ROW_HEIGHT + END_ROW_MARGIN
     rect(tile, (0.0, -reach if bottom else 0.0, io_x + boundary_box(io)[2], height + (reach if top else 0.0)),
@@ -319,22 +333,25 @@ SOURCE_CELLS = (BITCELL, DUMMY, TAP, *CAPS, EDGE_FILLER, "dummy_vertical_6t122",
                 "dummy_corner_v2", "tapcell_dummy_6t122", "FILLER_BLANK_6t122")
 
 
-def build_library(wordline_counts: list[int]) -> tuple[gdstk.Library, str]:
-    """A tile for every count, and the IO column's SPICE."""
+def build_library(wordline_counts: list[int], muxes: tuple[int, ...] = MUXES) -> tuple[gdstk.Library, str]:
+    """A tile for every count and mux ratio, and the IO columns' SPICE."""
     cells = load_source()
     library = gdstk.Library("openfinram_asap7_6t_iocolumn", unit=1e-6, precision=2.5e-10)
     for name in SOURCE_CELLS:
         add_with_dependencies(library, cells[name])
-    spec = io_spec(cells[BITCELL])
-    block, deps, netlist = build_io_block(spec)
-    for dep in (block, *deps):
-        if dep.name not in {c.name for c in library.cells}:
-            library.add(dep)
-    io = build_io(library, block, spec)
-    for count in wordline_counts:
-        for bottom, top in ((True, True), (True, False), (False, True), (False, False)):
-            build_tile(library, cells, count, io, spec, bottom=bottom, top=top)
-    return library, netlist
+    netlists = []
+    for mux in muxes:
+        spec = io_spec(cells[BITCELL], mux)
+        block, deps, netlist = build_io_block(spec)
+        netlists.append(netlist.replace(".END\n", ""))
+        for dep in (block, *deps):
+            if dep.name not in {c.name for c in library.cells}:
+                library.add(dep)
+        io = build_io(library, block, spec)
+        for count in wordline_counts:
+            for bottom, top in ((True, True), (True, False), (False, True), (False, False)):
+                build_tile(library, cells, count, io, spec, bottom=bottom, top=top)
+    return library, "".join(netlists) + ".END\n"
 
 
 def main(argv: list[str]) -> int:

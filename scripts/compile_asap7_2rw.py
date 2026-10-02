@@ -270,7 +270,7 @@ def wordline_bus(port, half, segment=None):
     return f"wl_{port}_{half}" + ("" if segment is None else f"_s{segment}")
 
 
-def leaf_net(name, bank, bit, wordlines, bits, shared_b=False, segment=None):
+def leaf_net(name, bank, bit, wordlines, bits, shared_b=False, segment=None, mux=4):
     """Macro net of a column pin; `wordlines` is NUM_WL, half the array's.
 
     A pair tile (`shared_b`, `bank` its first) names the second bank's
@@ -284,9 +284,10 @@ def leaf_net(name, bank, bit, wordlines, bits, shared_b=False, segment=None):
     wl = WORDLINE.fullmatch(name)
     if wl:
         return f"{wordline_bus(wl[1], half_of(bit, bits), segment)}[{bank * 2 * wordlines + int(wl[2])}]"
+    mux_ratio = mux
     mux = re.fullmatch(r"(yseln|ysel)([AB])\[(\d+)\]", name)
     if mux:
-        return f"{mux[1]}_{mux[2]}[{bank * 4 + int(mux[3])}]"
+        return f"{mux[1]}_{mux[2]}[{bank * mux_ratio + int(mux[3])}]"
     ctrl = re.fullmatch(r"(wrena|wrenan|oeb_out|oe_out|blprechn|sae_)([AB])(R?)", name)
     if ctrl:
         signal = ctrl[1].rstrip("_")
@@ -347,7 +348,8 @@ def wordline_tracks(cell):
     return tracks
 
 
-def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_reach=0.0, segment_bits=None):
+def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_reach=0.0, segment_bits=None,
+                          mux=4):
     """The strip pair for each side of the controller band, in the tile's x.
 
     A strip is one slice per four of the tile's port-A wordlines, the slice's
@@ -372,7 +374,7 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
     VSS rail (the two-port pair's arrangement), its outputs labelled
     ``WL_D``/``WL_U``.
     """
-    cells_along = 4 * (segment_bits or bits // 2)
+    cells_along = mux * (segment_bits or bits // 2)
     load = wl_slices.load_class(cells_along)
     ladder = {
         c.name: c
@@ -725,7 +727,7 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, stra
 
 
 @functools.cache
-def _library_6t(wordlines):
+def _library_6t(wordlines, mux=4):
     """The single-port 6T tiles' library: the released 6T cells, the staggered IO block, every end variant."""
     import generate_asap7_6t_iocolumn as columns6
 
@@ -733,7 +735,7 @@ def _library_6t(wordlines):
     lib = gdstk.Library(unit=1e-6, precision=2.5e-10)
     for name in sorted(columns6.SOURCE_CELLS):
         columns6.add_with_dependencies(lib, cells[name])
-    spec = columns6.io_spec(cells[columns6.BITCELL])
+    spec = columns6.io_spec(cells[columns6.BITCELL], mux)
     block, deps, _ = columns6.build_io_block(spec)
     for dep in (block, *deps):
         if dep.name not in {c.name for c in lib.cells}:
@@ -744,14 +746,14 @@ def _library_6t(wordlines):
     return lib, tiles
 
 
-def build_leaf_6t(wordlines, bottom=True, top=True):
+def build_leaf_6t(wordlines, bottom=True, top=True, mux=4):
     """``edge filler | cap | array of `wordlines` | dummy | tap | IO``: the single-port 6T tile.
 
     The released 6T cells with chipforge's staggered IO block
     (`generate_asap7_6t_iocolumn`); a dummy row below and/or above, as the
     8T tile has.  Its pins are the 8T tile's port A's.
     """
-    return _library_6t(wordlines)[1][(bottom, top)]
+    return _library_6t(wordlines, mux)[1][(bottom, top)]
 
 
 def tie_end_row_stubs(cell):
@@ -993,6 +995,8 @@ def run(args):
     # block per column tile, one strip per side of the controller band.
     single = args.bitcell == "6t"
     ports = ("A",) if single else ("A", "B")
+    if args.mux not in ((4, 8, 16) if single else (4,)):
+        raise RuntimeError(f"a {args.mux}:1 column mux is not built for the {args.bitcell} macro")
     if single and (shared_b or args.band is not None or args.plan_band is not None or args.strap_pitch):
         raise RuntimeError("the 6T macro takes no --share-port-b, controller-band strips or straps yet")
     # What the floorplan repeats across: a bank, or a pair of banks.
@@ -1034,7 +1038,7 @@ def run(args):
         if (bottom, top) in variants:
             continue
         if single:
-            cell = build_leaf_6t(array_wordlines, bottom=bottom, top=top)
+            cell = build_leaf_6t(array_wordlines, bottom=bottom, top=top, mux=args.mux)
         else:
             cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top, shared_b=shared_b,
                               strap_pitch=args.strap_pitch)
@@ -1067,7 +1071,7 @@ def run(args):
     strip_pairs, slice_load = build_wordline_strips(
         strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits,
         ports=ports, gate_reach=FIN_HALF_PITCH if single else 0.0,
-        segment_bits=segment if segments > 1 else None,
+        segment_bits=segment if segments > 1 else None, mux=args.mux,
     )
     if shared_b:
         tile_width = columns.boundary_box(leaf)[2]
@@ -1258,7 +1262,7 @@ def run(args):
             y_tile = (y_lo_tiles if bit < half_bits else y_hi_tiles) + offsets[index]
             origin = (x_bank - (bx0 - tile_ox), y_tile - (by0 - tile_oy))
             resolve = functools.partial(
-                leaf_net, bank=bank, bit=bit, wordlines=args.wordlines, bits=args.bits,
+                leaf_net, bank=bank, bit=bit, wordlines=args.wordlines, bits=args.bits, mux=args.mux,
                 shared_b=shared_b, segment=segment_of(index),
             )
             instances.append((inst, hard.name, origin, resolve))
@@ -1302,7 +1306,7 @@ def run(args):
 
     external = {"clk", "rst_n", "vdd", "vss"}
     external.update(f"{p}_n_{port}" for p in ("ce", "we", "oe") for port in ports)
-    address_bits = (2 * args.wordlines * 4 * args.banks - 1).bit_length()
+    address_bits = (2 * args.wordlines * args.mux * args.banks - 1).bit_length()
     external.update(f"A_{port}[{bit}]" for port in ports for bit in range(address_bits))
     external.update(
         f"{p}_{port}[{bit}]" for p in "DQ" for port in ports for bit in range(args.bits)
@@ -1481,7 +1485,8 @@ def run(args):
         "tap_pitch": tap_pitch,
         "column_tiles": units * args.bits,
         "wordline_slice": wl_slices.slice_name(slice_load),
-        "cells_along_wordline": 4 * segment,
+        "column_mux": args.mux,
+        "cells_along_wordline": args.mux * segment,
         "wordline_segments_per_stack": segments,
         "wordline_strip_pairs": 2 * args.banks * segments,
         "checked_net_partitions": len(probes),
@@ -2023,6 +2028,8 @@ def main():
                         help="every this many array taps is a supply strap (M5 spines down the tap column)")
     parser.add_argument("--bitcell", choices=("8t", "6t"), default="8t",
                         help="8t: the two-port macro; 6t: single port, the released 6T array with port A's IO")
+    parser.add_argument("--mux", type=int, default=4,
+                        help="column mux ratio: 4, or 8 or 16 for the single-port macro")
     parser.add_argument("--segment-bits", type=int, default=0,
                         help="divided wordlines: cut each stack into segments of this many data bits, "
                         "a mid strip pair between two (single-port macro)")

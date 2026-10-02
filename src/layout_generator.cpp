@@ -3519,7 +3519,9 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
 }
 
 bool LayoutGenerator::create_dual_port_macro() {
-    if (cli_options_.num_rows_per_mux != 4) {
+    // The 6T macro's staggered IO is built at 4:1, 8:1 and 16:1 (checked at
+    // the command line); the 8T IO blocks at 4:1 only.
+    if (!cli_options_.bitcell_6t && cli_options_.num_rows_per_mux != 4) {
         LOGE << "The 2RW physical IO currently supports a four-row column mux";
         return false;
     }
@@ -3552,7 +3554,7 @@ bool LayoutGenerator::create_dual_port_macro() {
         << " --bits " << cli_options_.num_data_bits
         << " --banks " << cli_options_.num_banks
         << (cli_options_.share_port_b ? " --share-port-b" : "")
-        << (cli_options_.bitcell_6t ? " --bitcell 6t" : "")
+        << (cli_options_.bitcell_6t ? " --bitcell 6t --mux " + std::to_string(cli_options_.num_rows_per_mux) : "")
         << (cli_options_.segment_bits ? " --segment-bits " + std::to_string(cli_options_.segment_bits) : "")
         << (cli_options_.strips_in_controller
                 ? " --band " + quote(join_path(root, "tmp/openroad_" + timestamp + "/band")) : "")

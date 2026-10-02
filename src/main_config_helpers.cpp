@@ -194,8 +194,9 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         }
     }
     if (options.segment_bits >= options.num_data_bits / 2) options.segment_bits = 0;
-    if (options.bitcell_6t && options.num_rows_per_mux != 4) {
-        LOGE << "Error: --bitcell 6t's IO block is 4:1 so far (--num-rows-per-mux 4).";
+    if (options.bitcell_6t && options.num_rows_per_mux != 4 && options.num_rows_per_mux != 8 &&
+        options.num_rows_per_mux != 16) {
+        LOGE << "Error: --bitcell 6t's IO block is 4:1, 8:1 or 16:1 (--num-rows-per-mux).";
         std::exit(1);
     }
     if ((options.use_yosys || options.use_openroad) && options.bitcell_6t) {

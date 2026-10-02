@@ -89,6 +89,15 @@ class SixTTileTests(unittest.TestCase):
         self.assertEqual(strip_net("B_U[2]", 0, "lo", ROWS // 2), "sel_lo_A[2]")
         self.assertEqual(leaf_net("WLA[5]", 0, 3, ROWS // 2, 16, segment=1), "wl_A_lo_s1[5]")
 
+    def test_deeper_muxes_stack_more_rows_and_selects(self):
+        for mux in (8, 16):
+            tile = build_leaf_6t(ROWS, bottom=False, top=False, mux=mux)
+            _, y0, _, y1 = boundary(tile)
+            self.assertAlmostEqual(y1 - y0, mux * 0.27)
+            names = {label.text for label in tile.labels}
+            self.assertEqual({n for n in names if n.startswith("yselA[")}, {f"yselA[{r}]" for r in range(mux)})
+            self.assertEqual(leaf_net(f"yselA[{mux - 1}]", 1, 0, ROWS // 2, 4, mux=mux), f"ysel_A[{2 * mux - 1}]")
+
     def test_the_io_blocks_bitlines_meet_the_rows(self):
         cells = columns6.load_source()
         spec = columns6.io_spec(cells[columns6.BITCELL])

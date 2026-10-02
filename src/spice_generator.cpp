@@ -296,9 +296,9 @@ std::string SpiceGenerator::load_wl_slice_netlist() {
 // into the bits below the band and the `hi` pair up into the bits above; the
 // assembler draws the pair as one cell, so the deck has it as one subcircuit.
 int SpiceGenerator::wordline_cells_per_half() const {
-    // Four mux rows a data bit, along one wordline segment (a whole stack
-    // unless --segment-bits divides it).
-    return 4 * config_.wordline_segment_bits();
+    // A cell per mux row of every data bit along one wordline segment (a
+    // whole stack unless --segment-bits divides it).
+    return static_cast<int>(config_.num_rows_per_mux * config_.wordline_segment_bits());
 }
 
 int SpiceGenerator::wordline_slice_class(int cells) {
@@ -655,13 +655,14 @@ std::string SpiceGenerator::generate_cell_row_6t() {
 
 std::string SpiceGenerator::generate_array_6t() {
     const int rows = 2 * config_.num_wls;
+    const int mux = config_.num_rows_per_mux;
     std::vector<std::string> ports;
     append_indexed_ports(ports, "WL[", rows, "]");
-    append_indexed_ports(ports, "BL[", 4, "]");
-    append_indexed_ports(ports, "BLN[", 4, "]");
+    append_indexed_ports(ports, "BL[", mux, "]");
+    append_indexed_ports(ports, "BLN[", mux, "]");
     append_ports(ports, {"VDD", "VSS"});
     std::stringstream instances;
-    for (int r = 0; r < 4; ++r) {
+    for (int r = 0; r < mux; ++r) {
         instances << "X" << r << " ";
         append_indexed_tokens(instances, "WL[", rows, "]");
         instances << " BL[" << r << "] BLN[" << r << "] VDD VSS sram_cell_row_6t\n";
@@ -695,17 +696,18 @@ std::string SpiceGenerator::generate_end_row_6t() {
 
 std::string SpiceGenerator::generate_colgrp_6t() {
     const int rows = 2 * config_.num_wls;
+    const int mux = config_.num_rows_per_mux;
     std::vector<std::string> ports;
     append_indexed_ports(ports, "WLA[", rows, "]");
     append_ports(ports, {"DA", "QA", "wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA"});
-    append_indexed_ports(ports, "yselnA[", 4, "]");
-    append_indexed_ports(ports, "yselA[", 4, "]");
+    append_indexed_ports(ports, "yselnA[", mux, "]");
+    append_indexed_ports(ports, "yselA[", mux, "]");
     append_ports(ports, {"sae_A", "VDD", "VSS"});
     std::stringstream instances;
     instances << "X0 ";
     append_indexed_tokens(instances, "WLA[", rows, "]");
-    append_indexed_tokens(instances, "BL_A[", 4, "]");
-    append_indexed_tokens(instances, "BLN_A[", 4, "]");
+    append_indexed_tokens(instances, "BL_A[", mux, "]");
+    append_indexed_tokens(instances, "BLN_A[", mux, "]");
     instances << " VDD VSS array_sram_6t\n";
     // The staggered IO block (chipforge_asap7's StaggeredIoColumnSpec),
     // wrapped as iocol_sram_6t in tech/spice/sram_6t_iocolumn.sp, in the pin
@@ -713,10 +715,12 @@ std::string SpiceGenerator::generate_colgrp_6t() {
     // complement, select, complement select; then precharge, sense enable,
     // data in, write enables, output enables, data out, supplies.
     instances << "XIO_A";
-    for (int r = 0; r < 4; ++r) {
+    for (int r = 0; r < mux; ++r) {
         instances << " BL_A[" << r << "] BLN_A[" << r << "] yselA[" << r << "] yselnA[" << r << "]";
     }
-    instances << " blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_sram_6t\n";
+    // iocol_sram_6t at 4:1, iocol_sram_6t_x<mux> otherwise.
+    instances << " blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_sram_6t"
+              << (mux == 4 ? std::string() : "_x" + std::to_string(mux)) << "\n";
     return create_subckt("colgrp_sram_6t", ports, instances.str());
 }
 
@@ -725,6 +729,7 @@ std::string SpiceGenerator::generate_colgrp_6t() {
 std::string SpiceGenerator::generate_stacked_colgrp_6t() {
     const int rows = 2 * config_.num_wls;
     const int bits = config_.wordline_segment_bits();
+    const int mux = config_.num_rows_per_mux;
     std::vector<std::string> ports;
     append_indexed_ports(ports, "WLA[", rows * config_.num_banks, "]");
     append_indexed_ports(ports, "DA[", bits, "]");
@@ -732,8 +737,8 @@ std::string SpiceGenerator::generate_stacked_colgrp_6t() {
     for (const char* name : {"wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA", "sae_A"}) {
         append_indexed_ports(ports, std::string(name) + "[", config_.num_banks, "]");
     }
-    append_indexed_ports(ports, "yselnA[", 4 * config_.num_banks, "]");
-    append_indexed_ports(ports, "yselA[", 4 * config_.num_banks, "]");
+    append_indexed_ports(ports, "yselnA[", mux * config_.num_banks, "]");
+    append_indexed_ports(ports, "yselA[", mux * config_.num_banks, "]");
     append_ports(ports, {"VDD", "VSS"});
 
     std::stringstream instances;
@@ -744,8 +749,8 @@ std::string SpiceGenerator::generate_stacked_colgrp_6t() {
             append_indexed_tokens(instances, "WLA[", rows, "]", bank * rows);
             instances << " DA[" << bit << "] QA[" << bit << "] wrenaA[" << b << "] wrenanA[" << b
                       << "] oeb_outA[" << b << "] oe_outA[" << b << "] blprechnA[" << b << "] ";
-            append_indexed_tokens(instances, "yselnA[", 4, "]", bank * 4);
-            append_indexed_tokens(instances, "yselA[", 4, "]", bank * 4);
+            append_indexed_tokens(instances, "yselnA[", mux, "]", bank * mux);
+            append_indexed_tokens(instances, "yselA[", mux, "]", bank * mux);
             instances << " sae_A[" << b << "] VDD VSS colgrp_sram_6t\n";
         }
         // The stack's two ends each carry a dummy row on its wordlines.
