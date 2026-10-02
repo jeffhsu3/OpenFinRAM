@@ -1286,6 +1286,7 @@ def run(args):
     # The router does not know ASAP7's run-length rule on M4-M7; the gate
     # below proves the lengthened wires changed no net.
     top_prl = fix_short_parallel_runs(top)
+    fill_m1_notches(top)
     lib.write_gds(str(work / "routed.gds"), timestamp=columns.FIXED_GDS_TIMESTAMP)
     # No final artifact is published until every physical terminal is joined
     # to its net and every distinct named net remains isolated.
@@ -1655,6 +1656,61 @@ def add_pin_conductors(cell):
             drawing = polygon.copy()
             drawing.datatype = 0
             cell.add(drawing)
+
+
+#: M1.S.2/M1.S.6: 25 nm between short M1 edges, 20 nm corner to corner,
+#: within one net's merged metal as well as between nets.
+M1_NOTCH, M1_CLEAR = 0.025, 0.020
+
+
+def fill_m1_notches(top):
+    """Fill the notches where the router's M1 lands on a block's M1 off its track.
+
+    A tile's M1 sits at several phases of the 36 nm M1 grid, so a router wire
+    landing on one overlaps it a few nanometres off centre, and the merged
+    metal keeps a notch narrower than M1.S.6's 20 nm.  Each router shape with
+    everything on M1 it touches is closed over gaps under 25 nm; a filler
+    piece is drawn where it stays 20 nm from all other M1.  Returns the count.
+    """
+    layer = 19
+    routed = top.get_polygons(layer=layer, datatype=0, depth=0)
+    routed += [q for r in top.references if r.cell.name.startswith("VIA")
+               for q in r.get_polygons(layer=layer, datatype=0)]  # fmt: skip
+    blocks = [q for r in top.references if not r.cell.name.startswith("VIA")
+              for q in r.get_polygons(layer=layer, datatype=0, depth=None)]  # fmt: skip
+    every = routed + blocks
+    boxes = [q.bounding_box() for q in every]
+
+    def near(box, reach):
+        (a, b), (c, d) = box
+        return [i for i, ((x0, y0), (x1, y1)) in enumerate(boxes)
+                if x0 < c + reach and x1 > a - reach and y0 < d + reach and y1 > b - reach]  # fmt: skip
+
+    filled = 0
+    for shape in routed:
+        # Only metal that really meets the shape: the same net.  (Boxes that
+        # merely overlap can belong to another net, which closing would join.)
+        reach = gdstk.offset(shape, 1e-4, join="miter", precision=1e-5)
+        touching = [every[i] for i in near(shape.bounding_box(), 1e-6)
+                    if gdstk.boolean(reach, every[i], "and", precision=1e-5)]  # fmt: skip
+        merged = gdstk.boolean(touching, [], "or", precision=1e-4)
+        half = M1_NOTCH / 2
+        closed = gdstk.offset(gdstk.offset(merged, half, join="miter", precision=1e-4), -half, join="miter", precision=1e-4)
+        for patch in gdstk.boolean(closed, merged, "not", precision=1e-4):
+            (a, b), (c, d) = patch.bounding_box()
+            if patch.area() < 1e-8 or min(c - a, d - b) >= M1_NOTCH:
+                continue
+            others = [every[i] for i in near(patch.bounding_box(), M1_CLEAR)
+                      if not any(every[i] is t for t in touching)]  # fmt: skip
+            grown = gdstk.offset(patch, M1_CLEAR - 1e-4, join="round", precision=1e-4)
+            if others and gdstk.boolean(grown, others, "and", precision=1e-4):
+                continue
+            patch.layer = layer
+            top.add(patch)
+            every.append(patch)
+            boxes.append(patch.bounding_box())
+            filled += 1
+    return filled
 
 
 #: Side-edge pins: track pitch and wire width per horizontal layer (nm), and
