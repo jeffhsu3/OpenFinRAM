@@ -1509,10 +1509,18 @@ def band_die(band):
 #: The router does not know it; `fix_short_parallel_runs` mends its wires.
 PRL_LAYERS = {40: True, 50: False, 60: True, 70: False}  # layer: horizontal
 MIN_PRL, ADJACENT_GAP, TIP_SPACE = 44, 25, 40  # nm
+#: M4.S.3/M6.S.3: the deck grows each horizontal wire 48 nm across its track
+#: and wants 40 nm between facing ends of the grown wires, where an end lies
+#: on real metal: a wire whose track is within 48 nm of another's.  A wire
+#: that overlaps the other along the track, by TIP_OVERLAP (MIN_PRL on an
+#: adjacent track), has no facing end left.
+TIP_REACH, TIP_OVERLAP = 48, 10  # nm
+TIP_LAYERS = {40, 60}
 
 
 def fix_short_parallel_runs(top, blocks_too=False):
-    """Lengthen the macro's own wires where two on adjacent tracks overlap by under 44 nm.
+    """Lengthen the macro's own wires where two on adjacent tracks overlap by under 44 nm,
+    or where two wires' ends within two tracks face each other closer than 40 nm.
 
     Of each such pair, a wire the router drew (never a block's metal, unless
     `blocks_too`: a hard cell's own bars, for a cell assembled from them) is
@@ -1554,6 +1562,25 @@ def fix_short_parallel_runs(top, blocks_too=False):
         def short(a, b):
             return 0 < gap(a, b) < ADJACENT_GAP and 0 < overlap(a, b) < MIN_PRL
 
+        def grown(b):  # the deck's view: 48 nm wider either side of the track
+            reach = TIP_REACH
+            return [b[0], b[1] - reach, b[2], b[3] + reach] if horizontal else [b[0] - reach, b[1], b[2] + reach, b[3]]
+
+        def tip(a, b):
+            if not (layer in TIP_LAYERS and 0 < gap(a, b) < TIP_REACH and -TIP_SPACE < overlap(a, b) < 0):
+                return False
+            # The ends face across the gap between them, where both grown
+            # wires reach, unless other wires' grown metal fills that gap.
+            ga, gb = grown(a), grown(b)
+            lo_end, hi_start = (along(a)[1], along(b)[0]) if along(a)[1] <= along(b)[0] else (along(b)[1], along(a)[0])
+            lo, hi = max(across(ga)[0], across(gb)[0]), min(across(ga)[1], across(gb)[1])
+            window = extended([0, lo, 0, hi] if horizontal else [lo, 0, hi, 0], lo_end, hi_start)
+            fill = [gdstk.rectangle((g[0], g[1]), (g[2], g[3]))
+                    for g in (grown(z) for z, _ in shapes if z is not a and z is not b)
+                    if g[0] < window[2] and g[2] > window[0] and g[1] < window[3] and g[3] > window[1]]  # fmt: skip
+            hole = gdstk.boolean(gdstk.rectangle((window[0], window[1]), (window[2], window[3])), fill, "not")
+            return bool(hole)
+
         def extended(b, lo, hi):
             return [lo, b[1], hi, b[3]] if horizontal else [b[0], lo, b[2], hi]
 
@@ -1564,17 +1591,21 @@ def fix_short_parallel_runs(top, blocks_too=False):
                 if j == i or not shapes[i][1]:
                     continue
                 x, y = shapes[i][0], shapes[j][0]
-                if not short(x, y):
+                if not short(x, y) and not tip(x, y):
                     continue
                 width = across(x)[1] - across(x)[0]
                 if width != (24 if layer in (40, 50) else 32):
                     continue  # one track wide only
                 (x0, x1), (y0, y1) = along(x), along(y)
                 options = []
-                if y1 - max(x0, y0) >= MIN_PRL:  # extend x's far end towards y's
-                    options.append((x0, max(x1, max(x0, y0) + MIN_PRL)))
-                if min(x1, y1) - y0 >= MIN_PRL:  # or its near end
-                    options.append((min(x0, min(x1, y1) - MIN_PRL), x1))
+                if short(x, y):
+                    if y1 - max(x0, y0) >= MIN_PRL:  # extend x's far end towards y's
+                        options.append((x0, max(x1, max(x0, y0) + MIN_PRL)))
+                    if min(x1, y1) - y0 >= MIN_PRL:  # or its near end
+                        options.append((min(x0, min(x1, y1) - MIN_PRL), x1))
+                else:  # past y's facing end, so no two ends face each other
+                    need = MIN_PRL if gap(x, y) < ADJACENT_GAP else TIP_OVERLAP
+                    options.append((x0, y0 + need) if x1 <= y0 else (y1 - need, x1))
                 for lo, hi in sorted(options, key=lambda o: (o[1] - o[0])):
                     new = extended(x, lo, hi)
                     ok = True
@@ -1594,6 +1625,9 @@ def fix_short_parallel_runs(top, blocks_too=False):
                             if after != before and not (after >= MIN_PRL or after <= -TIP_SPACE):
                                 ok = False
                                 break
+                        if g > 0 and tip(new, z) and not tip(x, z):
+                            ok = False
+                            break
                     if ok:
                         shapes[i] = (new, True)
                         a, b = along(x), (lo, hi)
@@ -1605,7 +1639,8 @@ def fix_short_parallel_runs(top, blocks_too=False):
         for b in added:
             top.add(gdstk.rectangle((b[0] / 1000, b[1] / 1000), (b[2] / 1000, b[3] / 1000), layer=layer))
         left = sum(1 for i in range(len(shapes)) for j in range(i + 1, len(shapes))
-                   if (shapes[i][1] or shapes[j][1]) and short(shapes[i][0], shapes[j][0]))  # fmt: skip
+                   if (shapes[i][1] or shapes[j][1])
+                   and (short(shapes[i][0], shapes[j][0]) or tip(shapes[i][0], shapes[j][0])))  # fmt: skip
         fixed_total += fixed
         left_total += left
     return fixed_total, left_total
