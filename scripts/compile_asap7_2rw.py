@@ -1226,11 +1226,13 @@ def run(args):
         tcl.append(
             f"make_tracks M{i} -x_offset 0 -y_offset 0 -x_pitch {pitch} -y_pitch {pitch}"
         )
+    tcl += side_pin_placements(external, probes, width, height, args.top_layer - 1)
     tcl += [
         # The macro routes and pins on M1 up to --top-layer: odd, so the pins
         # take its horizontal neighbour below for the side edges and itself
         # for the top and bottom.  M7 by default: M8/M9 are the chip's, and
         # the public deck sizes them by length, which the tech LEF does not.
+        # The signal pins are placed above; this places the supplies.
         f"place_pins -hor_layers M{args.top_layer - 1} -ver_layers M{args.top_layer}",
         f"set_routing_layers -signal M1-M{args.top_layer}",
         "global_route",
@@ -1653,6 +1655,62 @@ def add_pin_conductors(cell):
             drawing = polygon.copy()
             drawing.datatype = 0
             cell.add(drawing)
+
+
+#: Side-edge pins: track pitch and wire width per horizontal layer (nm), and
+#: how far a pin reaches into the macro.
+SIDE_PIN_LAYERS = {4: (48, 24), 6: (64, 32)}
+SIDE_PIN_DEPTH, SIDE_PIN_TRACKS = 69, 2
+
+
+def side_pin_placements(external, probes, width, height, layer):
+    """``place_pin`` commands for the signal pins: port A's on the left edge, B's on the right.
+
+    A bit's D and Q go level with the tile terminals they drive and read; a
+    port's address bus then its enables (port B's followed by clk and rst_n)
+    go level with the controller's inputs, in index order.  Groups keep their
+    order bottom to top and stand at least two tracks apart.
+    """
+    pitch, wire = SIDE_PIN_LAYERS[layer]
+
+    def index(net):
+        match = re.search(r"\[(\d+)\]$", net)
+        return int(match.group(1)) if match else -1
+
+    def target(net):
+        ys = [probe["point"][1] for probe in probes[net] if probe["instance"] != "PIN"]
+        if not ys:
+            raise RuntimeError(f"{net}: no terminal to place its pin by")
+        return 1000 * sum(ys) / len(ys)
+
+    commands = []
+    for port, side in (("A", "left"), ("B", "right")):
+        groups = []
+        for bit in sorted({index(n) for n in external if re.fullmatch(rf"[DQ]_{port}\[\d+\]", n)}):
+            pair = sorted((n for n in (f"D_{port}[{bit}]", f"Q_{port}[{bit}]") if n in external), key=target)
+            groups.append(pair)
+        controls = sorted((n for n in external if n.startswith(f"A_{port}[")), key=index)
+        controls += [n for n in (f"ce_n_{port}", f"we_n_{port}", f"oe_n_{port}") if n in external]
+        if port == "B":
+            controls += [n for n in ("clk", "rst_n") if n in external]
+        groups.append(controls)
+        groups.sort(key=lambda group: sum(map(target, group)) / len(group))
+        sep = SIDE_PIN_TRACKS * pitch
+        y_next = pitch * SIDE_PIN_TRACKS
+        for group in groups:
+            centre = sum(map(target, group)) / len(group)
+            start = max(round((centre - (len(group) - 1) * sep / 2) / pitch) * pitch, y_next)
+            for k, net in enumerate(group):
+                y = start + k * sep
+                x = SIDE_PIN_DEPTH / 2 if side == "left" else round(1000 * width) - SIDE_PIN_DEPTH / 2
+                commands.append(
+                    f"place_pin -pin_name {{{net}}} -layer M{layer} -location {{{x / 1000:.4f} {y / 1000:.3f}}}"
+                    f" -pin_size {{{SIDE_PIN_DEPTH / 1000:.3f} {wire / 1000:.3f}}}"
+                )
+            y_next = start + len(group) * sep
+        if y_next > round(1000 * height) - pitch:
+            raise RuntimeError(f"port {port}'s pins do not fit on the {side} edge")
+    return commands
 
 
 def check_route_drc(report):
