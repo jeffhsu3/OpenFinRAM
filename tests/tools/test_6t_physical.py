@@ -9,7 +9,7 @@ import gdstk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from chipforge_asap7.verification.connectivity import MetalGraph
-from compile_asap7_2rw import abstract, build_leaf_6t, build_wordline_strips, leaf_net, supply, wordline_tracks
+from compile_asap7_2rw import abstract, build_leaf_6t, build_wordline_strips, leaf_net, strip_net, supply, wordline_tracks
 import generate_asap7_6t_iocolumn as columns6
 
 ROWS = 8  # wordlines of the array (NUM_WL 4)
@@ -66,6 +66,28 @@ class SixTTileTests(unittest.TestCase):
             labels = [label.text for label in pair.labels]
             self.assertEqual(sum(bool(re.fullmatch(r"WL_A\[\d+\]", t)) for t in labels), ROWS, half)
             self.assertFalse(any(t.startswith(("WL_B", "SEL_B", "B_B")) for t in labels), half)
+
+    def test_a_mid_pair_drives_the_segments_either_side(self):
+        tile = build_leaf_6t(ROWS, bottom=True, top=True)
+        lib = gdstk.Library(unit=1e-6, precision=1e-10)
+        pairs, load = build_wordline_strips(lib, tile, ROWS // 2, 16, ports=("A",), gate_reach=0.0135,
+                                            segment_bits=2)  # fmt: skip
+        self.assertIn("mid", pairs)
+        mid = pairs["mid"]
+        _, y0, _, y1 = boundary(mid)
+        down = {l.text: l.origin[1] for l in mid.labels if l.text.startswith("WL_D[")}
+        up = {l.text: l.origin[1] for l in mid.labels if l.text.startswith("WL_U[")}
+        self.assertEqual((len(down), len(up)), (ROWS, ROWS))
+        self.assertTrue(all(abs(y - y0) < 0.01 for y in down.values()))
+        self.assertTrue(all(abs(y - y1) < 0.01 for y in up.values()))
+        # Sized for a segment (2 bits, 8 cells), not the stack (8 bits).
+        self.assertEqual(load, 8)
+        # D is the segment below, U the one above; selects are port A's.
+        self.assertEqual(strip_net("WL_D[3]", 0, "lo", ROWS // 2, below=1, above=2), "wl_A_lo_s1[3]")
+        self.assertEqual(strip_net("WL_U[3]", 1, "hi", ROWS // 2, below=0, above=1), f"wl_A_hi_s1[{ROWS + 3}]")
+        self.assertEqual(strip_net("SEL_D[1]", 1, "lo", ROWS // 2), f"sel_hi_A[{ROWS // 4 + 1}]")
+        self.assertEqual(strip_net("B_U[2]", 0, "lo", ROWS // 2), "sel_lo_A[2]")
+        self.assertEqual(leaf_net("WLA[5]", 0, 3, ROWS // 2, 16, segment=1), "wl_A_lo_s1[5]")
 
     def test_the_io_blocks_bitlines_meet_the_rows(self):
         cells = columns6.load_source()

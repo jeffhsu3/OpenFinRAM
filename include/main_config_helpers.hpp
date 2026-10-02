@@ -13,6 +13,17 @@ struct MainCliOptions {
     // with chipforge_asap7's staggered IO, built by the two-port machinery
     // with port A alone.  `single_port` stays the legacy srambank flow.
     bool bitcell_6t = false;
+    // Divided wordlines (--segment-bits): each stack of data bits cut into
+    // segments of this many bits, a mid strip pair between two.  0: whole
+    // stacks.
+    unsigned segment_bits = 0;
+    // The bits of one wordline segment, and the segments in a stack.
+    unsigned wordline_segment_bits() const {
+        return segment_bits ? segment_bits : num_data_bits / 2;
+    }
+    unsigned wordline_segments() const {
+        return wordline_segment_bits() ? (num_data_bits / 2) / wordline_segment_bits() : 1;
+    }
     // Two-port only: banks in pairs share port B's IO block, the pair's
     // arrays mirrored about it (--share-port-b).
     bool share_port_b = false;

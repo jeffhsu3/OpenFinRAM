@@ -666,3 +666,21 @@ TEST(SpiceTemplates6T, WordlineStripsArePortAAlone) {
         EXPECT_EQ(count_occurrences(pair, "X_b "), 0U);
     }
 }
+
+TEST(SpiceTemplates6T, DividedWordlinesSizeTheSlicesForASegment) {
+    ScopedCurrentPath cwd(REPO_ROOT);
+    MainCliOptions config;
+    config.bitcell_6t = true;
+    config.num_wls = 2;
+    config.num_data_bits = 16;  // 8 a stack
+    config.num_banks = 1;
+    config.segment_bits = 2;    // 4 segments a stack, 8 cells a wordline
+    EXPECT_EQ(config.wordline_segments(), 4U);
+    const std::string deck = OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    // One segment's tiles a subcircuit, with its two end rows.
+    const std::string stack = subckt_text(deck, "stacked_colgrp_x4x2x1");
+    ASSERT_FALSE(stack.empty());
+    EXPECT_EQ(count_occurrences(stack, "colgrp_sram_6t"), 2U);
+    EXPECT_EQ(count_occurrences(stack, "end_row_6t"), 2U);
+    EXPECT_FALSE(subckt_text(deck, "wl_strip_c8_x1").empty());
+}

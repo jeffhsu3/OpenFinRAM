@@ -51,6 +51,8 @@ SLICE_WIDTH, WORDLINE_PITCH = 0.432, 0.108
 #: far apart both fin grids are on pitch.
 FIN_HALF_PITCH = 0.0135
 WORDLINE = re.compile(r"WL_?([AB])\[(\d+)\]")
+#: A mid strip pair's outputs: into the segment below (D) and above (U).
+SEGMENT_WORDLINE = re.compile(r"WL_([DU])\[(\d+)\]")
 
 
 def supply(text):
@@ -263,7 +265,12 @@ def half_of(bit, bits):
     return "lo" if bit < bits // 2 else "hi"
 
 
-def leaf_net(name, bank, bit, wordlines, bits, shared_b=False):
+def wordline_bus(port, half, segment=None):
+    """A stack's wordline bus, or a segment's: ``wl_A_lo``, ``wl_A_lo_s1``."""
+    return f"wl_{port}_{half}" + ("" if segment is None else f"_s{segment}")
+
+
+def leaf_net(name, bank, bit, wordlines, bits, shared_b=False, segment=None):
     """Macro net of a column pin; `wordlines` is NUM_WL, half the array's.
 
     A pair tile (`shared_b`, `bank` its first) names the second bank's
@@ -276,7 +283,7 @@ def leaf_net(name, bank, bit, wordlines, bits, shared_b=False):
         return f"{name[0]}_{name[1]}[{bit}]"
     wl = WORDLINE.fullmatch(name)
     if wl:
-        return f"wl_{wl[1]}_{half_of(bit, bits)}[{bank * 2 * wordlines + int(wl[2])}]"
+        return f"{wordline_bus(wl[1], half_of(bit, bits), segment)}[{bank * 2 * wordlines + int(wl[2])}]"
     mux = re.fullmatch(r"(yseln|ysel)([AB])\[(\d+)\]", name)
     if mux:
         return f"{mux[1]}_{mux[2]}[{bank * 4 + int(mux[3])}]"
@@ -289,19 +296,29 @@ def leaf_net(name, bank, bit, wordlines, bits, shared_b=False):
     raise RuntimeError(f"unmapped column pin {name}")
 
 
-def strip_net(name, bank, half, wordlines):
-    """Macro net of a strip pair pin: the controller's predecode lines in, wordlines out."""
+def strip_net(name, bank, half, wordlines, segment=None, below=None, above=None):
+    """Macro net of a strip pair pin: the controller's predecode lines in, wordlines out.
+
+    A band pair drives `segment` of its stack (None: the stack is one
+    segment); a mid pair drives port A's segments `below` and `above` it.
+    """
     if name in ("vdd", "vss"):
         return name
-    sel = re.fullmatch(r"SEL_([AB])\[(\d+)\]", name)
+    sel = re.fullmatch(r"SEL_([ABDU])\[(\d+)\]", name)
     if sel:
-        return f"sel_hi_{sel[1]}[{bank * (2 * wordlines // 4) + int(sel[2])}]"
-    low = re.fullmatch(r"B_([AB])\[(\d+)\]", name)
+        port = sel[1] if sel[1] in "AB" else "A"
+        return f"sel_hi_{port}[{bank * (2 * wordlines // 4) + int(sel[2])}]"
+    low = re.fullmatch(r"B_([ABDU])\[(\d+)\]", name)
     if low:
-        return f"sel_lo_{low[1]}[{low[2]}]"
+        port = low[1] if low[1] in "AB" else "A"
+        return f"sel_lo_{port}[{low[2]}]"
     wl = WORDLINE.fullmatch(name)
     if wl:
-        return f"wl_{wl[1]}_{half}[{bank * 2 * wordlines + int(wl[2])}]"
+        return f"{wordline_bus(wl[1], half, segment)}[{bank * 2 * wordlines + int(wl[2])}]"
+    mid = SEGMENT_WORDLINE.fullmatch(name)
+    if mid:
+        target = below if mid[1] == "D" else above
+        return f"{wordline_bus('A', half, target)}[{bank * 2 * wordlines + int(mid[2])}]"
     raise RuntimeError(f"unmapped strip pin {name}")
 
 
@@ -330,7 +347,7 @@ def wordline_tracks(cell):
     return tracks
 
 
-def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_reach=0.0):
+def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_reach=0.0, segment_bits=None):
     """The strip pair for each side of the controller band, in the tile's x.
 
     A strip is one slice per four of the tile's port-A wordlines, the slice's
@@ -347,8 +364,15 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
     port A's strip alone.  `gate_reach` carries the gate bridges that far
     past the pair's edge, into a tile whose own gates stop short of its
     edge (the 6T dummy row ends half a fin pitch inside the tile).
+
+    With `segment_bits` the stacks' wordlines are cut into segments of that
+    many data bits, and the slices are sized for a segment.  A third cell,
+    ``mid``, goes between two segments: one strip flipped facing down into
+    the segment below, one facing up into the segment above, on a shared
+    VSS rail (the two-port pair's arrangement), its outputs labelled
+    ``WL_D``/``WL_U``.
     """
-    cells_along = 4 * (bits // 2)
+    cells_along = 4 * (segment_bits or bits // 2)
     load = wl_slices.load_class(cells_along)
     ladder = {
         c.name: c
@@ -505,7 +529,47 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
             rect(x - 0.010, seam + height, x + 0.010, pair_height + gate_reach, 7)
         pair.add(gdstk.rectangle((x_left, 0), (x_right, pair_height), layer=100))
         pairs[half] = pair
+    if segment_bits and segment_bits < bits // 2:
+        if ports != ("A",):
+            raise RuntimeError("wordline segments are for the single-port macro so far")
+        pairs["mid"] = _mid_strip_pair(lib, strip, starts, pins, tracks, gate_tracks, rows, height,
+                                       x_left, x_right, gate_reach, load)  # fmt: skip
     return pairs, load
+
+
+def _mid_strip_pair(lib, strip, starts, pins, tracks, gate_tracks, rows, height, x_left, x_right,
+                    gate_reach, load):  # fmt: skip
+    """Two port-A strips back to back between two wordline segments: ``D`` drives the one below, ``U`` above.
+
+    The two-port pair's geometry: each strip half a fin pitch in from its
+    outer edge, the two sharing the VSS rail at the seam; each one's outputs
+    bridged across its margin on M3, every gate track bridged there too (and
+    `gate_reach` on, into the tile's half-pitch margin).
+    """
+    pair = lib.new_cell(f"wl_strips_mid_c{load}_x{rows // 4}")
+    seam = height + FIN_HALF_PITCH
+    pair_height = 2 * seam
+    pair.add(gdstk.Reference(strip, (0, seam)))  # U, facing up
+    pair.add(gdstk.Reference(strip, (0, seam), x_reflection=True))  # D, facing down
+    for side, sign in (("U", 1), ("D", -1)):
+        for k in range(rows // 4):
+            sx, sy, layer = pins["SEL"]
+            pair.add(gdstk.Label(f"SEL_{side}[{k}]", (starts[k] + sx, seam + sign * sy), layer=layer, texttype=251))
+        for x0_slice in starts:
+            for j in range(4):
+                x, y, layer = pins[f"B{j}"]
+                pair.add(gdstk.Label(f"B_{side}[{j}]", (x0_slice + x, seam + sign * y), layer=layer, texttype=251))
+    for i in range(rows):
+        x = tracks[("A", i)]
+        pair.add(gdstk.rectangle((x - 0.009, seam + height), (x + 0.009, pair_height), layer=30))
+        pair.add(gdstk.rectangle((x - 0.009, 0.0), (x + 0.009, seam - height), layer=30))
+        pair.add(gdstk.Label(f"WL_U[{i}]", (x, pair_height - 0.005), layer=30, texttype=251))
+        pair.add(gdstk.Label(f"WL_D[{i}]", (x, 0.005), layer=30, texttype=251))
+    for x in gate_tracks:
+        pair.add(gdstk.rectangle((x - 0.010, seam + height), (x + 0.010, pair_height + gate_reach), layer=7))
+        pair.add(gdstk.rectangle((x - 0.010, -gate_reach), (x + 0.010, seam - height), layer=7))
+    pair.add(gdstk.rectangle((x_left, 0), (x_right, pair_height), layer=100))
+    return pair
 
 
 def ends_tag(bottom, top):
@@ -941,15 +1005,27 @@ def run(args):
     tap_pitch = 0 if single else math.gcd(array_wordlines, 16)
 
     def is_wordline(net):
-        return WORDLINE.fullmatch(net) is not None
+        return WORDLINE.fullmatch(net) is not None or SEGMENT_WORDLINE.fullmatch(net) is not None
 
     # Only a stack's two ends carry a dummy row: its first tile the bottom
     # one, its last the top one, the tiles between none, so they abut array
     # row to array row and IO block to IO block.
     half_bits = args.bits // 2
+    # Divided wordlines: each stack cut into segments of `segment` bits, a
+    # mid strip pair between two, every segment its own wordlines and its
+    # own end rows; numbered from the bottom of the stack.
+    segment = args.segment_bits or half_bits
+    if half_bits % segment:
+        raise RuntimeError(f"--segment-bits {segment} does not divide a stack of {half_bits} bits")
+    segments = half_bits // segment
+    if segments > 1 and not single:
+        raise RuntimeError("wordline segments are for the single-port macro (--bitcell 6t) so far")
 
     def ends_of(index):
-        return (index == 0, index == half_bits - 1)
+        return (index % segment == 0, index % segment == segment - 1)
+
+    def segment_of(index):
+        return None if segments == 1 else index // segment
 
     banding = args.band is not None or args.plan_band is not None
     variants = {}
@@ -991,6 +1067,7 @@ def run(args):
     strip_pairs, slice_load = build_wordline_strips(
         strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits,
         ports=ports, gate_reach=FIN_HALF_PITCH if single else 0.0,
+        segment_bits=segment if segments > 1 else None,
     )
     if shared_b:
         tile_width = columns.boundary_box(leaf)[2]
@@ -1126,7 +1203,10 @@ def run(args):
         _, y0, _, y1 = columns.boundary_box(variants[ends_of(index)][0])
         return y1 - y0
 
-    offsets = [sum(tile_height(k) for k in range(index)) for index in range(half_bits)]
+    mid_height = columns.boundary_box(strip_pairs["mid"])[3] if segments > 1 else 0.0
+    # A tile's offset in its stack: the tiles below it and the mid pairs between their segments.
+    offsets = [sum(tile_height(k) for k in range(index)) + (index // segment) * mid_height
+               for index in range(half_bits)]  # fmt: skip
     stack = offsets[-1] + tile_height(half_bits - 1)
     y_lo_tiles = margin_y
     if in_band:
@@ -1179,7 +1259,7 @@ def run(args):
             origin = (x_bank - (bx0 - tile_ox), y_tile - (by0 - tile_oy))
             resolve = functools.partial(
                 leaf_net, bank=bank, bit=bit, wordlines=args.wordlines, bits=args.bits,
-                shared_b=shared_b,
+                shared_b=shared_b, segment=segment_of(index),
             )
             instances.append((inst, hard.name, origin, resolve))
             for pin, info in pins.items():
@@ -1194,9 +1274,26 @@ def run(args):
             inst = f"WL_{half.upper()}_{bank + second}"
             pox, poy = bbox_origin(strip_pairs[drawn])
             origin = (x_bank + pox, y_pair + poy)  # the pair is drawn in the tile's x
+            # A band pair drives the stack's segment next to the band.
             resolve = functools.partial(
-                strip_net, bank=bank + second, half=half, wordlines=args.wordlines
+                strip_net, bank=bank + second, half=half, wordlines=args.wordlines,
+                segment=None if segments == 1 else (segments - 1 if half == "lo" else 0),
             )
+            instances.append((inst, cell.name, origin, resolve))
+            for pin, info in cell_pins.items():
+                if info.get("private") or info.get("abutted"):
+                    continue
+                nets[resolve(info["net"])].append((inst, pin))
+        # A mid pair under each segment but a stack's first drives it and the one below.
+        for (half, y_stack), g in itertools.product(
+            (("lo", y_lo_tiles), ("hi", y_hi_tiles)), range(1, segments)
+        ):
+            cell, cell_pins, _, _ = pair_masters["mid"]
+            inst = f"WL_{half.upper()}_M{g}_{bank}"
+            pox, poy = bbox_origin(strip_pairs["mid"])
+            origin = (x_bank + pox, y_stack + offsets[g * segment] - mid_height + poy)
+            resolve = functools.partial(strip_net, bank=bank, half=half, wordlines=args.wordlines,
+                                        below=g - 1, above=g)  # fmt: skip
             instances.append((inst, cell.name, origin, resolve))
             for pin, info in cell_pins.items():
                 if info.get("private") or info.get("abutted"):
@@ -1384,8 +1481,9 @@ def run(args):
         "tap_pitch": tap_pitch,
         "column_tiles": units * args.bits,
         "wordline_slice": wl_slices.slice_name(slice_load),
-        "cells_along_wordline": 4 * (args.bits // 2),
-        "wordline_strip_pairs": 2 * args.banks,
+        "cells_along_wordline": 4 * segment,
+        "wordline_segments_per_stack": segments,
+        "wordline_strip_pairs": 2 * args.banks * segments,
         "checked_net_partitions": len(probes),
         "routing_drc_violations": 0,
         "short_parallel_runs_fixed": {"controller": ctrl_prl[0], "macro": top_prl[0]},
@@ -1400,7 +1498,7 @@ def run(args):
         json.dumps(report, indent=2) + "\n"
     )
     print(
-        f"PASS: {top_name}: {units * args.bits} column tiles, {2 * args.banks} strip pairs, "
+        f"PASS: {top_name}: {units * args.bits} column tiles, {2 * args.banks * segments} strip pairs, "
         f"{len(probes)} connected nets"
     )
 
@@ -1925,6 +2023,9 @@ def main():
                         help="every this many array taps is a supply strap (M5 spines down the tap column)")
     parser.add_argument("--bitcell", choices=("8t", "6t"), default="8t",
                         help="8t: the two-port macro; 6t: single port, the released 6T array with port A's IO")
+    parser.add_argument("--segment-bits", type=int, default=0,
+                        help="divided wordlines: cut each stack into segments of this many data bits, "
+                        "a mid strip pair between two (single-port macro)")
     parser.add_argument("--share-port-b", action="store_true",
                         help="banks in pairs, mirrored about one two-sided port-B IO block "
                         "(the controller built with SHARED_B)")  # fmt: skip

@@ -299,8 +299,16 @@ std::string SpiceIntegrator::generate_ctrl_instance(
 
 std::string SpiceIntegrator::generate_datapath_instance() const {
     std::ostringstream oss;
-    
+    // Divided wordlines (--segment-bits): each half is its segments, each
+    // segment's tiles their own instance on their own wordline bus.
+    const unsigned segments = cli_options_.single_port ? 1 : cli_options_.wordline_segments();
+    const uint64_t seg_bits = cli_options_.single_port ? cli_options_.num_data_bits / 2
+                                                       : cli_options_.wordline_segment_bits();
+
     for (int top_bottom = 0; top_bottom < 2; ++top_bottom) {
+    for (unsigned seg = 0; seg < segments; ++seg) {
+        const std::string suffix = segments > 1 ? "_s" + std::to_string(seg) : "";
+        const uint64_t first_bit = top_bottom * (cli_options_.num_data_bits / 2) + seg * seg_bits;
 
         // The two halves of the data bits.  In the two-port macro they are
         // the stacks below (`lo`) and above (`hi`) the controller band, each
@@ -309,7 +317,7 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             ? (top_bottom == 0 ? "top" : "bottom")
             : (top_bottom == 0 ? "lo" : "hi");
         oss << "** Instantiate SRAM Datapath\n"
-            << "Xdata_" << half << " ";
+            << "Xdata_" << half << suffix << " ";
         
         for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
             if (cli_options_.single_port) {
@@ -330,7 +338,7 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                     ? std::vector<const char*>{"a"} : std::vector<const char*>{"a", "b"};
                 for (const char* port : ports) {
                     for (uint64_t i = 0; i < rows; ++i) {
-                        oss << " wl_" << port << "_" << half << "[" << i + bank * rows << "]";
+                        oss << " wl_" << port << "_" << half << suffix << "[" << i + bank * rows << "]";
                     }
                     oss << "\n+";
                 }
@@ -349,13 +357,13 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             }
             oss << "\n+";
         } else {
-            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
-                oss << " D_A[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            for (uint64_t i = 0; i < seg_bits; ++i) {
+                oss << " D_A[" << i + first_bit << "]";
             }
             oss << "\n+";
 
-            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
-                oss << " Q_A[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
+            for (uint64_t i = 0; i < seg_bits; ++i) {
+                oss << " Q_A[" << i + first_bit << "]";
             }
             oss << "\n+";
 
@@ -440,7 +448,8 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
         // Control signals and power
         oss << " VDD VSS\n"
             << "+ stacked_colgrp_x"<< cli_options_.num_wls * 2 
-            << "x" << cli_options_.num_data_bits / 2 << "x" << cli_options_.num_banks << "\n\n";
+            << "x" << seg_bits << "x" << cli_options_.num_banks << "\n\n";
+    }
     }
 
     return oss.str();
@@ -458,8 +467,16 @@ std::string SpiceIntegrator::generate_wordline_strip_instances() const {
     const uint64_t rows = 2 * cli_options_.num_wls;
     const uint64_t slices = rows / 4;
     OpenFinRAM::SpiceGenerator generator(cli_options_);
+    // With divided wordlines the band's strips drive the segment next to the
+    // band (the lower stack's last, the upper's first), and a mid pair under
+    // each other segment of a stack drives it (up) and the one below (down).
+    const unsigned segments = cli_options_.wordline_segments();
+    auto bus = [segments](char port, const char* half, unsigned seg) {
+        return std::string("wl_") + port + "_" + half + (segments > 1 ? "_s" + std::to_string(seg) : "");
+    };
     oss << "** Instantiate the wordline driver strips\n";
     for (const char* half : {"lo", "hi"}) {
+        const unsigned band_seg = std::string(half) == "lo" ? segments - 1 : 0;
         for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
             oss << "Xwl_" << half << "_" << bank;
             const std::vector<const char*> ports = cli_options_.bitcell_6t
@@ -474,13 +491,27 @@ std::string SpiceIntegrator::generate_wordline_strip_instances() const {
                 }
                 oss << "\n+";
                 for (uint64_t i = 0; i < rows; ++i) {
-                    oss << " wl_" << static_cast<char>(std::tolower(port[0])) << "_" << half
+                    oss << " " << bus(static_cast<char>(std::tolower(port[0])), half, band_seg)
                         << "[" << i + bank * rows << "]";
                     if (i % 8 == 7 && i + 1 < rows) oss << "\n+";
                 }
                 oss << "\n+";
             }
             oss << " VDD VSS " << generator.wordline_strip_pair_name(half) << "\n";
+            for (unsigned seg = 1; seg < segments; ++seg) {
+                for (const char* side : {"d", "u"}) {
+                    oss << "Xwl_" << half << "_m" << seg << side << "_" << bank;
+                    for (uint64_t k = 0; k < slices; ++k) oss << " sel_hi_A[" << bank * slices + k << "]";
+                    for (int j = 0; j < 4; ++j) oss << " sel_lo_A[" << j << "]";
+                    oss << "\n+";
+                    const unsigned target = side[0] == 'd' ? seg - 1 : seg;
+                    for (uint64_t i = 0; i < rows; ++i) {
+                        oss << " " << bus('a', half, target) << "[" << i + bank * rows << "]";
+                        if (i % 8 == 7 && i + 1 < rows) oss << "\n+";
+                    }
+                    oss << "\n+ VDD VSS " << generator.wordline_strip_name() << "\n";
+                }
+            }
         }
     }
     oss << "\n";

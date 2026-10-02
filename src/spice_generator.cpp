@@ -296,7 +296,9 @@ std::string SpiceGenerator::load_wl_slice_netlist() {
 // into the bits below the band and the `hi` pair up into the bits above; the
 // assembler draws the pair as one cell, so the deck has it as one subcircuit.
 int SpiceGenerator::wordline_cells_per_half() const {
-    return 4 * (config_.num_data_bits / 2);
+    // Four mux rows a data bit, along one wordline segment (a whole stack
+    // unless --segment-bits divides it).
+    return 4 * config_.wordline_segment_bits();
 }
 
 int SpiceGenerator::wordline_slice_class(int cells) {
@@ -313,6 +315,12 @@ int SpiceGenerator::wordline_slice_class(int cells) {
 std::string SpiceGenerator::wordline_strip_pair_name(const std::string& half) const {
     const int rows = 2 * config_.num_wls;
     return "wl_strips_" + half + "_c" + std::to_string(wordline_slice_class(wordline_cells_per_half()))
+        + "_x" + std::to_string(rows / 4);
+}
+
+std::string SpiceGenerator::wordline_strip_name() const {
+    const int rows = 2 * config_.num_wls;
+    return "wl_strip_c" + std::to_string(wordline_slice_class(wordline_cells_per_half()))
         + "_x" + std::to_string(rows / 4);
 }
 
@@ -712,9 +720,11 @@ std::string SpiceGenerator::generate_colgrp_6t() {
     return create_subckt("colgrp_sram_6t", ports, instances.str());
 }
 
+// One wordline segment's tiles (a whole stack unless --segment-bits divides
+// it): its own wordlines, a dummy row at each end.
 std::string SpiceGenerator::generate_stacked_colgrp_6t() {
     const int rows = 2 * config_.num_wls;
-    const int bits = config_.num_data_bits / 2;
+    const int bits = config_.wordline_segment_bits();
     std::vector<std::string> ports;
     append_indexed_ports(ports, "WLA[", rows * config_.num_banks, "]");
     append_indexed_ports(ports, "DA[", bits, "]");

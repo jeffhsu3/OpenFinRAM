@@ -3553,6 +3553,7 @@ bool LayoutGenerator::create_dual_port_macro() {
         << " --banks " << cli_options_.num_banks
         << (cli_options_.share_port_b ? " --share-port-b" : "")
         << (cli_options_.bitcell_6t ? " --bitcell 6t" : "")
+        << (cli_options_.segment_bits ? " --segment-bits " + std::to_string(cli_options_.segment_bits) : "")
         << (cli_options_.strips_in_controller
                 ? " --band " + quote(join_path(root, "tmp/openroad_" + timestamp + "/band")) : "")
         << " --controller " << quote(controller)

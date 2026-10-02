@@ -174,7 +174,8 @@ def waive(report: Path, waivers: list[dict]) -> tuple[dict, dict, list[dict]]:
 
 
 def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = True,
-           drc_engine: str = "klayout", waivers: Path | None = DEFAULT_WAIVERS) -> dict:
+           drc_engine: str = "klayout", waivers: Path | None = DEFAULT_WAIVERS,
+           lvs_timeout: float = 3600) -> dict:
     from chipforge_asap7.verification import drc_counts, run_drc, run_hierarchical_lvs
 
     result_dir = result_dir.resolve()
@@ -194,12 +195,14 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
     strict, relaxed = [], []
     for index, (view_gds, view_netlist) in enumerate(views):
         tag = f"bank{index}/" if units > 1 else ""
-        result = run_hierarchical_lvs(view_gds, view_netlist, out / f"{tag}lvs", cell_name=cell, flatten_circuits=BITCELLS)
+        result = run_hierarchical_lvs(view_gds, view_netlist, out / f"{tag}lvs", cell_name=cell, flatten_circuits=BITCELLS,
+                                      timeout=lvs_timeout)  # fmt: skip
         strict.append(_lvs_findings(result))
         print(("" if units == 1 else f"== bank {index}\n") + result.describe())
         if not result.matched:
             result = run_hierarchical_lvs(view_gds, view_netlist, out / f"{tag}lvs_diagnostic", cell_name=cell,
-                                          flatten_circuits=BITCELLS, double_implant_is_tap=False)  # fmt: skip
+                                          flatten_circuits=BITCELLS, double_implant_is_tap=False,
+                                          timeout=lvs_timeout)  # fmt: skip
             relaxed.append(_lvs_findings(result))
             print("\n-- again, with ACTIVE under both implants not acting as a tap:")
             print(result.describe())
@@ -285,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--waivers", type=Path, default=DEFAULT_WAIVERS,
                         help="DRC waivers (KLayout engine); reported but not counted.")
     parser.add_argument("--no-waivers", action="store_true", help="Count every DRC marker.")
+    parser.add_argument("--lvs-timeout", type=float, default=3600,
+                        help="Seconds each LVS pass may take (large macros take hours).")
     parser.add_argument("--baseline", type=Path, default=None, help="Known findings to hold the line against.")
     parser.add_argument("--write-baseline", type=Path, default=None, help="Record this run's findings as known.")
     args = parser.parse_args(argv)
@@ -293,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.no_drc and (args.baseline or args.write_baseline):
         parser.error("A DRC baseline requires DRC; remove --no-drc")
     verdict = verify(args.result_dir, out, cell=args.cell, drc=not args.no_drc, drc_engine=args.drc_engine,
-                     waivers=None if args.no_waivers else args.waivers)
+                     waivers=None if args.no_waivers else args.waivers, lvs_timeout=args.lvs_timeout)
     found = known_findings(verdict)
     print(f"\nwrote {out / 'verification.json'}")
     if args.write_baseline:

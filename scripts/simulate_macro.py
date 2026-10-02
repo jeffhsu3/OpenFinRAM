@@ -257,7 +257,7 @@ def locate(cells: list[dict], wordlines: int, ports: str = "AB") -> None:
     for cell in cells:
         single = ports == "A"  # the 6T cell's pins are WL and BL
         wordline = re.fullmatch(
-            r"(?:.*:)?wl_a_(lo|hi)\[(\d+)\]", cell["nets"]["wl" if single else "wla"], re.IGNORECASE
+            r"(?:.*:)?wl_a_((?:lo|hi)(?:_s\d+)?)\[(\d+)\]", cell["nets"]["wl" if single else "wla"], re.IGNORECASE
         )
         other = wordline if single else re.fullmatch(
             r"(?:.*:)?wl_b_(lo|hi)\[(\d+)\]", cell["nets"]["wlb"], re.IGNORECASE
@@ -277,6 +277,11 @@ def locate(cells: list[dict], wordlines: int, ports: str = "AB") -> None:
 PATTERNS = ("zeros", "ones", "0101", "1010")
 #: The two stacks of data bits, below and above the controller band, each with its own wordlines.
 STACKS = ("lo", "hi")
+
+
+def buses(cells: list[dict]) -> list[str]:
+    """The wordline buses the cells sit on: a stack's (``lo``), or with divided wordlines its segments' (``lo_s1``)."""
+    return sorted({cell["stack"] for cell in cells})
 
 
 def pattern_of(address: int) -> str:
@@ -457,7 +462,7 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
             f".IC V(Xdut:{cell['path']}:Q)={vdd * value:g} V(Xdut:{cell['path']}:QB)={vdd * (1 - value):g}"
         )
     watched = ["clk", *outputs]
-    watched += [f"Xdut:wl_{port}_{stack}[{index}]" for port in g.ports.lower() for stack in STACKS
+    watched += [f"Xdut:wl_{port}_{stack}[{index}]" for port in g.ports.lower() for stack in buses(cells)
                 for index in range(2 * g.wordlines * g.banks)]  # fmt: skip
     watched += [f"Xdut:{net}_{port}[{io}]" for net in ("sae", "wrena") for port in g.ports
                 for io in range(g.ios(port))]  # fmt: skip
@@ -568,7 +573,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             if op.kind == "-":
                 continue
             selected = g.wordline(op.address)
-            for stack in STACKS:
+            for stack in buses(cells):
                 for other in range(2 * g.wordlines * g.banks):
                     if other == selected:
                         continue
@@ -583,7 +588,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             # Both stacks' strips decode the same address; the later one is the wordline time.
             fired_each = [
                 after_clock(f"V(XDUT:WL_{port}_{stack.upper()}[{selected}])", rise)
-                for stack in STACKS
+                for stack in buses(cells)
             ]
             fired = None if any(f is None for f in fired_each) else max(fired_each)
             if op.kind == "W":
@@ -774,6 +779,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--spaced", action="store_true", help="An idle cycle after every write."
     )
+    parser.add_argument("--timeout", type=float, default=7200,
+                        help="Seconds Xyce may take (a large macro takes days).")
     args = parser.parse_args(argv)
     tag = "_spaced" if args.spaced else ""
     out = (
@@ -781,7 +788,7 @@ def main(argv: list[str] | None = None) -> int:
         or REPO_ROOT / "tmp" / f"simulate_{args.result_dir.resolve().name}{tag}"
     )
     verdict = simulate(args.result_dir, out, period=args.period, vdd=args.vdd, corner=args.corner,
-                       netlist=args.netlist, spaced=args.spaced)  # fmt: skip
+                       netlist=args.netlist, spaced=args.spaced, timeout=args.timeout)  # fmt: skip
     print(describe(verdict))
     print(f"wrote {out / 'simulation.json'}")
     return 0 if verdict["passed"] else 1

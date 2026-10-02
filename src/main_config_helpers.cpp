@@ -31,6 +31,13 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
               "6T cell, built like the two-port one with port A alone.")
         .default_value(std::string("8t"));
 
+    program.add_argument("--segment-bits")
+        .help("Divided wordlines (--bitcell 6t): cut each stack of data bits into segments of "
+              "this many bits, each with its own wordlines and a strip pair between two. "
+              "0 (default): whole stacks.")
+        .default_value(unsigned{0})
+        .scan<'u', unsigned>();
+
     program.add_argument("--share-port-b")
         .help("Two-port: banks in pairs share port B's sense amplifier, write driver "
               "and output latch, the pair's arrays mirrored about one two-sided IO block. "
@@ -136,6 +143,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         std::exit(1);
     }
     options.bitcell_6t            = bitcell == "6t";
+    options.segment_bits          = program.get<unsigned>("--segment-bits");
     options.strips_in_controller  = program.get<bool>("--strips-in-controller");
     options.skip_characterization = program.get<bool>("--skip-characterization");
     options.num_wl_buf            = program.get<unsigned>("--num-wl-buf");
@@ -174,6 +182,18 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         LOGE << "Error: --bitcell 6t has one port and takes no --share-port-b or --strips-in-controller yet.";
         std::exit(1);
     }
+    if (options.segment_bits && options.segment_bits < options.num_data_bits / 2) {
+        if (!options.bitcell_6t) {
+            LOGE << "Error: --segment-bits is for the single-port macro (--bitcell 6t) so far.";
+            std::exit(1);
+        }
+        if ((options.num_data_bits / 2) % options.segment_bits != 0) {
+            LOGE << "Error: --segment-bits " << options.segment_bits << " does not divide a stack of "
+                 << options.num_data_bits / 2 << " bits.";
+            std::exit(1);
+        }
+    }
+    if (options.segment_bits >= options.num_data_bits / 2) options.segment_bits = 0;
     if (options.bitcell_6t && options.num_rows_per_mux != 4) {
         LOGE << "Error: --bitcell 6t's IO block is 4:1 so far (--num-rows-per-mux 4).";
         std::exit(1);

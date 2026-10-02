@@ -19,6 +19,8 @@ public:
     static int wordline_slice_class(int cells);
     // The strip pair subcircuit on one side (`lo` or `hi`) of the controller band.
     std::string wordline_strip_pair_name(const std::string& half) const;
+    // One strip: what a pair of either kind is made of.
+    std::string wordline_strip_name() const;
 
 private:
     MainCliOptions config_;
