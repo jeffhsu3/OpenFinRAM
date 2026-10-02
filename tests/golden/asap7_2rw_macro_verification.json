@@ -5,8 +5,5 @@
  ],
  "supply_shorts": [],
  "supply_shorts_without_double_implant_taps": [],
- "drc_rules": {
-  "M1.S.6": 2,
-  "M1.W.1": 2
- }
+ "drc_rules": {}
 }

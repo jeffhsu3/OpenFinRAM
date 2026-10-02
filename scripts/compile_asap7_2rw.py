@@ -1214,8 +1214,16 @@ def run(args):
         "external": sorted(external),
     }
     (work / "connectivity.json").write_text(json.dumps(manifest, indent=2) + "\n")
+    # The macro router meets the cells only through block abstracts, so it can
+    # keep the runset's 20 nm M1 corner spacing (M1.S.6), which the tech LEF
+    # leaves at 18 because a cell's own pins sit 18 nm from its rails.
+    tech = (REPO / "tech/lef/asap7_tech.lef").read_text()
+    corner = 'CORNERSPACING CONVEXCORNER CORNERONLY 0.01 WIDTH 0.018 SPACING 0.018 ;'
+    if tech.count(corner) != 1:
+        raise RuntimeError("tech LEF's M1 corner spacing rule changed")
+    (work / "tech.lef").write_text(tech.replace(corner, corner.replace("SPACING 0.018", "SPACING 0.020")))
     tcl = [
-        f"read_lef {{{REPO}/tech/lef/asap7_tech.lef}}",
+        "read_lef tech.lef",
         "read_lef blocks.lef",
         "read_def placed.def",
         "set_thread_count 2",
@@ -1693,12 +1701,15 @@ def fill_m1_notches(top):
         reach = gdstk.offset(shape, 1e-4, join="miter", precision=1e-5)
         touching = [every[i] for i in near(shape.bounding_box(), 1e-6)
                     if gdstk.boolean(reach, every[i], "and", precision=1e-5)]  # fmt: skip
+        patches = [(patch, True) for patch in jog_patches(shape, [t for t in touching if t is not shape])]
         merged = gdstk.boolean(touching, [], "or", precision=1e-4)
         half = M1_NOTCH / 2
-        closed = gdstk.offset(gdstk.offset(merged, half, join="miter", precision=1e-4), -half, join="miter", precision=1e-4)
-        for patch in gdstk.boolean(closed, merged, "not", precision=1e-4):
+        closed = gdstk.boolean(gdstk.offset(gdstk.offset(merged, half, join="miter", precision=1e-4), -half,
+                                            join="miter", precision=1e-4), [], "or", precision=1e-4)  # fmt: skip
+        patches += [(patch, False) for patch in gdstk.boolean(closed, merged, "not", precision=1e-4)]
+        for patch, jog in patches:
             (a, b), (c, d) = patch.bounding_box()
-            if patch.area() < 1e-8 or min(c - a, d - b) >= M1_NOTCH:
+            if patch.area() < 1e-8 or (min(c - a, d - b) >= M1_NOTCH and not jog):
                 continue
             others = [every[i] for i in near(patch.bounding_box(), M1_CLEAR)
                       if not any(every[i] is t for t in touching)]  # fmt: skip
@@ -1711,6 +1722,34 @@ def fill_m1_notches(top):
             boxes.append(patch.bounding_box())
             filled += 1
     return filled
+
+
+def jog_patches(shape, touching):
+    """Square up where a router wire meets a block's wire a fraction of a nanometre to one side.
+
+    The two overlap only briefly along their run, so the merged metal is a
+    jog whose corners stand 17.5 nm apart across it (M1.W.1): the patch
+    makes the junction their combined width over the overlap and one wire
+    width either side.
+    """
+    (rx0, ry0), (rx1, ry1) = shape.bounding_box()
+    out = []
+    for other in touching:
+        (bx0, by0), (bx1, by1) = other.bounding_box()
+        for along, lo, hi in ((1, (ry0, by0), (ry1, by1)), (0, (rx0, bx0), (rx1, bx1))):
+            # `along` = 1: wires running in y, offset in x; 0: running in x, offset in y.
+            side = ((rx0, rx1), (bx0, bx1)) if along else ((ry0, ry1), (by0, by1))
+            (s0, s1), (o0, o1) = side
+            if (s0, s1) == (o0, o1) or abs(s0 - o0) > 0.002 or abs(s1 - o1) > 0.002:
+                continue
+            overlap = (max(lo), min(hi))
+            if not 0 < overlap[1] - overlap[0] < 0.018:
+                continue
+            start = max(min(lo), overlap[0] - 0.018)
+            end = min(max(hi), overlap[1] + 0.018)
+            box = ((min(s0, o0), start), (max(s1, o1), end)) if along else ((start, min(s0, o0)), (end, max(s1, o1)))
+            out.append(gdstk.rectangle(*box))
+    return out
 
 
 #: Side-edge pins: track pitch and wire width per horizontal layer (nm), and
