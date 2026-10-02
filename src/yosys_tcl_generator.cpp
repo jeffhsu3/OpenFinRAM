@@ -51,7 +51,8 @@ std::string YosysTclGenerator::generate_script(
     const std::string& platform_path,
     const std::string& tech_lib_path,
     bool single_port,
-    bool shared_port_b) const {
+    bool shared_port_b,
+    bool one_port) const {
 
     auto libs = resolve_liberty_files(platform_path, tech_lib_path);
     std::ostringstream lib_list;
@@ -85,7 +86,7 @@ std::string YosysTclGenerator::generate_script(
     if (!single_port) {
         oss << "read_verilog -sv " << join_path(rtl_path, "row_decoder.v") << "\n";
     }
-    oss << "read_verilog -sv " << join_path(rtl_path, "sram_control.v") << "\n";
+    oss << "read_verilog -sv " << join_path(rtl_path, one_port ? "sram_control_1p.v" : "sram_control.v") << "\n";
     if (single_port) {
         oss << "chparam -set ADDR_WIDTH " << addr_width
             << " -set NUM_WL " << num_wls
@@ -153,8 +154,9 @@ std::string YosysTclGenerator::generate_script(
     } else {
         oss << "hilomap -singleton -hicell TIEHIx1_ASAP7_75t_R H -locell TIELOx1_ASAP7_75t_R L\n";
         oss << "opt\n";
-        // Both ports register a full address and a two-bit read/write state.
-        const int expected_dp_dffs = 2 * addr_width + 4;
+        // Each port registers a full address and a two-bit read/write state.
+        const int ports = one_port ? 1 : 2;
+        const int expected_dp_dffs = ports * (addr_width + 2);
         oss << "\n# Structural signoff for DP physical network\n";
         oss << "check -assert\n";
         // The wordlines are driven at the array by the driver-slice strips;
@@ -162,7 +164,7 @@ std::string YosysTclGenerator::generate_script(
         // dedicated wordline driver stage to count here.
         oss << "select -assert-count " << expected_dp_dffs
             << " t:*DFF*ASAP7_75t_R\n";
-        const unsigned expected_bufx2 = 2 * (num_wl_buf + num_sae_buf);
+        const unsigned expected_bufx2 = ports * (num_wl_buf + num_sae_buf);
         oss << "select -assert-count " << expected_bufx2
             << " t:BUFx2_ASAP7_75t_R a:physical_dp_delay %i\n";
         oss << "rename -hide t:BUFx2_ASAP7_75t_R a:physical_dp_delay %i\n";

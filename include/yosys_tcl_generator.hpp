@@ -46,7 +46,10 @@ public:
         const std::string& tech_lib_path,
         bool single_port = true,
         // Two-port only: banks share port B's IO block in pairs (SHARED_B).
-        bool shared_port_b = false) const;
+        bool shared_port_b = false,
+        // The generated single-port macro: port A's controller alone
+        // (tech/verilog_dp/sram_control_1p.v).
+        bool one_port = false) const;
 };
 
 } // namespace OpenFinRAM

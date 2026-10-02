@@ -46,6 +46,12 @@ private:
     std::string generate_colgrp_half_8t();
     std::string generate_colgrp_pair_8t();
     std::string generate_stacked_colgrp_8t();
+    // The generated single-port 6T macro (--bitcell 6t).
+    std::string generate_cell_row_6t();
+    std::string generate_array_6t();
+    std::string generate_end_row_6t();
+    std::string generate_colgrp_6t();
+    std::string generate_stacked_colgrp_6t();
 
     std::string generate_spice_content(bool single_port);
 };

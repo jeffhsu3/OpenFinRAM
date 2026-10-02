@@ -97,6 +97,33 @@ controller fails max-fanout on larger macros such as x32x8x2 and x16x32x2;
 middle tiles take their supply only through the IO straps, so IR drop on tall
 stacks is unmeasured.
 
+## Single-port 6T flow (generated, `--bitcell 6t`)
+
+The two-port machinery with port A alone, on the released ASAP7 6T cell:
+
+```
+./build/OpenFinRAM --num-wls 8 --num-data-bits 16 --num-banks 1 --bitcell 6t --openroad
+```
+
+- Column tile: `edge filler | cap | 2*NUM_WL 6T bitcells | dummy | tap | IO`,
+  all released `srambank_32b` cells except the IO block, which is chipforge_asap7's
+  `StaggeredIoColumnSpec`. The 6T row (270 nm) is shorter than any IO leaf the
+  dense row style can draw (297 nm), so the even rows' leaves stand in one column
+  and the odd rows' in a second, the bitlines lifted to M4 at the block's edge.
+  Written by `scripts/generate_asap7_6t_iocolumn.py` (`tech/gds/sram_6t_iocolumn.gds`,
+  `tech/spice/sram_6t_iocolumn.sp`).
+- Floorplan as the two-port macro: two stacks of abutted tiles with the controller
+  band between them, one driver strip on each side, released dummy rows at each
+  stack's ends. Controller: `tech/verilog_dp/sram_control_1p.v`.
+- Pins keep port A's names (`clk rst_n ce_n_A we_n_A oe_n_A A_A[] D_A[] Q_A[]`).
+- `--single-port` is still the legacy srambank flow.
+- Verified on x4x2x1 and x16x16x1: strict LVS match (`scripts/verify_macro.py`), and
+  on x4x2x1 the whole-macro Xyce program (`scripts/simulate_macro.py`) passes.
+  x16x16x1 is 6.64 x 25.28 um against 6.00 x 52.71 um for the 8T x16x16x1.
+- Limits so far: 4:1 column mux, more than one bank untested,
+  `--share-port-b`/`--strips-in-controller` do not apply, estimated `.lib`. The
+  public DRC count is mostly the released 6T cells' own findings.
+
 ### 8T cell libraries
 
 The flow builds on generated native ASAP7 cells (schematics in `tech/spice/`):

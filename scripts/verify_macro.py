@@ -51,7 +51,10 @@ BITCELLS = ("sram_cell_*", "blmux_*", "sarow_*", "wrdrv_*", "outlatch_*", "fille
             "wl_slice_*", "nand2_fin_*", "inv_fin_*", "wl_via*",
             # A strip's slices take their predecode inputs from the top-level
             # routing, one pin per slice, so the strip is compared in place.
-            "wl_strip_*", "wl_strips_*")  # fmt: skip
+            "wl_strip_*", "wl_strips_*",
+            # The released 6T family (--bitcell 6t): the dummy, caps, taps and
+            # end rows are completed by their neighbours as bitcells are.
+            "dummy_*", "tapcell_*", "end_row_*")  # fmt: skip
 
 
 def _lvs_findings(result) -> dict:

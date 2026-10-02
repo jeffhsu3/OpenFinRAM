@@ -256,8 +256,10 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     } else {
         file << "set a_paths [find_timing_paths -from [get_ports -quiet {A_A*}] -path_delay max -group_path_count 4]\n";
         file << "if {[llength $a_paths] == 0} { error \"PERIPHERY_STA: no A_A timing paths (DP)\" }\n";
-        file << "set b_paths [find_timing_paths -from [get_ports -quiet {A_B*}] -path_delay max -group_path_count 4]\n";
-        file << "if {[llength $b_paths] == 0} { error \"PERIPHERY_STA: no A_B timing paths (DP)\" }\n";
+        if (!one_port_) {
+            file << "set b_paths [find_timing_paths -from [get_ports -quiet {A_B*}] -path_delay max -group_path_count 4]\n";
+            file << "if {[llength $b_paths] == 0} { error \"PERIPHERY_STA: no A_B timing paths (DP)\" }\n";
+        }
     }
     file << "check_setup -verbose > pre_place_setup.rpt\n\n";
 
@@ -285,7 +287,9 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
                 "    return $names\n"
                 "}\n";
         file << "set_io_pin_constraint -pin_names [dp_port_inputs A] -region left:* -group -order\n";
-        file << "set_io_pin_constraint -pin_names [dp_port_inputs B] -region right:* -group -order\n";
+        if (!one_port_) {
+            file << "set_io_pin_constraint -pin_names [dp_port_inputs B] -region right:* -group -order\n";
+        }
     }
     if (band_.enabled) {
         // The strips go in as fixed physical instances with a keep-out; the

@@ -592,3 +592,77 @@ TEST(SpiceTemplates8T, BitcellFamilyHasNoFloatingNets) {
             << entry.second << " has floating nets: " << joined;
     }
 }
+
+// --bitcell 6t: the generated single-port macro's deck.
+namespace {
+
+std::string generated_deck_6t(unsigned banks = 1) {
+    ScopedCurrentPath cwd(REPO_ROOT);
+    MainCliOptions config;
+    config.bitcell_6t = true;
+    config.num_wls = 2;
+    config.num_data_bits = 4;
+    config.num_banks = banks;
+    return OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+}
+
+}  // namespace
+
+TEST(SpiceTemplates6T, ColumnGroupIsTheArrayAndOneIoBlock) {
+    const std::string deck = generated_deck_6t();
+    const std::string colgrp = subckt_text(deck, "colgrp_sram_6t");
+    ASSERT_FALSE(colgrp.empty());
+    EXPECT_EQ(count_occurrences(colgrp, "iocol_sram_6t"), 1U);
+    EXPECT_EQ(count_occurrences(colgrp, "array_sram_6t"), 1U);
+    // No second port anywhere: no port-B IO, no 8T cell.
+    EXPECT_EQ(deck.find("iocol_sram_8t"), std::string::npos);
+    EXPECT_EQ(deck.find("sram_cell_8t"), std::string::npos);
+    EXPECT_EQ(deck.find("WLB["), std::string::npos);
+
+    const std::string wrapper = subckt_text(deck, "iocol_sram_6t");
+    const std::string block = subckt_text(deck, "iocol_block_6t");
+    ASSERT_FALSE(wrapper.empty());
+    ASSERT_FALSE(block.empty());
+    EXPECT_EQ(instance_node_count(colgrp, "XIO_A"), subckt_port_count(wrapper));
+    EXPECT_EQ(instance_node_count(wrapper, "X_block"), subckt_port_count(block));
+    const auto bindings = instance_bindings(colgrp, "XIO_A", wrapper);
+    ASSERT_FALSE(bindings.empty());
+    for (const auto& entry : bindings) {
+        EXPECT_EQ(entry.second, entry.first) << "the wrapper's pins are the column group's nets";
+    }
+}
+
+TEST(SpiceTemplates6T, RowsCarryTheirDummyAndCap) {
+    const std::string deck = generated_deck_6t();  // NUM_WL 2 -> 4 wordlines
+    const std::string row = subckt_text(deck, "sram_cell_row_6t");
+    EXPECT_EQ(count_occurrences(row, "sram_cell_6t_122\n"), 4U);
+    EXPECT_EQ(count_occurrences(row, "dummy_sram_6t122"), 1U);
+    const std::string array = subckt_text(deck, "array_sram_6t");
+    EXPECT_EQ(count_occurrences(array, "sram_cell_row_6t"), 4U);
+    EXPECT_EQ(count_occurrences(array, "dummy_topbot_v1"), 2U);
+    EXPECT_EQ(count_occurrences(array, "dummy_topbot_v2"), 2U);
+}
+
+TEST(SpiceTemplates6T, EveryBankHasADummyRowAtEachEndOfItsStack) {
+    for (unsigned banks : {1U, 2U}) {
+        const std::string deck = generated_deck_6t(banks);
+        const std::string stack =
+            subckt_text(deck, "stacked_colgrp_x4x2x" + std::to_string(banks));
+        ASSERT_FALSE(stack.empty());
+        EXPECT_EQ(count_occurrences(stack, "end_row_6t"), 2U * banks);
+        EXPECT_EQ(count_occurrences(stack, "colgrp_sram_6t"), 2U * banks);
+        // Each end row hangs a two-fin device on every wordline of the bank.
+        const std::string end = subckt_text(deck, "end_row_6t");
+        EXPECT_EQ(count_occurrences(end, "nfin=2\n"), 4U);
+    }
+}
+
+TEST(SpiceTemplates6T, WordlineStripsArePortAAlone) {
+    const std::string deck = generated_deck_6t();
+    for (const char* half : {"lo", "hi"}) {
+        const std::string pair = subckt_text(deck, std::string("wl_strips_") + half + "_c8_x1");
+        ASSERT_FALSE(pair.empty()) << half;
+        EXPECT_EQ(count_occurrences(pair, "X_a "), 1U);
+        EXPECT_EQ(count_occurrences(pair, "X_b "), 0U);
+    }
+}

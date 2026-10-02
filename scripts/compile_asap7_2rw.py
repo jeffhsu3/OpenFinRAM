@@ -330,7 +330,7 @@ def wordline_tracks(cell):
     return tracks
 
 
-def build_wordline_strips(lib, leaf, wordlines, bits):
+def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_reach=0.0):
     """The strip pair for each side of the controller band, in the tile's x.
 
     A strip is one slice per four of the tile's port-A wordlines, the slice's
@@ -342,6 +342,11 @@ def build_wordline_strips(lib, leaf, wordlines, bits):
     edges so their fins and the array's are on one grid, port A's outputs
     bridged to the edge on M3.  Returns ``{"lo": cell, "hi": cell}`` and the
     load class the slices were sized to.
+
+    With one port (``ports=("A",)``, the single-port 6T tile) the "pair" is
+    port A's strip alone.  `gate_reach` carries the gate bridges that far
+    past the pair's edge, into a tile whose own gates stop short of its
+    edge (the 6T dummy row ends half a fin pitch inside the tile).
     """
     cells_along = 4 * (bits // 2)
     load = wl_slices.load_class(cells_along)
@@ -365,9 +370,9 @@ def build_wordline_strips(lib, leaf, wordlines, bits):
             "the array's wordlines must be a multiple of four, one driver slice each"
         )
     tracks = wordline_tracks(leaf)
-    if len(tracks) != 2 * rows:
+    if len(tracks) != len(ports) * rows:
         raise RuntimeError(
-            f"expected {2 * rows} wordline labels on the tile, found {len(tracks)}"
+            f"expected {len(ports) * rows} wordline labels on the tile, found {len(tracks)}"
         )
     height = outer_boundary(slice_cell)[3]
     pins = {label.text: (float(label.origin[0]), float(label.origin[1]), label.layer)
@@ -451,8 +456,12 @@ def build_wordline_strips(lib, leaf, wordlines, bits):
         }
     )
     pairs = {}
-    pair_height = 2 * height + 2 * FIN_HALF_PITCH
-    seam = height + FIN_HALF_PITCH  # the shared VSS rail
+    if ports == ("A",):
+        pair_height = height + 2 * FIN_HALF_PITCH
+        seam = FIN_HALF_PITCH  # port A's strip from here up, facing the array
+    else:
+        pair_height = 2 * height + 2 * FIN_HALF_PITCH
+        seam = height + FIN_HALF_PITCH  # the shared VSS rail
     for half, facing_up in (("lo", False), ("hi", True)):
         pair = lib.new_cell(f"wl_strips_{half}_c{load}_x{rows // 4}")
 
@@ -466,7 +475,7 @@ def build_wordline_strips(lib, leaf, wordlines, bits):
         def label(text, x, y, layer):
             pair.add(gdstk.Label(text, (x, at(y)), layer=layer, texttype=251))
 
-        for port, flipped in (("A", False), ("B", True)):
+        for port, flipped in (("A", False), ("B", True))[: len(ports)]:
             pair.add(
                 gdstk.Reference(
                     strip, (0, at(seam)), x_reflection=flipped != (not facing_up)
@@ -481,16 +490,19 @@ def build_wordline_strips(lib, leaf, wordlines, bits):
                     x, y, layer = pins[f"B{j}"]
                     label(f"B_{port}[{j}]", x0_slice + x, seam + sign * y, layer)
         for i in range(rows):
-            x, x5 = tracks[("A", i)], tracks[("B", i)]
+            x = tracks[("A", i)]
             rect(x - 0.009, seam + height, x + 0.009, pair_height, 30)
             label(f"WL_A[{i}]", x, pair_height - 0.005, 30)
+            if "B" not in ports:
+                continue
+            x5 = tracks[("B", i)]
             y_via = seam - height + 0.025
             for cell, vx in ((via34, x), (via45, x5)):
                 pair.add(gdstk.Reference(cell, (vx, at(y_via))))
             rect(x5 - 0.012, y_via - 0.023, x5 + 0.012, pair_height, 50)
             label(f"WL_B[{i}]", x5, pair_height - 0.005, 50)
         for x in gate_tracks:
-            rect(x - 0.010, seam + height, x + 0.010, pair_height, 7)
+            rect(x - 0.010, seam + height, x + 0.010, pair_height + gate_reach, 7)
         pair.add(gdstk.rectangle((x_left, 0), (x_right, pair_height), layer=100))
         pairs[half] = pair
     return pairs, load
@@ -646,6 +658,36 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, stra
             lib, capped, io_b2, wordlines, name=capped.name.replace("capped_", "capped_pair_", 1)
         )
     return capped
+
+
+@functools.cache
+def _library_6t(wordlines):
+    """The single-port 6T tiles' library: the released 6T cells, the staggered IO block, every end variant."""
+    import generate_asap7_6t_iocolumn as columns6
+
+    cells = columns6.load_source()
+    lib = gdstk.Library(unit=1e-6, precision=2.5e-10)
+    for name in sorted(columns6.SOURCE_CELLS):
+        columns6.add_with_dependencies(lib, cells[name])
+    spec = columns6.io_spec(cells[columns6.BITCELL])
+    block, deps, _ = columns6.build_io_block(spec)
+    for dep in (block, *deps):
+        if dep.name not in {c.name for c in lib.cells}:
+            lib.add(dep)
+    io = columns6.build_io(lib, block, spec)
+    tiles = {(bottom, top): columns6.build_tile(lib, cells, wordlines, io, spec, bottom=bottom, top=top)
+             for bottom, top in itertools.product((True, False), repeat=2)}  # fmt: skip
+    return lib, tiles
+
+
+def build_leaf_6t(wordlines, bottom=True, top=True):
+    """``edge filler | cap | array of `wordlines` | dummy | tap | IO``: the single-port 6T tile.
+
+    The released 6T cells with chipforge's staggered IO block
+    (`generate_asap7_6t_iocolumn`); a dummy row below and/or above, as the
+    8T tile has.  Its pins are the 8T tile's port A's.
+    """
+    return _library_6t(wordlines)[1][(bottom, top)]
 
 
 def tie_end_row_stubs(cell):
@@ -883,13 +925,20 @@ def run(args):
     shared_b = args.share_port_b
     if shared_b and args.banks < 2:
         raise RuntimeError("sharing port B's IO needs banks in pairs")
+    # The single-port 6T macro is the 8T floorplan with port A alone: one IO
+    # block per column tile, one strip per side of the controller band.
+    single = args.bitcell == "6t"
+    ports = ("A",) if single else ("A", "B")
+    if single and (shared_b or args.band is not None or args.plan_band is not None or args.strap_pitch):
+        raise RuntimeError("the 6T macro takes no --share-port-b, controller-band strips or straps yet")
     # What the floorplan repeats across: a bank, or a pair of banks.
     units, banks_per_unit = (args.banks // 2, 2) if shared_b else (args.banks, 1)
     if args.plan_band is None:
         work = args.work.resolve()
         work.mkdir(parents=True, exist_ok=True)
     array_wordlines = 2 * args.wordlines
-    tap_pitch = math.gcd(array_wordlines, 16)
+    # The released 6T row ends in its own tap; only the 8T array takes them inside.
+    tap_pitch = 0 if single else math.gcd(array_wordlines, 16)
 
     def is_wordline(net):
         return WORDLINE.fullmatch(net) is not None
@@ -908,8 +957,11 @@ def run(args):
         bottom, top = ends_of(index)
         if (bottom, top) in variants:
             continue
-        cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top, shared_b=shared_b,
-                          strap_pitch=args.strap_pitch)
+        if single:
+            cell = build_leaf_6t(array_wordlines, bottom=bottom, top=top)
+        else:
+            cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top, shared_b=shared_b,
+                              strap_pitch=args.strap_pitch)
         if banding:
             # Over the IO columns an end tile stops at its IO blocks: the
             # controller's band takes the rest.
@@ -937,7 +989,8 @@ def run(args):
     strip_lib = gdstk.Library(unit=1e-6, precision=1e-10)
     # The strips are drawn on the first bank's half: a pair tile's first reference.
     strip_pairs, slice_load = build_wordline_strips(
-        strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits
+        strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits,
+        ports=ports, gate_reach=FIN_HALF_PITCH if single else 0.0,
     )
     if shared_b:
         tile_width = columns.boundary_box(leaf)[2]
@@ -1151,11 +1204,11 @@ def run(args):
                 nets[resolve(info["net"])].append((inst, pin))
 
     external = {"clk", "rst_n", "vdd", "vss"}
-    external.update(f"{p}_n_{port}" for p in ("ce", "we", "oe") for port in "AB")
+    external.update(f"{p}_n_{port}" for p in ("ce", "we", "oe") for port in ports)
     address_bits = (2 * args.wordlines * 4 * args.banks - 1).bit_length()
-    external.update(f"A_{port}[{bit}]" for port in "AB" for bit in range(address_bits))
+    external.update(f"A_{port}[{bit}]" for port in ports for bit in range(address_bits))
     external.update(
-        f"{p}_{port}[{bit}]" for p in "DQ" for port in "AB" for bit in range(args.bits)
+        f"{p}_{port}[{bit}]" for p in "DQ" for port in ports for bit in range(args.bits)
     )
     for net in nets:
         if net not in external and not any(inst == "CTRL" for inst, pin in nets[net]):
@@ -1234,7 +1287,7 @@ def run(args):
         tcl.append(
             f"make_tracks M{i} -x_offset 0 -y_offset 0 -x_pitch {pitch} -y_pitch {pitch}"
         )
-    tcl += side_pin_placements(external, probes, width, height, args.top_layer - 1)
+    tcl += side_pin_placements(external, probes, width, height, args.top_layer - 1, ports=ports)
     tcl += [
         # The macro routes and pins on M1 up to --top-layer: odd, so the pins
         # take its horizontal neighbour below for the side edges and itself
@@ -1320,10 +1373,12 @@ def run(args):
         "shared_port_b": shared_b,
         "bits": args.bits,
         "margin_um": args.margin,
+        "bitcell": args.bitcell,
         "floorplan": "controller band between two stacks of abutted column tiles "
-        + ("(port A IO | array | shared port B IO | mirrored array | port A IO)" if shared_b
+        + ("(cap | 6T array | dummy | tap | IO)" if single
+           else "(port A IO | array | shared port B IO | mirrored array | port A IO)" if shared_b
            else "(port A IO | array | port B IO)")
-        + ", a wordline driver strip pair on each side",
+        + (", a wordline driver strip on each side" if single else ", a wordline driver strip pair on each side"),
         "wordlines_per_half": args.wordlines,
         "array_wordlines": array_wordlines,
         "tap_pitch": tap_pitch,
@@ -1758,8 +1813,11 @@ SIDE_PIN_LAYERS = {4: (48, 24), 6: (64, 32)}
 SIDE_PIN_DEPTH, SIDE_PIN_TRACKS = 69, 2
 
 
-def side_pin_placements(external, probes, width, height, layer):
+def side_pin_placements(external, probes, width, height, layer, ports=("A", "B")):
     """``place_pin`` commands for the signal pins: port A's on the left edge, B's on the right.
+
+    With port A alone (the single-port macro) clk and rst_n join port A's
+    controls on the left.
 
     A bit's D and Q go level with the tile terminals they drive and read; a
     port's address bus then its enables (port B's followed by clk and rst_n)
@@ -1779,14 +1837,14 @@ def side_pin_placements(external, probes, width, height, layer):
         return 1000 * sum(ys) / len(ys)
 
     commands = []
-    for port, side in (("A", "left"), ("B", "right")):
+    for port, side in (("A", "left"), ("B", "right"))[: len(ports)]:
         groups = []
         for bit in sorted({index(n) for n in external if re.fullmatch(rf"[DQ]_{port}\[\d+\]", n)}):
             pair = sorted((n for n in (f"D_{port}[{bit}]", f"Q_{port}[{bit}]") if n in external), key=target)
             groups.append(pair)
         controls = sorted((n for n in external if n.startswith(f"A_{port}[")), key=index)
         controls += [n for n in (f"ce_n_{port}", f"we_n_{port}", f"oe_n_{port}") if n in external]
-        if port == "B":
+        if port == ports[-1]:
             controls += [n for n in ("clk", "rst_n") if n in external]
         groups.append(controls)
         groups.sort(key=lambda group: sum(map(target, group)) / len(group))
@@ -1865,6 +1923,8 @@ def main():
     parser.add_argument("--bank-gap", type=float, default=0.3, help="um between banks")
     parser.add_argument("--strap-pitch", type=int, default=0,
                         help="every this many array taps is a supply strap (M5 spines down the tap column)")
+    parser.add_argument("--bitcell", choices=("8t", "6t"), default="8t",
+                        help="8t: the two-port macro; 6t: single port, the released 6T array with port A's IO")
     parser.add_argument("--share-port-b", action="store_true",
                         help="banks in pairs, mirrored about one two-sided port-B IO block "
                         "(the controller built with SHARED_B)")  # fmt: skip

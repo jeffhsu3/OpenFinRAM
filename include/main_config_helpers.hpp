@@ -9,6 +9,10 @@ struct MainCliOptions {
     unsigned num_data_bits = 2;
     unsigned num_banks = 1;
     bool single_port = false;
+    // The generated single-port macro (--bitcell 6t): the released 6T array
+    // with chipforge_asap7's staggered IO, built by the two-port machinery
+    // with port A alone.  `single_port` stays the legacy srambank flow.
+    bool bitcell_6t = false;
     // Two-port only: banks in pairs share port B's IO block, the pair's
     // arrays mirrored about it (--share-port-b).
     bool share_port_b = false;

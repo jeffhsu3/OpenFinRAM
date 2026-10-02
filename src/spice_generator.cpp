@@ -341,10 +341,13 @@ std::string SpiceGenerator::generate_wl_strips_8t() {
         }
         out << create_subckt(strip, ports, instances.str()) << "\n";
     }
+    // The single-port macro has port A's strip alone on each side.
+    const std::vector<const char*> strip_ports = config_.bitcell_6t
+        ? std::vector<const char*>{"A"} : std::vector<const char*>{"A", "B"};
     for (const char* half : {"lo", "hi"}) {
         std::vector<std::string> ports;
         std::stringstream instances;
-        for (const char* port : {"A", "B"}) {
+        for (const char* port : strip_ports) {
             const std::string suffix = std::string("_") + port + "[";
             append_indexed_ports(ports, "SEL" + suffix, slices, "]");
             append_indexed_ports(ports, "B" + suffix, 4, "]");
@@ -624,6 +627,129 @@ std::string SpiceGenerator::generate_stacked_colgrp_8t() {
     return create_subckt(bank_name, ports, instances.str());
 }
 
+// --bitcell 6t: the released 6T row, its dummy and cap, as
+// scripts/generate_asap7_6t_iocolumn.py lays a column tile out:
+//   edge filler | cap | 2*NUM_WL bitcells | dummy | tap | IO block
+// The filler and the tap have no devices.  The dummy and the cap each hang a
+// pass device (gate tied off) on the row's BLN.
+std::string SpiceGenerator::generate_cell_row_6t() {
+    const int rows = 2 * config_.num_wls;
+    std::vector<std::string> ports;
+    append_indexed_ports(ports, "WL[", rows, "]");
+    append_ports(ports, {"BL", "BLN", "VDD", "VSS"});
+    std::stringstream instances;
+    for (int i = 0; i < rows; ++i) {
+        instances << "X" << i << " WL[" << i << "] BLN BL VDD VSS sram_cell_6t_122\n";
+    }
+    instances << "XD BLN VDD VSS dummy_sram_6t122\n";
+    return create_subckt("sram_cell_row_6t", ports, instances.str());
+}
+
+std::string SpiceGenerator::generate_array_6t() {
+    const int rows = 2 * config_.num_wls;
+    std::vector<std::string> ports;
+    append_indexed_ports(ports, "WL[", rows, "]");
+    append_indexed_ports(ports, "BL[", 4, "]");
+    append_indexed_ports(ports, "BLN[", 4, "]");
+    append_ports(ports, {"VDD", "VSS"});
+    std::stringstream instances;
+    for (int r = 0; r < 4; ++r) {
+        instances << "X" << r << " ";
+        append_indexed_tokens(instances, "WL[", rows, "]");
+        instances << " BL[" << r << "] BLN[" << r << "] VDD VSS sram_cell_row_6t\n";
+        // Even rows take the v1 cap, odd (mirrored) rows the v2.
+        instances << "XC" << r << " BLN[" << r << "] VDD VSS dummy_topbot_v" << 1 + r % 2 << "\n";
+    }
+    return create_subckt("array_sram_6t", ports, instances.str());
+}
+
+// The dummy row at each end of a stack of tiles: the released
+// dummy_vertical_6t122 over each bitcell column (two fins gated by the
+// column's wordline, both ends on VSS) and corners over the cap, the dummy
+// and the tap.  Every other device of the row has all of its terminals on
+// VSS (the p devices' bodies on VDD): 6 n fins a column and 12 for the
+// corners, 2 p fins a column and 3 for the corners, as extracted.
+std::string SpiceGenerator::generate_end_row_6t() {
+    const int rows = 2 * config_.num_wls;
+    std::vector<std::string> ports;
+    append_indexed_ports(ports, "WL[", rows, "]");
+    append_ports(ports, {"VDD", "VSS"});
+    std::stringstream instances;
+    for (int i = 0; i < rows; ++i) {
+        instances << "MW" << i << " VSS WL[" << i << "] VSS VSS nmos_rvt L=2e-08 W=5.4e-08 nfin=2\n";
+    }
+    instances << "MN VSS VSS VSS VSS nmos_rvt L=2e-08 W=" << 27 * (6 * rows + 12) << "e-09 nfin="
+              << 6 * rows + 12 << "\n";
+    instances << "MP VSS VSS VSS VDD pmos_rvt L=2e-08 W=" << 27 * (2 * rows + 3) << "e-09 nfin="
+              << 2 * rows + 3 << "\n";
+    return create_subckt("end_row_6t", ports, instances.str());
+}
+
+std::string SpiceGenerator::generate_colgrp_6t() {
+    const int rows = 2 * config_.num_wls;
+    std::vector<std::string> ports;
+    append_indexed_ports(ports, "WLA[", rows, "]");
+    append_ports(ports, {"DA", "QA", "wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA"});
+    append_indexed_ports(ports, "yselnA[", 4, "]");
+    append_indexed_ports(ports, "yselA[", 4, "]");
+    append_ports(ports, {"sae_A", "VDD", "VSS"});
+    std::stringstream instances;
+    instances << "X0 ";
+    append_indexed_tokens(instances, "WLA[", rows, "]");
+    append_indexed_tokens(instances, "BL_A[", 4, "]");
+    append_indexed_tokens(instances, "BLN_A[", 4, "]");
+    instances << " VDD VSS array_sram_6t\n";
+    // The staggered IO block (chipforge_asap7's StaggeredIoColumnSpec),
+    // wrapped as iocol_sram_6t in tech/spice/sram_6t_iocolumn.sp, in the pin
+    // order generate_asap7_6t_iocolumn.py writes: per leaf bitline,
+    // complement, select, complement select; then precharge, sense enable,
+    // data in, write enables, output enables, data out, supplies.
+    instances << "XIO_A";
+    for (int r = 0; r < 4; ++r) {
+        instances << " BL_A[" << r << "] BLN_A[" << r << "] yselA[" << r << "] yselnA[" << r << "]";
+    }
+    instances << " blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_sram_6t\n";
+    return create_subckt("colgrp_sram_6t", ports, instances.str());
+}
+
+std::string SpiceGenerator::generate_stacked_colgrp_6t() {
+    const int rows = 2 * config_.num_wls;
+    const int bits = config_.num_data_bits / 2;
+    std::vector<std::string> ports;
+    append_indexed_ports(ports, "WLA[", rows * config_.num_banks, "]");
+    append_indexed_ports(ports, "DA[", bits, "]");
+    append_indexed_ports(ports, "QA[", bits, "]");
+    for (const char* name : {"wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA", "sae_A"}) {
+        append_indexed_ports(ports, std::string(name) + "[", config_.num_banks, "]");
+    }
+    append_indexed_ports(ports, "yselnA[", 4 * config_.num_banks, "]");
+    append_indexed_ports(ports, "yselA[", 4 * config_.num_banks, "]");
+    append_ports(ports, {"VDD", "VSS"});
+
+    std::stringstream instances;
+    for (int bank = 0; bank < static_cast<int>(config_.num_banks); ++bank) {
+        const std::string b = std::to_string(bank);
+        for (int bit = 0; bit < bits; ++bit) {
+            instances << "X" << bank << "_" << bit << " ";
+            append_indexed_tokens(instances, "WLA[", rows, "]", bank * rows);
+            instances << " DA[" << bit << "] QA[" << bit << "] wrenaA[" << b << "] wrenanA[" << b
+                      << "] oeb_outA[" << b << "] oe_outA[" << b << "] blprechnA[" << b << "] ";
+            append_indexed_tokens(instances, "yselnA[", 4, "]", bank * 4);
+            append_indexed_tokens(instances, "yselA[", 4, "]", bank * 4);
+            instances << " sae_A[" << b << "] VDD VSS colgrp_sram_6t\n";
+        }
+        // The stack's two ends each carry a dummy row on its wordlines.
+        for (const char* end : {"B", "T"}) {
+            instances << "XE" << bank << "_" << end << " ";
+            append_indexed_tokens(instances, "WLA[", rows, "]", bank * rows);
+            instances << " VDD VSS end_row_6t\n";
+        }
+    }
+    const std::string bank_name = "stacked_colgrp_x" + std::to_string(rows) + "x" +
+        std::to_string(bits) + "x" + std::to_string(config_.num_banks);
+    return create_subckt(bank_name, ports, instances.str());
+}
+
 std::string SpiceGenerator::generate_spice_content(bool single_port) {
     std::stringstream content;
     std::string sep = std::string(70, '*') + "\n";
@@ -652,6 +778,26 @@ std::string SpiceGenerator::generate_spice_content(bool single_port) {
         content << sep << generate_colgrp() << "\n";
         // content << sep << generate_stacked_colgrp() << "\n";
         content << sep << generate_stacked_colgrp_mux() << "\n";
+    } else if (config_.bitcell_6t) {
+        LOGD << "Generating single-port 6T SRAM SPICE netlist (generated flow)...";
+
+        content << sep << SpiceTemplates::get_cell_6t() << "\n\n";
+        content << sep << SpiceTemplates::get_dummy_cell() << "\n\n";
+        content << sep << SpiceTemplates::get_dummy_topbot_v1() << "\n\n";
+        content << sep << SpiceTemplates::get_dummy_topbot_v2() << "\n\n";
+        // The IO block, written beside its GDS by
+        // scripts/generate_asap7_6t_iocolumn.py; the wordline slices as the
+        // two-port macro's.
+        content << sep << load_tech_netlist("tech/spice/sram_6t_iocolumn.sp",
+                                            "scripts/generate_asap7_6t_iocolumn.py") << "\n\n";
+        content << sep << load_wl_slice_netlist() << "\n\n";
+        content << sep << generate_wl_strips_8t() << "\n";
+
+        content << sep << generate_cell_row_6t() << "\n";
+        content << sep << generate_array_6t() << "\n";
+        content << sep << generate_end_row_6t() << "\n";
+        content << sep << generate_colgrp_6t() << "\n";
+        content << sep << generate_stacked_colgrp_6t() << "\n";
     } else {
         LOGD << "Generating dual-port SRAM SPICE netlist...";
 

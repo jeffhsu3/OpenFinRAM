@@ -1,0 +1,80 @@
+"""Fast physical contract tests of the single-port 6T tile (--bitcell 6t); no router or simulator."""
+
+from pathlib import Path
+import re
+import sys
+import unittest
+
+import gdstk
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from chipforge_asap7.verification.connectivity import MetalGraph
+from compile_asap7_2rw import abstract, build_leaf_6t, build_wordline_strips, leaf_net, supply, wordline_tracks
+import generate_asap7_6t_iocolumn as columns6
+
+ROWS = 8  # wordlines of the array (NUM_WL 4)
+
+
+def boundary(cell):
+    return columns6.boundary_box(cell)
+
+
+class SixTTileTests(unittest.TestCase):
+    def test_wordlines_sit_on_the_driver_slices_pitch(self):
+        tile = build_leaf_6t(ROWS, bottom=True, top=True)
+        tracks = wordline_tracks(tile)
+        self.assertEqual(sorted(tracks), [("A", i) for i in range(ROWS)])
+        xs = [tracks[("A", i)] for i in range(ROWS)]
+        self.assertTrue(all(abs(b - a - 0.108) < 1e-6 for a, b in zip(xs, xs[1:])))
+        # Over the bitcell's own M3 wordline stripe, not the label it carries.
+        graph = MetalGraph(tile)
+        for x in xs:
+            self.assertEqual(len(graph.at(30, (x, 0.135))), 1)
+
+    def test_tiles_abut_on_whole_nanometres(self):
+        heights = {}
+        for bottom in (False, True):
+            for top in (False, True):
+                _, y0, _, y1 = boundary(build_leaf_6t(ROWS, bottom=bottom, top=top))
+                heights[(bottom, top)] = round(y1 - y0, 6)
+                for edge in (y0, y1):
+                    self.assertAlmostEqual(edge * 1000, round(edge * 1000), places=6)
+        self.assertAlmostEqual(heights[(False, False)], 4 * 0.27)
+        # A dummy row (283.5 nm) and half a fin pitch past it at each stack end.
+        self.assertAlmostEqual(heights[(True, False)], 4 * 0.27 + 0.297)
+        self.assertAlmostEqual(heights[(True, True)], 4 * 0.27 + 2 * 0.297)
+
+    def test_the_tiles_pins_map_to_port_a_nets(self):
+        tile = build_leaf_6t(ROWS, bottom=False, top=False)
+        names = {label.text for label in tile.labels if not supply(label.text)}
+        self.assertEqual(
+            {n for n in names if not n.startswith("WLA[")},
+            {"DA", "QA", "wrenaA", "wrenanA", "oe_outA", "oeb_outA", "blprechnA", "sae_A",
+             *(f"ysel{s}A[{r}]" for s in ("", "n") for r in range(4))},
+        )
+        for name in names:
+            net = leaf_net(name, bank=0, bit=1, wordlines=ROWS // 2, bits=4)
+            self.assertNotRegex(net, r"_B\b|_B\[")
+        _, pins, _, _ = abstract(tile, "dp_column_noend", [l for l in tile.labels if not supply(l.text)])
+        self.assertTrue({"vdd", "vss"} <= {p["net"] for p in pins.values()})
+
+    def test_one_strip_a_side_lines_up_with_the_tile(self):
+        tile = build_leaf_6t(ROWS, bottom=True, top=True)
+        lib = gdstk.Library(unit=1e-6, precision=1e-10)
+        pairs, _ = build_wordline_strips(lib, tile, ROWS // 2, 4, ports=("A",), gate_reach=0.0135)
+        for half, pair in pairs.items():
+            labels = [label.text for label in pair.labels]
+            self.assertEqual(sum(bool(re.fullmatch(r"WL_A\[\d+\]", t)) for t in labels), ROWS, half)
+            self.assertFalse(any(t.startswith(("WL_B", "SEL_B", "B_B")) for t in labels), half)
+
+    def test_the_io_blocks_bitlines_meet_the_rows(self):
+        cells = columns6.load_source()
+        spec = columns6.io_spec(cells[columns6.BITCELL])
+        # The 6T cell's M2 bitline bars, from each row's bottom.
+        self.assertEqual(spec.bitline_entry, (186.5, 83.5))
+        self.assertEqual(spec.row_pitch, 270)
+        self.assertEqual(spec.height, 4 * 270)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

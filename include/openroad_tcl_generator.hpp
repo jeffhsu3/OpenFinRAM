@@ -48,6 +48,8 @@ public:
     void set_bitcell_width(double width);
     void set_cpu_count(int local_cpu, int remote_cpu = 0);
     void set_band(const BandPlan& band) { band_ = band; }
+    // The generated single-port macro's controller: port A's inputs only.
+    void set_one_port(bool one_port) { one_port_ = one_port; }
     // The band's die height for `width`: rows for the cells at the
     // utilization cap plus the strips' keep-outs, and the two insets.
     double band_die_height(double width) const;
@@ -100,6 +102,7 @@ private:
     int local_cpu_ = 8;
     QoRReport2 qor_;
     BandPlan band_;
+    bool one_port_ = false;
 
     // helpers
     bool file_exists(const std::string& p) const;

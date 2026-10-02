@@ -26,6 +26,11 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .default_value(false)
         .implicit_value(true);
 
+    program.add_argument("--bitcell")
+        .help("8t (default): the two-port 8T macro. 6t: a single-port macro of the released "
+              "6T cell, built like the two-port one with port A alone.")
+        .default_value(std::string("8t"));
+
     program.add_argument("--share-port-b")
         .help("Two-port: banks in pairs share port B's sense amplifier, write driver "
               "and output latch, the pair's arrays mirrored about one two-sided IO block. "
@@ -125,6 +130,12 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.num_banks             = program.get<unsigned>("--num-banks");
     options.single_port           = program.get<bool>("--single-port");
     options.share_port_b          = program.get<bool>("--share-port-b");
+    const std::string bitcell     = program.get<std::string>("--bitcell");
+    if (bitcell != "8t" && bitcell != "6t") {
+        LOGE << "Error: --bitcell is 8t or 6t, got " << bitcell;
+        std::exit(1);
+    }
+    options.bitcell_6t            = bitcell == "6t";
     options.strips_in_controller  = program.get<bool>("--strips-in-controller");
     options.skip_characterization = program.get<bool>("--skip-characterization");
     options.num_wl_buf            = program.get<unsigned>("--num-wl-buf");
@@ -155,7 +166,21 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     if (options.platform_path.empty()) {
         options.platform_path = options.openroad_path + "/platform/asap7";
     }
-    if ((options.use_yosys || options.use_openroad) && !options.single_port) {
+    if (options.bitcell_6t && options.single_port) {
+        LOGE << "Error: --bitcell 6t is the generated single-port flow; --single-port is the legacy one.";
+        std::exit(1);
+    }
+    if (options.bitcell_6t && (options.share_port_b || options.strips_in_controller)) {
+        LOGE << "Error: --bitcell 6t has one port and takes no --share-port-b or --strips-in-controller yet.";
+        std::exit(1);
+    }
+    if (options.bitcell_6t && options.num_rows_per_mux != 4) {
+        LOGE << "Error: --bitcell 6t's IO block is 4:1 so far (--num-rows-per-mux 4).";
+        std::exit(1);
+    }
+    if ((options.use_yosys || options.use_openroad) && options.bitcell_6t) {
+        LOGI << "Open-source flow in generated single-port (6T) mode";
+    } else if ((options.use_yosys || options.use_openroad) && !options.single_port) {
         LOGI << "Open-source flow in dual-port (8T) mode";
     } else if ((options.use_yosys || options.use_openroad) && options.single_port) {
         LOGI << "Open-source flow in single-port (6T) mode";

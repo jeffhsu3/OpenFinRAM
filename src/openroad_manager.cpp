@@ -27,6 +27,7 @@ bool OpenRoadManager::run_openroad_flow() {
     // did not).
     gen.set_max_utilization(cli_options_.single_port ? 0.40 : 0.50);
     gen.set_bitcell_width(cli_options_.bitcell_width);
+    gen.set_one_port(cli_options_.bitcell_6t);
 
     // QoR and work_dir must match YosysManager's CWD-based tmp (repo/tmp) for consistency
     std::string qor_path_cwd = join_path(get_current_dir_name(), "tmp/syn_" + get_run_timestamp() + "/qor_report.txt");
@@ -61,6 +62,27 @@ bool OpenRoadManager::run_openroad_flow() {
     double sram_width = 10.0;
     if (cli_options_.single_port) {
         sram_width = (cli_options_.bitcell_width * 2 + 2.376 + cli_options_.bitcell_width * ((cli_options_.num_wls + 3) * 2)) * cli_options_.num_banks - cli_options_.bitcell_width;
+    } else if (cli_options_.bitcell_6t) {
+        // A column tile, as scripts/generate_asap7_6t_iocolumn.py lays it:
+        // edge filler | cap | 2*NUM_WL bitcells | dummy | tap | IO block,
+        // the first four and every bitcell one slot wide.
+        OpenFinRAM::LayerMap map;
+        map.init_asap7_layermap();
+        gdstk::ErrorCode error = gdstk::ErrorCode::NoError;
+        auto lib = gdstk::read_gds(join_path(get_current_dir_name(),
+            "tech/gds/sram_6t_iocolumn.gds").c_str(), 0, 1e-2, nullptr, &error);
+        auto* io = lib.get_cell("iocol_sram_6t");
+        auto* bitcell = lib.get_cell("sram_cell_6t_122");
+        auto io_size = io ? OpenFinRAM::get_cell_size_from_boundary(io, map) : OpenFinRAM::CellSize{};
+        auto bit_size = bitcell ? OpenFinRAM::get_cell_size_from_boundary(bitcell, map) : OpenFinRAM::CellSize{};
+        if (error != gdstk::ErrorCode::NoError || !io_size.valid || !bit_size.valid) {
+            LOGE << "Cannot measure the 6T IO/bitcell geometry (tech/gds/sram_6t_iocolumn.gds)";
+            lib.free_all();
+            return false;
+        }
+        const unsigned slots = 2 * cli_options_.num_wls + 4;
+        sram_width = (slots * bit_size.width + io_size.width) * cli_options_.num_banks;
+        lib.free_all();
     } else {
         OpenFinRAM::LayerMap map;
         map.init_asap7_layermap();

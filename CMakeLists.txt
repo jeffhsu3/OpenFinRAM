@@ -104,6 +104,12 @@ if(BUILD_TESTING)
     set_tests_properties(decode_dp_check PROPERTIES TIMEOUT 600)
 
     add_test(
+        NAME decode_1p_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_decode_1p_check.sh
+    )
+    set_tests_properties(decode_1p_check PROPERTIES TIMEOUT 600)
+
+    add_test(
         NAME asap7_8t_decoder_check
         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_decoder_check.sh
     )
@@ -249,6 +255,21 @@ if(BUILD_TESTING)
     )
     set_tests_properties(asap7_2rw_macro_check PROPERTIES
         TIMEOUT 1200 SKIP_RETURN_CODE 77 LABELS integration RUN_SERIAL TRUE
+    )
+    add_test(
+        NAME asap7_6t_physical_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_6t_physical_check.sh
+    )
+    set_tests_properties(asap7_6t_physical_check PROPERTIES
+        TIMEOUT 600 SKIP_RETURN_CODE 77
+    )
+    add_test(
+        NAME asap7_6t_macro_check
+        COMMAND ${CMAKE_COMMAND} -E env OPENFINRAM_BIN=$<TARGET_FILE:OpenFinRAM>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_6t_macro_check.sh
+    )
+    set_tests_properties(asap7_6t_macro_check PROPERTIES
+        TIMEOUT 1800 SKIP_RETURN_CODE 77 LABELS integration RUN_SERIAL TRUE
     )
 
     # P0 characterization-JSON gate: a JSON carrying the estimated constants

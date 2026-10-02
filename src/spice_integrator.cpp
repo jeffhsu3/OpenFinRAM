@@ -233,6 +233,11 @@ std::string SpiceIntegrator::generate_subckt_header() const {
         }
         oss << "\n+";
 
+        // The generated single-port macro is port A alone.
+        if (cli_options_.bitcell_6t) {
+            oss << "\n\n";
+            return oss.str();
+        }
         oss << " ce_n_B we_n_B oe_n_B"
             << "\n+";
         for (uint64_t i = 0; i < get_addr_width(cli_options_); ++i) {
@@ -321,7 +326,9 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                 // One unsplit array per column: 2*NUM_WL wordlines a bank,
                 // driven by this half's strips.
                 const uint64_t rows = 2 * cli_options_.num_wls;
-                for (const char* port : {"a", "b"}) {
+                const std::vector<const char*> ports = cli_options_.bitcell_6t
+                    ? std::vector<const char*>{"a"} : std::vector<const char*>{"a", "b"};
+                for (const char* port : ports) {
                     for (uint64_t i = 0; i < rows; ++i) {
                         oss << " wl_" << port << "_" << half << "[" << i + bank * rows << "]";
                     }
@@ -352,12 +359,12 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             }
             oss << "\n+";
 
-            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+            for (uint64_t i = 0; !cli_options_.bitcell_6t && i < cli_options_.num_data_bits / 2; ++i) {
                 oss << " D_B[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
             }
             oss << "\n+";
 
-            for (uint64_t i = 0; i < cli_options_.num_data_bits / 2; ++i) {
+            for (uint64_t i = 0; !cli_options_.bitcell_6t && i < cli_options_.num_data_bits / 2; ++i) {
                 oss << " Q_B[" << i + top_bottom * (cli_options_.num_data_bits / 2) << "]";
             }
             oss << "\n+";
@@ -369,6 +376,8 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                 "wrena", "wrenan", "saprechn", "sae", "oeb_out", "oe_out",
                 "blprechtn", "blprechbn"
             };
+        } else if (cli_options_.bitcell_6t) {
+            ctrl_sigs = {"wrena_A", "wrenan_A", "oeb_out_A", "oe_out_A", "blprechn_A", "sae_A"};
         } else {
             ctrl_sigs = {
                 "wrena_A", "wrenan_A", "wrena_B", "wrenan_B",
@@ -417,7 +426,10 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
                 oss << "\n+";
             }
         } else {
-            for (const char* bus : {"yseln_A", "ysel_A", "yseln_B", "ysel_B"}) {
+            const std::vector<const char*> buses = cli_options_.bitcell_6t
+                ? std::vector<const char*>{"yseln_A", "ysel_A"}
+                : std::vector<const char*>{"yseln_A", "ysel_A", "yseln_B", "ysel_B"};
+            for (const char* bus : buses) {
                 for (int index = 0; index < cli_options_.num_banks * 4; ++index) {
                     oss << " " << bus << "[" << index << "]";
                 }
@@ -450,7 +462,9 @@ std::string SpiceIntegrator::generate_wordline_strip_instances() const {
     for (const char* half : {"lo", "hi"}) {
         for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
             oss << "Xwl_" << half << "_" << bank;
-            for (const char* port : {"A", "B"}) {
+            const std::vector<const char*> ports = cli_options_.bitcell_6t
+                ? std::vector<const char*>{"A"} : std::vector<const char*>{"A", "B"};
+            for (const char* port : ports) {
                 for (uint64_t k = 0; k < slices; ++k) {
                     oss << " sel_hi_" << port << "[" << bank * slices + k << "]";
                 }

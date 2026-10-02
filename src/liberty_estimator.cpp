@@ -98,18 +98,19 @@ bool validate_lef_interface(const MainCliOptions& options,
             required.push_back("Q[" + std::to_string(bit) + "]");
         }
     } else {
-        required.insert(required.end(),
-                        {"rst_n", "ce_n_A", "ce_n_B", "we_n_A", "we_n_B",
-                         "oe_n_A", "oe_n_B"});
-        for (int bit = 0; bit < addr_width; ++bit) {
-            required.push_back("A_A[" + std::to_string(bit) + "]");
-            required.push_back("A_B[" + std::to_string(bit) + "]");
-        }
-        for (unsigned bit = 0; bit < options.num_data_bits; ++bit) {
-            required.push_back("D_A[" + std::to_string(bit) + "]");
-            required.push_back("D_B[" + std::to_string(bit) + "]");
-            required.push_back("Q_A[" + std::to_string(bit) + "]");
-            required.push_back("Q_B[" + std::to_string(bit) + "]");
+        // The generated single-port macro is the two-port one's port A.
+        const std::vector<std::string> ports = options.bitcell_6t
+            ? std::vector<std::string>{"A"} : std::vector<std::string>{"A", "B"};
+        required.push_back("rst_n");
+        for (const auto& port : ports) {
+            for (const char* pin : {"ce_n_", "we_n_", "oe_n_"}) required.push_back(pin + port);
+            for (int bit = 0; bit < addr_width; ++bit) {
+                required.push_back("A_" + port + "[" + std::to_string(bit) + "]");
+            }
+            for (unsigned bit = 0; bit < options.num_data_bits; ++bit) {
+                required.push_back("D_" + port + "[" + std::to_string(bit) + "]");
+                required.push_back("Q_" + port + "[" + std::to_string(bit) + "]");
+            }
         }
     }
 
@@ -117,7 +118,7 @@ bool validate_lef_interface(const MainCliOptions& options,
         if (pins.find(pin) == pins.end()) {
             if (error) {
                 *error = "LEF interface does not match " +
-                         std::string(options.single_port ? "single-port" : "dual-port") +
+                         std::string(options.single_port || options.bitcell_6t ? "single-port" : "dual-port") +
                          " macro; missing PIN " + pin + " in " + lef_path;
             }
             return false;
@@ -422,7 +423,7 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  cell (" << cell_name << ") {\n";
     out << "    area : " << num(size.width * size.height) << ";\n";
     out << "    interface_timing : true;\n";
-    if (!options.single_port) {
+    if (!options.single_port && !options.bitcell_6t) {
         out << "    contention_condition : \""
             << dual_port_contention_condition(addr_width) << "\";\n";
     }
@@ -467,6 +468,9 @@ std::string build_estimated_liberty(const MainCliOptions& options,
         if (options.single_port) {
             ops = {{"\"we_n\"", data->power.read_access_pj},
                    {"\"!we_n\"", data->power.write_access_pj}};
+        } else if (options.bitcell_6t) {
+            ops = {{"\"we_n_A\"", data->power.read_access_pj},
+                   {"\"!we_n_A\"", data->power.write_access_pj}};
         } else {
             ops = {{"\"we_n_A\"", data->power.read_access_pj},
                    {"\"!we_n_A\"", data->power.write_access_pj},
@@ -495,6 +499,13 @@ std::string build_estimated_liberty(const MainCliOptions& options,
         emit_input_bus(out, "sdel", sdel_type, constraint_template, "", data);
         emit_input_bus(out, "A", address_type, constraint_template, "", data);
         emit_input_bus(out, "D", data_type, constraint_template, "A", data);
+    } else if (options.bitcell_6t) {
+        emit_input_pin(out, "rst_n", constraint_template, data, true);
+        emit_input_pin(out, "ce_n_A", constraint_template, data);
+        emit_input_pin(out, "we_n_A", constraint_template, data);
+        emit_input_pin(out, "oe_n_A", constraint_template, data);
+        emit_input_bus(out, "A_A", address_type, constraint_template, "", data);
+        emit_input_bus(out, "D_A", data_type, constraint_template, "A_A", data);
     } else {
         emit_input_pin(out, "rst_n", constraint_template, data, true);
         emit_input_pin(out, "ce_n_A", constraint_template, data);
@@ -585,7 +596,9 @@ std::string build_estimated_liberty(const MainCliOptions& options,
         out << "    }\n";
     } else {
         // Dual-port: Q_A driven by A_A, Q_B driven by A_B
-        for (const auto& qb : std::vector<std::pair<std::string,std::string>>{{"Q_A","A_A"},{"Q_B","A_B"}}) {
+        std::vector<std::pair<std::string, std::string>> outputs{{"Q_A", "A_A"}, {"Q_B", "A_B"}};
+        if (options.bitcell_6t) outputs.pop_back();
+        for (const auto& qb : outputs) {
             out << "    bus (" << qb.first << ") {\n";
             out << "      bus_type : " << data_type << ";\n";
             out << "      direction : output;\n";

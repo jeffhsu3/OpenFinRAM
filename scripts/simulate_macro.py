@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
-"""Transistor-level read/write simulation of a whole two-port macro, in Xyce.
+"""Transistor-level read/write simulation of a whole macro, in Xyce.
 
     .venv/bin/python scripts/simulate_macro.py results/sram_x4x2x1_<stamp>
+
+A single-port 6T macro (``--bitcell 6t``, recognised by its deck's bitcell)
+runs the same program on its one port, each pair of operations below one
+after the other.
 
 The decks under `tests/spice/` exercise the bitcell and the IO column with ideal
 wordline, select and sense-enable sources.  Nothing simulated the macro: the
@@ -64,6 +68,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BITCELL = "sram_cell_8t"
+#: The single-port macro's bitcell (``WL BLN BL VDD VSS``); its storage nodes are Q and QB too.
+BITCELL_6T = "sram_cell_6t_122"
 XYCE_CANDIDATES = (
     os.environ.get("XYCE"),
     "/home/jeff/iv4/local/xyce-14.4/bin/Xyce",
@@ -129,7 +135,7 @@ def parse_subckts(text: str) -> dict[str, Subckt]:
     return found
 
 
-def bitcells(subckts: dict[str, Subckt], top: str) -> list[dict]:
+def bitcells(subckts: dict[str, Subckt], top: str, bitcell: str = BITCELL) -> list[dict]:
     """Every bitcell under `top`: its instance path and the top-level nets on its pins."""
     found = []
 
@@ -143,7 +149,7 @@ def bitcells(subckts: dict[str, Subckt], top: str) -> list[dict]:
                 pin.lower(): bound.get(net.lower(), ":".join([*path, net]))
                 for pin, net in zip(child.pins, nets)
             }
-            if ref.lower() == BITCELL:
+            if ref.lower() == bitcell:
                 found.append({"path": ":".join(here), "nets": local})
             else:
                 walk(ref, here, local)
@@ -192,6 +198,8 @@ class Geometry:
     banks: int = 1
     #: Banks in pairs share port B's IO: its sense and write enables are one per pair.
     shared_b: bool = False
+    #: The macro's ports: "AB", or "A" for the single-port macro.
+    ports: str = "AB"
 
     def io(self, port: str, bank: int) -> int:
         """Index of the sense/write enable serving `bank` on `port`."""
@@ -237,7 +245,7 @@ class Geometry:
         return self.bank(address) * 2 * self.wordlines + half * self.wordlines + row
 
 
-def locate(cells: list[dict], wordlines: int) -> None:
+def locate(cells: list[dict], wordlines: int, ports: str = "AB") -> None:
     """Add ``half``, ``col``, ``row``, ``group`` and ``stack`` to each cell, from what it is wired to.
 
     The wordline a cell sits on is a driver strip output (``wl_a_lo[i]``, one
@@ -247,14 +255,15 @@ def locate(cells: list[dict], wordlines: int) -> None:
     checked: a cell on ``wl_a_lo[i]`` has to be on ``wl_b_lo[i]``.
     """
     for cell in cells:
+        single = ports == "A"  # the 6T cell's pins are WL and BL
         wordline = re.fullmatch(
-            r"(?:.*:)?wl_a_(lo|hi)\[(\d+)\]", cell["nets"]["wla"], re.IGNORECASE
+            r"(?:.*:)?wl_a_(lo|hi)\[(\d+)\]", cell["nets"]["wl" if single else "wla"], re.IGNORECASE
         )
-        other = re.fullmatch(
+        other = wordline if single else re.fullmatch(
             r"(?:.*:)?wl_b_(lo|hi)\[(\d+)\]", cell["nets"]["wlb"], re.IGNORECASE
         )
         bitline = re.fullmatch(
-            r"(.*):bl_a\[(\d+)\]", cell["nets"]["bla"], re.IGNORECASE
+            r"(.*):bl_a\[(\d+)\]", cell["nets"]["bl" if single else "bla"], re.IGNORECASE
         )
         if (not wordline or not bitline or not other or other[2] != wordline[2]
                 or other[1].lower() != wordline[1].lower()):  # fmt: skip
@@ -357,9 +366,12 @@ def default_program(g: Geometry, *, spaced: bool = False) -> list[tuple[Op, Op]]
             (Op("R", a), Op("R", a | up)),
             (Op("R", b | up), Op("R", b)),
         ]
+    if g.ports == "A":
+        # One port: the pairs' operations one after the other, B's on A.
+        program = [(op,) for ops in program for op in ops if op.kind != "-"]
     if spaced:
         program = [step for ops in program
-                   for step in ([ops, (Op("-"), Op("-"))] if any(op.kind == "W" for op in ops) else [ops])]  # fmt: skip
+                   for step in ([ops, tuple(Op("-") for _ in ops)] if any(op.kind == "W" for op in ops) else [ops])]  # fmt: skip
     return program
 
 
@@ -401,14 +413,14 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         levels.setdefault(name, [idle[name]] * (cycles + 1))[cycle] = level
 
     idle = {}
-    for port in "AB":
+    for port in g.ports:
         idle.update({f"ce_n_{port}": 1, f"we_n_{port}": 1, f"oe_n_{port}": 1})
         idle.update({f"A_{port}[{i}]": 0 for i in range(address_bits)})
         idle.update({f"D_{port}[{i}]": 0 for i in range(g.bits)})
     for name in idle:
         levels[name] = [idle[name]] * (cycles + 1)
     for cycle, ops in enumerate(program, start=1):
-        for port, op in zip("AB", ops):
+        for port, op in zip(g.ports, ops):
             if op.kind == "-":
                 continue
             drive(f"ce_n_{port}", cycle, 0)
@@ -445,9 +457,9 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
             f".IC V(Xdut:{cell['path']}:Q)={vdd * value:g} V(Xdut:{cell['path']}:QB)={vdd * (1 - value):g}"
         )
     watched = ["clk", *outputs]
-    watched += [f"Xdut:wl_{port}_{stack}[{index}]" for port in "ab" for stack in STACKS
+    watched += [f"Xdut:wl_{port}_{stack}[{index}]" for port in g.ports.lower() for stack in STACKS
                 for index in range(2 * g.wordlines * g.banks)]  # fmt: skip
-    watched += [f"Xdut:{net}_{port}[{io}]" for net in ("sae", "wrena") for port in "AB"
+    watched += [f"Xdut:{net}_{port}[{io}]" for net in ("sae", "wrena") for port in g.ports
                 for io in range(g.ios(port))]  # fmt: skip
     watched += [f"Xdut:{cell['path']}:Q" for cell in cells]
     watched += [f"Xdut:{node}" for node in probes]
@@ -521,7 +533,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
     first, period = plan["first_edge"], plan["period"]
     seen = {
         (port, bit, to): False
-        for port in "AB"
+        for port in g.ports
         for bit in range(g.bits)
         for to in (0, 1)
     }
@@ -540,7 +552,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
     for cycle, ops in enumerate(program, start=1):
         rise = first + cycle * period
         sample = rise + 0.45 * period
-        for port, op in zip("AB", ops):
+        for port, op in zip(g.ports, ops):
             # Write enable only for a write, and only its bank's (its pair's, shared).
             for io in range(g.ios(port)):
                 if op.kind == "W" and io == g.io(port, g.bank(op.address)):
@@ -652,15 +664,17 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     result_dir = result_dir.resolve()
     described = json.loads(next(result_dir.glob("*.physical.json")).read_text())
     top = described["cell"]
+    source = (netlist or result_dir / f"{top}.sp").read_text()
+    subckts = parse_subckts(source)
+    single = BITCELL_6T in subckts  # the single-port 6T macro's deck
     g = Geometry(
         wordlines=described["wordlines_per_half"], mux=4, bits=described["bits"],
         banks=described.get("banks", 1), shared_b=described.get("shared_port_b", False),
+        ports="A" if single else "AB",
     )  # fmt: skip
-    source = (netlist or result_dir / f"{top}.sp").read_text()
-    subckts = parse_subckts(source)
     pins = subckts[top.lower()].pins
-    cells = bitcells(subckts, top)
-    locate(cells, g.wordlines)
+    cells = bitcells(subckts, top, BITCELL_6T if single else BITCELL)
+    locate(cells, g.wordlines, g.ports)
     groups = sorted({cell["group"] for cell in cells})
     for (
         cell

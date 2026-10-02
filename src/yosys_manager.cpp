@@ -100,7 +100,7 @@ std::string YosysManager::generate_yosys_script() const {
         cli_options_.num_wl_buf, cli_options_.num_sae_buf,
         abc_output_load_ff(), kAbcDelayTargetPs,
         platform, tech_lib,
-        cli_options_.single_port, cli_options_.share_port_b);
+        cli_options_.single_port, cli_options_.share_port_b, cli_options_.bitcell_6t);
 }
 
 double YosysManager::abc_output_load_ff() const {
@@ -324,10 +324,12 @@ bool YosysManager::verify_periphery_structure() {
         std::size_t dff_total = dff_count + dff_asr_count;
         const std::size_t bufx2_count =
             count_occurrences(text, "BUFx2_ASAP7_75t_R");
+        // One controller per port: the generated single-port macro has one.
+        const std::size_t ports = cli_options_.bitcell_6t ? 1 : 2;
         const std::size_t expected_bufx2 =
-            static_cast<std::size_t>(2 * (cli_options_.num_wl_buf + cli_options_.num_sae_buf));
+            ports * (cli_options_.num_wl_buf + cli_options_.num_sae_buf);
         const std::size_t expected_dffs =
-            static_cast<std::size_t>(2 * get_addr_width(cli_options_) + 4);
+            ports * (get_addr_width(cli_options_) + 2);
         const std::size_t named_delay_count =
             count_occurrences(text, "physical_dp_delay_");
 
