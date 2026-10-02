@@ -392,7 +392,13 @@ dict for {net pins} $dp_reset_nets {
     } else {
         file << "global_route\n";
     }
-    file << "detailed_route -output_drc detailed_route_drc.rpt\n\n";
+    // ASAP7 cells' M1 pins sit 9 or 27 nm off the 36 nm M1 tracks.  Without
+    // via-in-pin the router lands a VIA12 on the track, half off the pin, and
+    // two such 9 nm stubs on neighbouring pins break M1.S.2/M1.S.6 (25/20 nm
+    // between short M1 shapes); inside the pin, the via sits on its centre.
+    // Verified on the dual-port controller only.
+    file << "detailed_route -output_drc detailed_route_drc.rpt"
+         << (single_port ? "" : " -via_in_pin_bottom_layer M1 -via_in_pin_top_layer M1") << "\n\n";
     if (!single_port) {
         file << "if {![file exists detailed_route_drc.rpt] || [file size detailed_route_drc.rpt] != 0} { error \"PERIPHERY_DRC: routing violations remain\" }\n";
     }
