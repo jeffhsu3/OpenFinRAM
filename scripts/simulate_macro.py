@@ -809,6 +809,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--timeout", type=float, default=7200,
                         help="Seconds Xyce may take (a large macro takes days).")
+    parser.add_argument("--probe", action="append", default=[], metavar="NODE",
+                        help="Also print V(Xdut:NODE), e.g. XDATA_LO:X0_0:XIO_A:X_block:SA (repeatable).")
     args = parser.parse_args(argv)
     tag = "_spaced" if args.spaced else ""
     out = (
@@ -816,7 +818,8 @@ def main(argv: list[str] | None = None) -> int:
         or REPO_ROOT / "tmp" / f"simulate_{args.result_dir.resolve().name}{tag}"
     )
     verdict = simulate(args.result_dir, out, period=args.period, vdd=args.vdd, corner=args.corner,
-                       netlist=args.netlist, spaced=args.spaced, timeout=args.timeout)  # fmt: skip
+                       netlist=args.netlist, spaced=args.spaced, timeout=args.timeout,
+                       probes=tuple(args.probe))  # fmt: skip
     print(describe(verdict))
     print(f"wrote {out / 'simulation.json'}")
     return 0 if verdict["passed"] else 1

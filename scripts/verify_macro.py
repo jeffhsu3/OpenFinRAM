@@ -100,18 +100,29 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Pat
     source = gdstk.read_gds(str(gds))
     top = next(c for c in source.cells if c.name == cell)
     # A pair of banks sharing port B's IO is one tile (dp_colpair), X<pair>_<bit>.
-    xs = sorted({round(float(r.origin[0]), 3) for r in top.references if r.cell.name.startswith("dp_col")})
+    # A bank is a column of tiles; its tiles' origins differ by the variant
+    # (a segmented 6T stack mixes end tiles whose outlines start apart), so
+    # group them: banks stand a tile's width apart, variants nanometres.
+    origins = sorted({round(float(r.origin[0]), 3) for r in top.references if r.cell.name.startswith("dp_col")})
+    groups: list[list[float]] = []
+    for x in origins:
+        if groups and x - groups[-1][-1] < 1.0:
+            groups[-1].append(x)
+        else:
+            groups.append([x])
     views = []
-    for bank, x_bank in enumerate(xs):
+    for bank, xs_bank in enumerate(groups):
         view = out / f"bank{bank}"
         view.mkdir(parents=True, exist_ok=True)
         library = gdstk.read_gds(str(gds))
         view_top = next(c for c in library.cells if c.name == cell)
         view_top.remove(*[r for r in view_top.references
-                          if r.cell.name.startswith("dp_col") and round(float(r.origin[0]), 3) != x_bank])  # fmt: skip
+                          if r.cell.name.startswith("dp_col") and round(float(r.origin[0]), 3) not in xs_bank])  # fmt: skip
         library.write_gds(str(view / gds.name))
-        # The column groups are X<bank>_<bit> in the stacked column group.
-        kept = [line for line in text.splitlines() if not re.match(rf"X(?!{bank}_)\d+_\d+ ", line)]
+        # The column groups are X<bank>_<bit> in the stacked column group,
+        # and a 6T stack's dummy end rows XE<bank>_B/_T (inside its end tiles).
+        kept = [line for line in text.splitlines()
+                if not re.match(rf"X(?!{bank}_)\d+_\d+ |XE(?!{bank}_)\d+_[BT] ", line)]
         (view / netlist.name).write_text("\n".join(kept) + "\n")
         views.append((view / gds.name, view / netlist.name))
     return views
@@ -191,7 +202,15 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
     started = time.time()
     shared = described and json.loads(described[0].read_text()).get("shared_port_b", False)
     units = banks // 2 if shared else banks
-    views = bank_views(gds, netlist, cell, out / "banks") if units > 1 else [(gds, netlist)]
+    # Per-bank views keep KLayout's comparer from losing itself in an 8T
+    # macro's identical banks.  A 6T macro is compared whole: its nets are
+    # named at their terminals, and a view that drops a bank's tiles also
+    # drops the metal some of those names stand on (a segmented two-bank
+    # 6T macro failed in views and matched whole, in minutes).
+    six_t = described and json.loads(described[0].read_text()).get("bitcell") == "6t"
+    views = bank_views(gds, netlist, cell, out / "banks") if units > 1 and not six_t else [(gds, netlist)]
+    if six_t:
+        units = 1
     strict, relaxed = [], []
     for index, (view_gds, view_netlist) in enumerate(views):
         tag = f"bank{index}/" if units > 1 else ""
