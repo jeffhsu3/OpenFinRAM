@@ -40,9 +40,9 @@ class SixTTileTests(unittest.TestCase):
                 for edge in (y0, y1):
                     self.assertAlmostEqual(edge * 1000, round(edge * 1000), places=6)
         self.assertAlmostEqual(heights[(False, False)], 4 * 0.27)
-        # A dummy row (283.5 nm) and half a fin pitch past it at each stack end.
-        self.assertAlmostEqual(heights[(True, False)], 4 * 0.27 + 0.297)
-        self.assertAlmostEqual(heights[(True, True)], 4 * 0.27 + 2 * 0.297)
+        # A dummy row (283.5 nm) and three half fin pitches past it at each stack end.
+        self.assertAlmostEqual(heights[(True, False)], 4 * 0.27 + 0.324)
+        self.assertAlmostEqual(heights[(True, True)], 4 * 0.27 + 2 * 0.324)
 
     def test_the_tiles_pins_map_to_port_a_nets(self):
         tile = build_leaf_6t(ROWS, bottom=False, top=False)
@@ -61,16 +61,41 @@ class SixTTileTests(unittest.TestCase):
     def test_one_strip_a_side_lines_up_with_the_tile(self):
         tile = build_leaf_6t(ROWS, bottom=True, top=True)
         lib = gdstk.Library(unit=1e-6, precision=1e-10)
-        pairs, _ = build_wordline_strips(lib, tile, ROWS // 2, 4, ports=("A",), gate_reach=0.0135)
+        pairs, _ = build_wordline_strips(lib, tile, ROWS // 2, 4, ports=("A",))
         for half, pair in pairs.items():
             labels = [label.text for label in pair.labels]
             self.assertEqual(sum(bool(re.fullmatch(r"WL_A\[\d+\]", t)) for t in labels), ROWS, half)
             self.assertFalse(any(t.startswith(("WL_B", "SEL_B", "B_B")) for t in labels), half)
 
+    def test_each_predecode_input_is_one_rail_across_the_strip(self):
+        # Every slice's B<j> joined in the strip: one pin per sel_lo, not 2 x 16
+        # interleaved runs the router could not all reach (x64x8x1 --segment-bits 2).
+        tile = build_leaf_6t(4 * ROWS, bottom=True, top=True)
+        for bits in (4, 32):  # the c4 slice and the taller c64 one
+            lib = gdstk.Library(unit=1e-6, precision=1e-10)
+            pairs, _ = build_wordline_strips(lib, tile, 2 * ROWS, bits, ports=("A",))
+            pair = pairs["lo"]
+            graph = MetalGraph(pair)
+            roots = {}
+            for label in pair.labels:
+                if label.text.startswith("B_A["):
+                    roots.setdefault(label.text, set()).add(graph.label_root(label))
+            self.assertEqual(len(roots), 4, bits)
+            self.assertTrue(all(len(r) == 1 for r in roots.values()), (bits, roots))
+            self.assertEqual(len(set().union(*roots.values())), 4, bits)  # and never shorted
+        # The rails are the router's M4: whole nanometres in every pair (the
+        # strips themselves sit 13.5 nm in), or it lands 23.5 nm from them.
+        lib = gdstk.Library(unit=1e-6, precision=1e-10)
+        pairs, _ = build_wordline_strips(lib, tile, 2 * ROWS, 16, ports=("A",), segment_bits=4)
+        for half, pair in pairs.items():
+            edges = [v for p in pair.get_polygons(depth=None, layer=40, datatype=0) for v in p.points.flatten()]
+            self.assertTrue(edges, half)
+            self.assertTrue(all(abs(v * 1000 - round(v * 1000)) < 1e-3 for v in edges), half)
+
     def test_a_mid_pair_drives_the_segments_either_side(self):
         tile = build_leaf_6t(ROWS, bottom=True, top=True)
         lib = gdstk.Library(unit=1e-6, precision=1e-10)
-        pairs, load = build_wordline_strips(lib, tile, ROWS // 2, 16, ports=("A",), gate_reach=0.0135,
+        pairs, load = build_wordline_strips(lib, tile, ROWS // 2, 16, ports=("A",),
                                             segment_bits=2)  # fmt: skip
         self.assertIn("mid", pairs)
         mid = pairs["mid"]

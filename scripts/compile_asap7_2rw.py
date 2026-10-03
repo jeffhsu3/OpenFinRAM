@@ -74,7 +74,8 @@ def bbox_origin(cell):
     return tuple(math.floor(float(v) * 1000) / 1000 for v in low)
 
 
-def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_supply=None):
+def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_supply=None,
+             snap_half_nm=False):
     """Create an exact metal abstract and a pin for every named component.
 
     Nets `abutted` names are joined by abutment, never routed: they are
@@ -83,6 +84,12 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
     polygons it accepts.
     `shift` moves the cell inside its master (and everything the LEF says
     of it), for a cell that has to land between the DEF's nanometres.
+    `snap_half_nm` snaps the LEF's obstructions out the same way for a cell
+    that sits on the grid but draws half-nanometre metal (the 6T bitlines'
+    M4 across its IO block): OpenROAD would round them inward and route
+    23.5 nm from a 24 nm rule.  Its pins stay as drawn: snapped in, a
+    supply pin would be half a nanometre short of its metal and the router
+    would land beside it that much too close (x64x64x1's M1 on vdd).
     """
     graph = MetalGraph(cell)
     roots = {}
@@ -134,7 +141,8 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
     # never lands beyond the metal).  Each moves only the half it has: a
     # quarter-nanometre offset then rounding leaves an edge on the grid
     # where it is and takes a half-nanometre edge the chosen way.
-    snap = 0.00025 if any(shift) else 0.0
+    snap = 0.00025 if any(shift) or snap_half_nm else 0.0
+    snap_pins = bool(any(shift))
 
     def geometry(polygons, outward=True, snapped=True):
         out = []
@@ -198,6 +206,16 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
                 # its 18 nm landings to 17 would leave no access; let the
                 # reader round them whole instead.
                 exact = bool(on_grid)
+            elif snap_half_nm:
+                # The 6T end row's M1 comb is half-nanometre metal with
+                # 4 nm steps; a router wire landed on it leaves a notch
+                # (x64x64x1: M1 spacing on vdd, the route never converged).
+                # Its M2 rail is whole: land there, keep the comb as metal
+                # to clear.
+                above = [p for p in polys if p.layer != METALS[0] and all(
+                    abs(v * 1000 - round(v * 1000)) < 1e-3
+                    for x, y in p.points for v in (x - ox, y - oy))]  # fmt: skip
+                access = above or polys
             obstacles.extend(p for p in polys if not any(p is a for a in access))
         else:
             access_layer = max(p.layer for p in polys)
@@ -226,7 +244,7 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
             "    USE SIGNAL ;",
             "    PORT",
         ]
-        lef += geometry(access, outward=False, snapped=net not in ("vdd", "vss") or exact)
+        lef += geometry(access, outward=False, snapped=snap_pins and (net not in ("vdd", "vss") or exact))
         lef += ["    END", f"  END {pin}"]
         polygon = max(access, key=lambda p: p.area())
         point = probe_point(polygon, (ox, oy))
@@ -435,6 +453,8 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
             strip.add(
                 gdstk.Label(f"B[{j}]", (x0_slice + x, y), layer=layer, texttype=251)
             )
+    if ports == ("A",):
+        _predecode_rails(strip, starts, pins)
     spans = [(x0, x0 + SLICE_WIDTH) for x0 in starts]
     gaps = [
         (spans[0][0] - WORDLINE_PITCH, spans[0][0]),
@@ -537,6 +557,45 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
         pairs["mid"] = _mid_strip_pair(lib, strip, starts, pins, tracks, gate_tracks, rows, height,
                                        x_left, x_right, gate_reach, load)  # fmt: skip
     return pairs, load
+
+
+#: Each predecode input's join to its M4 rail, in the slice: (x of the
+#: V2/V3 stack, the rail's offset from the pin's M2 row).  B0 and B1 stack
+#: straight up (B1 left of the M3 line crossing its row); B2 and B3, which
+#: share those rows, step 48 nm down on an M3 stub between the slice's
+#: 207 and 288 nm M3 lines (20 nm corner to corner from the first, 25 from
+#: the second's long edge).  The same for every slice of the ladder: the
+#: c64 slice is taller, but its rows sit at the labels as the others' do.
+PREDECODE_JOIN = {"B0": (0.108, 0.0), "B1": (0.036, 0.0), "B2": (0.254, -0.048), "B3": (0.254, -0.048)}
+#: The strips sit half a fin pitch (13.5 nm) in from their pair's edge, so
+#: the slices' own metal lands on half nanometres; the rails are the
+#: router's M4, which must not (23.5 nm from its wires, half-nm jogs where
+#: it joins them).  Half a nanometre up puts them on whole nanometres in
+#: either orientation: the strip's height is whole.
+RAIL_ON_GRID = 0.0005
+
+
+def _predecode_rails(strip, starts, pins):
+    """Join each predecode input B<j> across the strip's slices on an M4 rail.
+
+    Each slice's B<j> is its own short M2 run; B1/B3 (and B0/B2) alternate
+    along one row 36 nm apart, so the router had to drop a via onto each of
+    the strip's 2 x 16 interleaved runs from M3, and with several segments'
+    strips stacked it ran out of tracks (DRT-0255 on sel_lo_A[1], x64x8x1
+    and x64x64x1 with --segment-bits).  A rail per input makes them one
+    pin, reached anywhere along the strip.
+    """
+    for j in range(4):
+        sx, dy = PREDECODE_JOIN[f"B{j}"]
+        _, y, _ = pins[f"B{j}"]
+        rail_y = y + dy + RAIL_ON_GRID
+        xs = [x0 + sx for x0 in starts]
+        for x in xs:
+            strip.add(gdstk.rectangle((x - 0.009, y - 0.009), (x + 0.009, y + 0.009), layer=25))  # V2
+            strip.add(gdstk.rectangle((x - 0.009, rail_y - 0.012), (x + 0.009, rail_y + 0.012), layer=35))  # V3
+            low, high = min(y - 0.014, rail_y - 0.017), max(y + 0.014, rail_y + 0.017)
+            strip.add(gdstk.rectangle((x - 0.009, low), (x + 0.009, high), layer=30))  # M3
+        strip.add(gdstk.rectangle((xs[0] - 0.020, rail_y - 0.012), (xs[-1] + 0.020, rail_y + 0.012), layer=40))
 
 
 def _mid_strip_pair(lib, strip, starts, pins, tracks, gate_tracks, rows, height, x_left, x_right,
@@ -1062,6 +1121,7 @@ def run(args):
             cell, master, labels, abutted=is_wordline,
             shift=(0.0, HALF_NM) if args.band is not None else (0.0, 0.0),
             abutted_supply=None if bottom or top else through,
+            snap_half_nm=single,
         ))  # fmt: skip
     leaf = next(iter(variants.values()))[0]
     size = next(iter(variants.values()))[4]
@@ -1070,7 +1130,7 @@ def run(args):
     # The strips are drawn on the first bank's half: a pair tile's first reference.
     strip_pairs, slice_load = build_wordline_strips(
         strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits,
-        ports=ports, gate_reach=FIN_HALF_PITCH if single else 0.0,
+        ports=ports,
         segment_bits=segment if segments > 1 else None, mux=args.mux,
     )
     if shared_b:
@@ -1448,6 +1508,13 @@ def run(args):
     # The router does not know ASAP7's run-length rule on M4-M7; the gate
     # below proves the lengthened wires changed no net.
     top_prl = fix_short_parallel_runs(top)
+    if single and top_prl[1]:
+        # What the router's own wires cannot mend, a block's wire can: the
+        # 6T IO block's bitlines cross its first leaf column on M4 and end
+        # beside the second column's select tracks, where the router lands.
+        # Lengthening is the wire's own metal; the gate below re-proves it.
+        more = fix_short_parallel_runs(top, blocks_too=True)
+        top_prl = (top_prl[0] + more[0], more[1])
     fill_m1_notches(top)
     lib.write_gds(str(work / "routed.gds"), timestamp=columns.FIXED_GDS_TIMESTAMP)
     # No final artifact is published until every physical terminal is joined

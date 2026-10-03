@@ -41,7 +41,8 @@ from chipforge_asap7.devices import (
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / "tech/gds/srambank_32b_boundary_2.gds"
-BOUNDARY, M2, M3, M4 = 100, 20, 30, 40
+BOUNDARY, M1, M2, M3, M4 = 100, 19, 20, 30, 40
+GCUT = 10
 PIN_TEXTTYPE = 251
 MUX_ROWS = 4
 #: Column mux ratios a tile is built for: the edge filler covers four rows.
@@ -212,10 +213,14 @@ def build_array(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines:
 END_ROW_HEIGHT = 0.2835
 #: Past the dummy row to the tile's edge.  The row ends on a fin *space*
 #: (fins at 0 mod 27 nm from row 0; 283.5 is 10.5 pitches) and half a
-#: nanometre off the DEF's grid; half a fin pitch more ends the tile on a
-#: fin and on the grid, as the 8T tile's edge does, so the driver strips sit
-#: the way they sit there (half a fin pitch inside their own edge).
-END_ROW_MARGIN = 0.0135
+#: nanometre off the DEF's grid; an odd number of half fin pitches more ends
+#: the tile on a fin and on the grid, as the 8T tile's edge does, so the
+#: driver strips sit the way they sit there (half a fin pitch inside their
+#: own edge).  Three, not one: the row's outer rail is VSS and a strip's
+#: rail facing it VDD, and at one half pitch each the two stood 27 nm apart
+#: centre to centre (LIG, V0 and M1 9-11 nm apart).  The row's wordline
+#: stubs are carried across the margin on M3.
+END_ROW_MARGIN = 0.0405
 
 
 def existing(library: gdstk.Library, name: str) -> gdstk.Cell | None:
@@ -265,6 +270,15 @@ def build_end_row(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordline
     blank = cells["FILLER_BLANK_6t122"]
     for col in range(2):
         row.add(gdstk.Reference(blank, origin=(0.054 * col, dy)))
+    # The row's gate cut at its outer edge and a strip's at its own stand
+    # 10 nm apart across the margin (GCUT.S.3 wants 35): one bar across the
+    # margin, over the strip's extent (cap column to dummy column), joins them.
+    # Its ends fall midway between gate tracks, 17 nm past each gate.
+    rect(row, (array_x - 0.108, dy - END_ROW_MARGIN, array_x + (wordlines + 1) * 0.108, dy), GCUT)
+    # Each column's wordline on across the margin to the tile's edge, where the strip's meets it.
+    for k in range(wordlines):
+        x = array_x + 0.054 + 0.108 * k
+        rect(row, (x - 0.009, dy - END_ROW_MARGIN, x + 0.009, dy + 0.010), M3)
     rect(row, (0.0, dy, array_x + (wordlines + 2) * 0.108, 0.0), BOUNDARY)
     return row
 
@@ -322,6 +336,10 @@ def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: 
         # The row above the last (odd) row is the row below row 0 mirrored
         # about the array's top edge, as that row is row 0 mirrored there.
         tile.add(gdstk.Reference(end_row, origin=(0.0, height), x_reflection=True))
+        # The row is the one below row 0 mirrored, but the last row's cap is the
+        # v2 cap, whose VSS bar at the array's edge stops 9 nm short of the
+        # mirrored corner's (where the v1 cap's meets it): close the gap.
+        rect(tile, (array_x - 0.108, height - 0.0045, array_x - 0.067, height + 0.0045), M1)
     reach = END_ROW_HEIGHT + END_ROW_MARGIN
     rect(tile, (0.0, -reach if bottom else 0.0, io_x + boundary_box(io)[2], height + (reach if top else 0.0)),
          BOUNDARY)
