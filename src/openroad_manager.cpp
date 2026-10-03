@@ -28,6 +28,21 @@ bool OpenRoadManager::run_openroad_flow() {
     gen.set_max_utilization(cli_options_.single_port ? 0.40 : 0.50);
     gen.set_bitcell_width(cli_options_.bitcell_width);
     gen.set_one_port(cli_options_.bitcell_6t);
+    if (cli_options_.bitcell_6t) {
+        // Port A's inputs (address, ce_n, we_n, oe_n) stand in order on the
+        // band's left edge; pin placement found six slots in 2.16 um, so
+        // give each 0.4 um and two to spare.  A wide multi-bank band of
+        // little logic is otherwise too short for them.
+        gen.set_min_height(0.4 * (get_addr_width(cli_options_) + 3 + 2));
+        // The array-wide outputs get a driver for their counted load (the
+        // SDC's set_load): BUFx24 holds 170 fF under the 150 ps slew limit.
+        std::map<std::string, std::string> drivers;
+        for (const auto& [prefix, pf] : six_t_port_loads_pf(cli_options_)) {
+            if (pf > 0.060) drivers[prefix] = "BUFx24_ASAP7_75t_R";
+            else if (pf > 0.020) drivers[prefix] = "BUFx12f_ASAP7_75t_R";
+        }
+        gen.set_port_drivers(drivers);
+    }
 
     // QoR and work_dir must match YosysManager's CWD-based tmp (repo/tmp) for consistency
     std::string qor_path_cwd = join_path(get_current_dir_name(), "tmp/syn_" + get_run_timestamp() + "/qor_report.txt");

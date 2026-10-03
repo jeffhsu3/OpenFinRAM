@@ -17,6 +17,7 @@ add_executable(unit_tests
     ${CMAKE_SOURCE_DIR}/src/layermap.cpp
     ${CMAKE_SOURCE_DIR}/src/lef_extractor.cpp
     ${CMAKE_SOURCE_DIR}/src/utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/main_config_helpers.cpp
 )
 
 target_include_directories(unit_tests PRIVATE
@@ -26,7 +27,7 @@ target_include_directories(unit_tests PRIVATE
 
 target_compile_definitions(unit_tests PRIVATE REPO_ROOT="${CMAKE_SOURCE_DIR}")
 
-target_link_libraries(unit_tests gtest_main gdstk)
+target_link_libraries(unit_tests gtest_main gdstk argparse)
 
 # Emits the exact IO/precharge template hierarchy consumed by the Xyce
 # regression without running the rest of the SRAM construction flow.

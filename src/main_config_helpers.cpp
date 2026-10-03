@@ -243,3 +243,30 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
 
     return options;
 }
+
+std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options) {
+    constexpr double kGateFfPerFin = 0.103;  // INVx1_ASAP7: 0.62 fF on 3n+3p fins
+    constexpr double kWireFfPerLoad = 0.1;
+    const unsigned rows = 2 * options.num_wls;
+    const unsigned mux = options.num_rows_per_mux;
+    const unsigned strips = 2 * options.wordline_segments();  // a strip per segment, both halves
+    const unsigned slices = rows / 4;
+    // A slice's predecode input is two NAND2 gates; the c64 slice (past 32
+    // cells a wordline) doubles them (scripts/generate_asap7_8t_wl_slices.py).
+    const unsigned nand_fins = mux * options.wordline_segment_bits() > 32 ? 24 : 12;
+    const unsigned ios = options.num_data_bits;  // IO blocks a bank's port drives
+    auto pf = [](double fins, double loads) {
+        return (fins * kGateFfPerFin + loads * kWireFfPerLoad) / 1000.0;
+    };
+    const double lo_loads = double(slices) * strips * options.num_banks;
+    std::map<std::string, double> loads = {
+        {"sel_lo_A", pf(lo_loads * nand_fins, lo_loads)},
+        {"sel_hi_A", pf(strips * 4.0 * nand_fins, strips)},
+    };
+    // Fins per IO block (tech/spice/sram_6t_iocolumn.sp, iocol_block_6t*).
+    const std::map<std::string, double> io_fins = {
+        {"ysel_A", 6}, {"yseln_A", 6}, {"blprechn_A", 6.0 * mux}, {"sae_A", 18},
+        {"wrena_A", 6}, {"wrenan_A", 12}, {"oe_out_A", 6}, {"oeb_out_A", 6}};
+    for (const auto& [pin, fins] : io_fins) loads[pin] = pf(fins * ios, ios);
+    return loads;
+}

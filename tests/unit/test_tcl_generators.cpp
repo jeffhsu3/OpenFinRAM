@@ -20,6 +20,7 @@
 
 #include <gtest/gtest.h>
 
+#include "main_config_helpers.hpp"
 #include "openroad_tcl_generator.hpp"
 #include "yosys_tcl_generator.hpp"
 
@@ -276,6 +277,55 @@ TEST(OpenRoadTclGeneratorTest, DualPortProtectsDelayCellsAndRejectsNegativeHold)
     const auto hold = script.find("repair_timing -hold");
     EXPECT_NE(hold, std::string::npos);
     EXPECT_NE(script.find("repair_design -max_utilization 90", hold), std::string::npos);
+}
+
+// The 6T controller's array-wide outputs: loads counted from the geometry,
+// and the port buffer the TCL sizes for them (x256x2x1 read the wrong row
+// with a BUFx2 on a 170 fF sel_lo).
+TEST(SixTPortLoadsTest, SelLoCountsEverySliceOfEveryStrip) {
+    MainCliOptions small, tall, segmented;
+    for (auto* o : {&small, &tall, &segmented}) o->bitcell_6t = true;
+    small.num_wls = 2;
+    tall.num_wls = 128;
+    segmented.num_wls = 32;
+    segmented.num_data_bits = 64;
+    segmented.segment_bits = 8;
+    // 256 rows: 64 slices a strip, two strips, 12 fins and 0.1 fF of wire each.
+    EXPECT_NEAR(six_t_port_loads_pf(tall).at("sel_lo_A"), 128 * (12 * 0.103 + 0.1) / 1000, 1e-9);
+    // 64 rows in four segments: 16 slices x 2 halves x 4 segments, the same 128 loads.
+    EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sel_lo_A"),
+                six_t_port_loads_pf(tall).at("sel_lo_A"), 1e-9);
+    EXPECT_LT(six_t_port_loads_pf(small).at("sel_lo_A"), 0.005);
+    // The IO controls scale with the IO blocks: one per data bit.
+    EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sae_A"), 64 * (18 * 0.103 + 0.1) / 1000, 1e-9);
+}
+
+TEST(OpenRoadTclGeneratorTest, PortDriversAreSizedAndFrozen) {
+    OpenRoadTclGenerator gen;
+    gen.set_design_name("ctrl_decode");
+    gen.set_site_name("asap7sc7p5t");
+    gen.set_site_height(0.27);
+    gen.set_one_port(true);
+    gen.set_port_drivers({{"sel_lo_A", "BUFx24_ASAP7_75t_R"}});
+    ASSERT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+    const std::string out =
+        (std::filesystem::temp_directory_path() / "or_run_tcl_drivers_test" / "run.tcl").string();
+    ASSERT_TRUE(gen.generate_run_tcl(
+        /*width=*/15.0, /*height=*/0.0, /*output_file=*/out,
+        /*num_wlt=*/8, /*num_wlb=*/8, /*num_ysel=*/4,
+        /*addr_width=*/6, /*num_mux=*/4,
+        /*spice_only=*/false, /*col_width=*/7.5,
+        /*platform_path=*/"/nonexistent/platform/asap7",
+        /*tech_root=*/std::string(REPO_ROOT) + "/tech",
+        /*single_port=*/false));
+    const std::string script = read_file(out);
+    const auto ports = script.find("buffer_ports -outputs");
+    const auto sized = script.find("foreach port [get_ports -quiet {sel_lo_A*}]");
+    ASSERT_NE(sized, std::string::npos);
+    EXPECT_LT(ports, sized);  // after the port buffers exist
+    EXPECT_LT(sized, script.find("global_placement"));
+    EXPECT_NE(script.find("replace_cell $inst BUFx24_ASAP7_75t_R", sized), std::string::npos);
+    EXPECT_NE(script.find("set_dont_touch $net", sized), std::string::npos);
 }
 
 // --strips-in-controller: the die is the band between the stacks, the strips

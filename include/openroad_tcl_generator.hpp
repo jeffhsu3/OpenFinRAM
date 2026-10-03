@@ -50,6 +50,13 @@ public:
     void set_band(const BandPlan& band) { band_ = band; }
     // The generated single-port macro's controller: port A's inputs only.
     void set_one_port(bool one_port) { one_port_ = one_port; }
+    // A floor on the derived die height (um): room on a side edge for a
+    // port's pins when the die is wide and its logic small.
+    void set_min_height(double height) { min_height_ = height; }
+    // Output ports whose buffer is sized here, not by repair_design: port
+    // prefix -> cell.  repair_design leaves a 170 fF array-wide port on a
+    // BUFx8 (OpenROAD does not grow a port's own buffer past its slew).
+    void set_port_drivers(std::map<std::string, std::string> drivers) { port_drivers_ = std::move(drivers); }
     // The band's die height for `width`: rows for the cells at the
     // utilization cap plus the strips' keep-outs, and the two insets.
     double band_die_height(double width) const;
@@ -103,6 +110,8 @@ private:
     QoRReport2 qor_;
     BandPlan band_;
     bool one_port_ = false;
+    double min_height_ = 0.0;
+    std::map<std::string, std::string> port_drivers_;
 
     // helpers
     bool file_exists(const std::string& p) const;

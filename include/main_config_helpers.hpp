@@ -2,6 +2,7 @@
 #define MAIN_CONFIG_HELPERS_HPP
 
 #include <cstdint>
+#include <map>
 #include <string>
 
 struct MainCliOptions {
@@ -54,5 +55,11 @@ struct MainCliOptions {
 };
 
 MainCliOptions parseMainCliOptions(int argc, char** argv);
+
+// The generated single-port (--bitcell 6t) controller's outputs fan out
+// across the whole array: sel_lo to every driver slice of every strip, the
+// IO controls to every IO block.  Their loads in pF, counted in gate fins
+// plus a wire allowance per load, by output port prefix (sel_lo_A, sae_A, ...).
+std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options);
 
 #endif // MAIN_CONFIG_HELPERS_HPP

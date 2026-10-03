@@ -109,7 +109,9 @@ double YosysManager::abc_output_load_ff() const {
         worst_load_ff = std::max(
             worst_load_ff, entry.second * 1000.0 * kArrayLoadMargin);
     }
-    return std::max(worst_load_ff, kDefaultAbcLoadFf);
+    // Past a net's cap limit the port buffer repair_design sizes carries the
+    // load (the 6T macro's array-wide nets); ABC maps the logic before it.
+    return std::clamp(worst_load_ff, kDefaultAbcLoadFf, kMaxNetCapPf * 1000.0);
 }
 
 bool YosysManager::generate_timing_constraints() const {
@@ -154,7 +156,11 @@ bool YosysManager::generate_timing_constraints() const {
         << " [all_outputs]\n";
     sdc << "set_max_transition " << kMaxTransitionNs
         << " [current_design]\n";
-    sdc << "set_max_capacitance " << kMaxNetCapPf
+    // A counted array-wide net (the 6T macro's sel_lo) is more than a
+    // routed net's limit by design; the cells' own Liberty limits still hold.
+    double max_cap_pf = kMaxNetCapPf;
+    for (const auto& pin : counted_pins_) max_cap_pf = std::max(max_cap_pf, 1.1 * pin_capacitances_.at(pin));
+    sdc << "set_max_capacitance " << max_cap_pf
         << " [current_design]\n";
     sdc << "set_max_fanout 10 [current_design]\n";
     sdc << "set_voltage 0.700\n";
@@ -169,8 +175,10 @@ bool YosysManager::generate_timing_constraints() const {
     }
     loads << "# port_pattern predicted_pf constrained_pf\n";
     for (const auto& entry : pin_capacitances_) {
+        // Counted loads (fins and a wire allowance) take no guess margin.
+        const double margin = counted_pins_.count(entry.first) ? 1.0 : kArrayLoadMargin;
         const double constrained_pf = entry.second > 0.0
-            ? entry.second * kArrayLoadMargin
+            ? entry.second * margin
             : kDefaultAbcLoadFf / 1000.0;
         sdc << "set_load " << std::fixed << std::setprecision(6)
             << constrained_pf << " [get_ports -quiet {"
@@ -426,7 +434,20 @@ bool YosysManager::predict_capacitance() {
             pin_capacitances_[pred.first] = pred.second;
         }
     }
+    if (cli_options_.bitcell_6t) predict_6t_loads();
     return true;
+}
+
+void YosysManager::predict_6t_loads() {
+    // The srambank predictor above knows nothing of the generated macro's
+    // array-wide nets (0.1 fF for a sel_lo that is 170 fF at 256 rows), so
+    // the output buffers stayed BUFx2 and a large macro's sel_lo settled
+    // after the wordline enable: the previous row's wordline fired first and
+    // SAE fired before the new one (x256x2x1, x64x64x1).
+    for (const auto& [pin, pf] : six_t_port_loads_pf(cli_options_)) {
+        pin_capacitances_[pin] = pf;
+        counted_pins_.insert(pin);
+    }
 }
 
 bool YosysManager::run_synthesis() {

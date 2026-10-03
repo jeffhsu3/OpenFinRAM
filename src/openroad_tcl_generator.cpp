@@ -131,6 +131,7 @@ double OpenRoadTclGenerator::calculate_floorplan_height(double width) const {
         double target = qor_.cell_area / (width * max_util);
         aligned = align_to_site_height(target);
     }
+    if (aligned < min_height_) aligned = align_to_site_height(min_height_);
     return aligned;
 }
 
@@ -352,6 +353,19 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         // output a real driver stage before placement so hold repair has a
         // resizable data-path cell instead of an unbuffered clock-to-port arc.
         file << "buffer_ports -outputs -buffer_cell BUFx2_ASAP7_75t_R -max_utilization 90\n\n";
+        for (const auto& [prefix, cell] : port_drivers_) {
+            file << "foreach port [get_ports -quiet {" << prefix << "*}] {\n"
+                 << "    set net [get_nets [get_full_name $port]]\n"
+                 << "    foreach pin [get_pins -of_objects $net] {\n"
+                 << "        if {[get_property $pin direction] ne \"output\"} { continue }\n"
+                 << "        set inst [get_cells -of_objects $pin]\n"
+                 << "        replace_cell $inst " << cell << "\n"
+                 << "        set_dont_touch $inst\n"
+                 << "    }\n"
+                 << "    set_dont_touch $net\n"
+                 << "}\n";
+        }
+        if (!port_drivers_.empty()) file << "\n";
     }
 
     // Placement and electrical repair use the per-output array loads from the
