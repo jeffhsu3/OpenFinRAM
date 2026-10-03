@@ -632,6 +632,12 @@ bool SpiceIntegrator::replace_chars_for_sis(const std::string& input_path, const
     return true;
 }
 
+std::string single_port_names(const std::string& text) {
+    static const std::regex enable(R"((^|\s)(ce|we|oe)_n_A(?=\s|$))");
+    static const std::regex bus(R"((^|\s)([ADQ])_A\[)");
+    return std::regex_replace(std::regex_replace(text, enable, "$1$2_n"), bus, "$1$2[");
+}
+
 bool SpiceIntegrator::integrate_sram() {
     // Mkdir results directory if it doesn't exist
     std::string results_dir = join_path(get_current_dir_name(), "results");
@@ -710,11 +716,13 @@ bool SpiceIntegrator::integrate_sram() {
     
     // Write sections
     outfile << generate_header(ctrl_netlist_path, datapath_netlist_path);
-    outfile << generate_subckt_header();
-    outfile << generate_ctrl_instance(ctrl_ports);
-    outfile << generate_datapath_instance();
-    outfile << generate_wordline_strip_instances();
-    outfile << generate_footer();
+    std::string top = generate_subckt_header() + generate_ctrl_instance(ctrl_ports) +
+                      generate_datapath_instance() + generate_wordline_strip_instances() +
+                      generate_footer();
+    // The generated single-port macro is port A of the two-port machinery
+    // inside; at its boundary it has no port: ce_n, we_n, oe_n, A[], D[], Q[].
+    if (cli_options_.bitcell_6t) top = single_port_names(top);
+    outfile << top;
     
     outfile.close();
     

@@ -48,7 +48,11 @@ assert not any(re.search(r"_B\b|_B\[", pin) for pin in external), "a port-B pin 
 lef = (folder / f"{name}.lef").read_text()
 assert set(re.findall(r"^\s+PIN (\S+)", lef, re.M)) == external, "LEF pins differ from the physical ports"
 liberty = (folder / f"{name}.lib").read_text()
-assert "we_n_A" in liberty and "we_n_B" not in liberty and "contention_condition" not in liberty
+# One port, named without it: ce_n, we_n, oe_n, A[], D[], Q[].
+assert external >= {"ce_n", "we_n", "oe_n", "A[0]", "D[0]", "Q[0]"}, sorted(external)
+assert not any(re.search(r"_A\b|_A\[", pin) for pin in external), "a port-A name on the single-port macro"
+assert "pin (we_n)" in liberty and "bus (Q)" in liberty and "contention_condition" not in liberty
+assert not re.search(r"\b(ce_n|we_n|oe_n|A|D|Q)_A\b", liberty), "a port-A name in the Liberty"
 deck = (folder / f"{name}.sp").read_text()
 assert ".INCLUDE" not in deck.upper(), "deck depends on tmp files"
 assert "sram_cell_6t_122" in deck and "iocol_sram_6t" in deck

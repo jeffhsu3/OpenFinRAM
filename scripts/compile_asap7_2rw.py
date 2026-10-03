@@ -453,7 +453,7 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
             strip.add(
                 gdstk.Label(f"B[{j}]", (x0_slice + x, y), layer=layer, texttype=251)
             )
-    if ports == ("A",):
+    if ports == ("A",) and len(starts) > 1:  # one slice has nothing to join
         _predecode_rails(strip, starts, pins)
     spans = [(x0, x0 + SLICE_WIDTH) for x0 in starts]
     gaps = [
@@ -1532,6 +1532,15 @@ def run(args):
             continue
         probe = net_probes[0]
         top.add(gdstk.Label(net, tuple(probe["point"]), layer=probe["layer"]))
+    if single:
+        # Port A inside, no port at the boundary: ce_n, A[], D[], Q[] (the
+        # deck's top subckt and the Liberty say the same).
+        for label in top.labels:
+            label.text = single_port_name(label.text)
+        # The manifest describes the published GDS: its names too.
+        manifest["nets"] = {single_port_name(net): probes for net, probes in manifest["nets"].items()}
+        manifest["external"] = sorted(single_port_name(net) for net in manifest["external"])
+        (work / "connectivity.json").write_text(json.dumps(manifest, indent=2) + "\n")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     lib.write_gds(str(args.output), timestamp=columns.FIXED_GDS_TIMESTAMP)
     report = {
@@ -1981,6 +1990,12 @@ def jog_patches(shape, touching):
 #: how far a pin reaches into the macro.
 SIDE_PIN_LAYERS = {4: (48, 24), 6: (64, 32)}
 SIDE_PIN_DEPTH, SIDE_PIN_TRACKS = 69, 2
+
+
+def single_port_name(net):
+    """The single-port macro's boundary name for port A's: ``ce_n_A`` -> ``ce_n``, ``A_A[3]`` -> ``A[3]``."""
+    net = re.sub(r"^(ce|we|oe)_n_A$", r"\1_n", net)
+    return re.sub(r"^([ADQ])_A\[", r"\1[", net)
 
 
 def side_pin_placements(external, probes, width, height, layer, ports=("A", "B")):

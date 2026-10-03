@@ -115,14 +115,26 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
 - Floorplan as the two-port macro: two stacks of abutted tiles with the controller
   band between them, one driver strip on each side, released dummy rows at each
   stack's ends. Controller: `tech/verilog_dp/sram_control_1p.v`.
-- Pins keep port A's names (`clk rst_n ce_n_A we_n_A oe_n_A A_A[] D_A[] Q_A[]`).
-- `--single-port` is still the legacy srambank flow.
-- Verified on x4x2x1 and x16x16x1: strict LVS match (`scripts/verify_macro.py`), and
-  on x4x2x1 the whole-macro Xyce program (`scripts/simulate_macro.py`) passes.
-  x16x16x1 is 6.64 x 25.28 um against 6.00 x 52.71 um for the 8T x16x16x1.
-- Limits so far: 4:1 column mux, more than one bank untested,
-  `--share-port-b`/`--strips-in-controller` do not apply, estimated `.lib`. The
-  public DRC count is mostly the released 6T cells' own findings.
+- Pins: `clk rst_n ce_n we_n oe_n A[] D[] Q[]` (port A of the two-port
+  machinery inside; the GDS/LEF, the deck's top subckt and the `.lib` agree).
+- `--single-port` with `--openroad` builds this macro; without it (the commercial
+  flow) it is still the legacy srambank flow.
+- Larger banks: `--segment-bits N` divides each stack's wordlines into segments of
+  N data bits, a strip pair between segments; `--num-rows-per-mux 8|16` for deeper
+  column muxes; `--num-banks` side by side.  Each strip joins its slices'
+  predecode inputs on M4 rails, and the controller's array-wide outputs (sel_lo,
+  sae, blprechn, ...) get drivers sized for their counted gate load.
+- The `.lib` timing and energy come from `scripts/timing_model_6t.py`, fit to
+  whole-macro simulations (`tech/timing/sram_6t_timing.json`).
+- Verified: strict LVS match (`scripts/verify_macro.py`) on x4x2x1, x16x16x1,
+  x64x8x1 (segmented), x256x2x1 and multi-bank x4x2x2/x4x8x2; the whole-macro Xyce
+  program (`scripts/simulate_macro.py`) passes on x4x2x1, x16x16x1 and x256x2x1
+  (clk->Q ~250 ps).  x16x16x1 is 6.64 x 25.28 um against 6.00 x 52.71 um for the
+  8T x16x16x1.
+- Limits so far: `--share-port-b`/`--strips-in-controller` do not apply; the
+  timing model is fit to small macros and to the old BUFx2 controller outputs.
+  The public DRC count is the released 6T cells' own findings, the end rows'
+  gate pitch, standard cells, and a few router M1 markers.
 
 ### 8T cell libraries
 

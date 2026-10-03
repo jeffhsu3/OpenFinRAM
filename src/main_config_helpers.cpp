@@ -22,7 +22,8 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .scan<'u', unsigned>();
 
     program.add_argument("--single-port")
-        .help("Generate single-port SRAM (default: dual-port).")
+        .help("Generate single-port SRAM (default: dual-port).  With --openroad this is the "
+              "generated 6T macro (--bitcell 6t); otherwise the legacy srambank flow.")
         .default_value(false)
         .implicit_value(true);
 
@@ -174,9 +175,13 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     if (options.platform_path.empty()) {
         options.platform_path = options.openroad_path + "/platform/asap7";
     }
-    if (options.bitcell_6t && options.single_port) {
-        LOGE << "Error: --bitcell 6t is the generated single-port flow; --single-port is the legacy one.";
-        std::exit(1);
+    // On the open-source flow --single-port is the generated 6T macro: the
+    // legacy srambank path there left its wordlines unconnected.  The
+    // commercial (Innovus/SiliconSmart) flow keeps the legacy macro.
+    if (options.single_port && (options.bitcell_6t || options.use_yosys || options.use_openroad)) {
+        if (!options.bitcell_6t) LOGI << "--single-port on the open-source flow: the generated 6T macro (--bitcell 6t)";
+        options.bitcell_6t = true;
+        options.single_port = false;
     }
     if (options.bitcell_6t && (options.share_port_b || options.strips_in_controller)) {
         LOGE << "Error: --bitcell 6t has one port and takes no --share-port-b or --strips-in-controller yet.";

@@ -130,4 +130,8 @@ private:
     bool replace_chars_for_sis(const std::string& input_path, const std::string& output_path) const;
 };
 
+// Port A's boundary names without the port, for the generated single-port
+// macro: ce_n_A -> ce_n, A_A[i] -> A[i], D_A[i] -> D[i], Q_A[i] -> Q[i].
+std::string single_port_names(const std::string& text);
+
 #endif // SPICE_INTEGRATOR_HPP

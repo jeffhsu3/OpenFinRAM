@@ -98,18 +98,19 @@ bool validate_lef_interface(const MainCliOptions& options,
             required.push_back("Q[" + std::to_string(bit) + "]");
         }
     } else {
-        // The generated single-port macro is the two-port one's port A.
+        // The generated single-port macro is the two-port one's port A,
+        // named at its boundary without the port (ce_n, A[], D[], Q[]).
         const std::vector<std::string> ports = options.bitcell_6t
-            ? std::vector<std::string>{"A"} : std::vector<std::string>{"A", "B"};
+            ? std::vector<std::string>{""} : std::vector<std::string>{"_A", "_B"};
         required.push_back("rst_n");
         for (const auto& port : ports) {
-            for (const char* pin : {"ce_n_", "we_n_", "oe_n_"}) required.push_back(pin + port);
+            for (const char* pin : {"ce_n", "we_n", "oe_n"}) required.push_back(pin + port);
             for (int bit = 0; bit < addr_width; ++bit) {
-                required.push_back("A_" + port + "[" + std::to_string(bit) + "]");
+                required.push_back("A" + port + "[" + std::to_string(bit) + "]");
             }
             for (unsigned bit = 0; bit < options.num_data_bits; ++bit) {
-                required.push_back("D_" + port + "[" + std::to_string(bit) + "]");
-                required.push_back("Q_" + port + "[" + std::to_string(bit) + "]");
+                required.push_back("D" + port + "[" + std::to_string(bit) + "]");
+                required.push_back("Q" + port + "[" + std::to_string(bit) + "]");
             }
         }
     }
@@ -310,7 +311,7 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     out << "  revision : \"OpenFinRAM estimated-1\";\n";
     const std::string port_comment =
         options.bitcell_6t
-            ? "ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Single-port 6T macro (one read/write port, A). Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled."
+            ? "ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Single-port 6T macro (one read/write port). Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled."
         : options.single_port
             ? "ESTIMATED EARLY-PPA MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline; power is not modeled."
             : "ESTIMATED EARLY-PPA DUAL-PORT MODEL; NOT SPICE/SILICONSMART CHARACTERIZED. Timing uses a coarse FakeRAM-style ASAP7 baseline per port; power is not modeled. True-dual-port 8T bitcell; ports A and B both support read and write. Same-address concurrent A/B accesses are illegal when either port writes; same-address read/read is supported.";
@@ -467,12 +468,9 @@ std::string build_estimated_liberty(const MainCliOptions& options,
                        : std::string("0");
         };
         std::vector<std::pair<std::string, double>> ops;
-        if (options.single_port) {
+        if (options.single_port || options.bitcell_6t) {
             ops = {{"\"we_n\"", data->power.read_access_pj},
                    {"\"!we_n\"", data->power.write_access_pj}};
-        } else if (options.bitcell_6t) {
-            ops = {{"\"we_n_A\"", data->power.read_access_pj},
-                   {"\"!we_n_A\"", data->power.write_access_pj}};
         } else {
             ops = {{"\"we_n_A\"", data->power.read_access_pj},
                    {"\"!we_n_A\"", data->power.write_access_pj},
@@ -503,11 +501,11 @@ std::string build_estimated_liberty(const MainCliOptions& options,
         emit_input_bus(out, "D", data_type, constraint_template, "A", data);
     } else if (options.bitcell_6t) {
         emit_input_pin(out, "rst_n", constraint_template, data, true);
-        emit_input_pin(out, "ce_n_A", constraint_template, data);
-        emit_input_pin(out, "we_n_A", constraint_template, data);
-        emit_input_pin(out, "oe_n_A", constraint_template, data);
-        emit_input_bus(out, "A_A", address_type, constraint_template, "", data);
-        emit_input_bus(out, "D_A", data_type, constraint_template, "A_A", data);
+        emit_input_pin(out, "ce_n", constraint_template, data);
+        emit_input_pin(out, "we_n", constraint_template, data);
+        emit_input_pin(out, "oe_n", constraint_template, data);
+        emit_input_bus(out, "A", address_type, constraint_template, "", data);
+        emit_input_bus(out, "D", data_type, constraint_template, "A", data);
     } else {
         emit_input_pin(out, "rst_n", constraint_template, data, true);
         emit_input_pin(out, "ce_n_A", constraint_template, data);
@@ -599,7 +597,7 @@ std::string build_estimated_liberty(const MainCliOptions& options,
     } else {
         // Dual-port: Q_A driven by A_A, Q_B driven by A_B
         std::vector<std::pair<std::string, std::string>> outputs{{"Q_A", "A_A"}, {"Q_B", "A_B"}};
-        if (options.bitcell_6t) outputs.pop_back();
+        if (options.bitcell_6t) outputs = {{"Q", "A"}};
         for (const auto& qb : outputs) {
             out << "    bus (" << qb.first << ") {\n";
             out << "      bus_type : " << data_type << ";\n";

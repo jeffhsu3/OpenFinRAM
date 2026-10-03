@@ -406,6 +406,13 @@ def stimulus(
     return f"V{name.replace('[', '_').replace(']', '')} {name} 0 {pwl(points)}"
 
 
+def port_a_name(pin: str) -> str:
+    """Port A's name for a single-port macro pin: ``ce_n`` -> ``ce_n_A``, ``A[3]`` -> ``A_A[3]``; others as they are."""
+    if pin in ("ce_n", "we_n", "oe_n"):
+        return f"{pin}_A"
+    return re.sub(r"^([ADQ])\[", r"\1_A[", pin, flags=re.IGNORECASE)
+
+
 def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cells: list[dict], g: Geometry,
                program: list[tuple[Op, Op]], *, period: float, vdd: float, load: float,
                probes: tuple[str, ...] = ()) -> tuple[str, dict]:  # fmt: skip
@@ -414,6 +421,9 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         period,
     )  # first rising edge after one period of reset
     cycles = len(program) + 2  # an idle cycle either side
+    # The single-port macro names its pins without the port (ce_n, A[], D[],
+    # Q[]); the bench drives and reads them as port A's, by position.
+    pins = tuple(port_a_name(p) for p in pins)
     levels: dict[str, list[int]] = {}
     address_bits = sum(1 for p in pins if p.lower().startswith("a_a["))
 
@@ -711,9 +721,9 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     groups = sorted({cell["group"] for cell in cells})
     for (
         cell
-    ) in cells:  # a column group's data bit is the top-level D_A its DA pin reaches
+    ) in cells:  # a column group's data bit is the top-level D_A (D) its DA pin reaches
         net = top_level_net(subckts, top, cell["group"], "da")
-        bit = re.fullmatch(r"d_a\[(\d+)\]", net or "", re.IGNORECASE)
+        bit = re.fullmatch(r"d_a\[(\d+)\]", port_a_name(net or ""), re.IGNORECASE)
         if not bit:
             raise ValueError(
                 f"column group {cell['group']}: DA reaches {net}, not a D_A bit"
