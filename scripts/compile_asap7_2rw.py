@@ -787,7 +787,7 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, stra
 
 @functools.cache
 def _library_6t(wordlines, mux=4):
-    """The single-port 6T tiles' library: the released 6T cells, the staggered IO block, every end variant."""
+    """The single-port 6T tiles' library: the released 6T cells, the single-column IO block, every end variant."""
     import generate_asap7_6t_iocolumn as columns6
 
     cells = columns6.load_source()
@@ -808,7 +808,7 @@ def _library_6t(wordlines, mux=4):
 def build_leaf_6t(wordlines, bottom=True, top=True, mux=4):
     """``edge filler | cap | array of `wordlines` | dummy | tap | IO``: the single-port 6T tile.
 
-    The released 6T cells with chipforge's staggered IO block
+    The released 6T cells with chipforge's single-column IO block
     (`generate_asap7_6t_iocolumn`); a dummy row below and/or above, as the
     8T tile has.  Its pins are the 8T tile's port A's.
     """
@@ -1519,8 +1519,11 @@ def run(args):
     lib.write_gds(str(work / "routed.gds"), timestamp=columns.FIXED_GDS_TIMESTAMP)
     # No final artifact is published until every physical terminal is joined
     # to its net and every distinct named net remains isolated.
-    verify(work / "routed.gds", manifest)
+    # The router's own violations first: one it could not mend (a short in
+    # a crowded channel, x4x2x1 at 16:1) is a routing failure, which a wider
+    # margin may route, not a connectivity defect of the blocks.
     check_route_drc(work / "macro_drc.rpt")
+    verify(work / "routed.gds", manifest)
     top.add(gdstk.rectangle((0, 0), (width, height), layer=100))
     # Name every net at a point the connectivity gate has just proven is on
     # it.  Transistor LVS uses matching names as starting points (it still
@@ -2055,7 +2058,7 @@ def check_route_drc(report):
     if not report.is_file():
         raise RuntimeError(f"missing routing DRC report: {report}")
     if report.read_text().strip():
-        raise RuntimeError(f"macro routing DRC violations remain: {report}")
+        raise RoutingFailed(f"macro routing DRC violations remain: {report}")
 
 
 def verify(path, manifest):

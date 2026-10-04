@@ -8,10 +8,11 @@ parametric IO in place of the released core::
 
 The bitcell, its dummy, tap, column cap and edge filler are the published
 academic 6T cells (``tech/gds/srambank_32b_boundary_2.gds``).  The IO is
-chipforge_asap7's `StaggeredIoColumnSpec`: the 6T row is 270 nm, shorter than
-any leaf the dense row style can draw, so the even rows' leaves stand in one
-column and the odd rows' in a second.  Its bitlines enter on the block's left
-edge at the bitcell's own heights; neither the dummy nor the tap carries a
+chipforge_asap7's `SidewaysIoColumnSpec`: one column of 270 nm bitline leaves
+(the released leaf's side-by-side arrangement, odd rows' leaves swapped), one
+beside each array row, then the sense amplifier, write driver and output
+latch.  Its bitlines enter on the block's left edge at the bitcell's own
+heights; neither the dummy nor the tap carries a
 bitline, so M2 straps cross them from the dummy's stubs into the block, as the
 released core's overhang did.
 
@@ -33,10 +34,10 @@ from pathlib import Path
 import gdspy
 import gdstk
 from chipforge_asap7.devices import (
-    StaggeredIoColumnSpec,
-    build_staggered_io_column,
+    SidewaysIoColumnSpec,
+    build_sideways_io_column,
     io_column_pins,
-    staggered_block_netlist,
+    sideways_block_netlist,
 )
 
 REPO = Path(__file__).resolve().parents[1]
@@ -92,7 +93,7 @@ def add_with_dependencies(library: gdstk.Library, cell: gdstk.Cell) -> None:
             have.add(dep.name)
 
 
-def io_spec(bitcell: gdstk.Cell, selects: int = MUX_ROWS) -> StaggeredIoColumnSpec:
+def io_spec(bitcell: gdstk.Cell, selects: int = MUX_ROWS) -> SidewaysIoColumnSpec:
     """The block for this bitcell: its row pitch and its bitlines' heights (bar centres)."""
     x0, y0, x1, y1 = boundary_box(bitcell)
     heights = {}
@@ -105,11 +106,9 @@ def io_spec(bitcell: gdstk.Cell, selects: int = MUX_ROWS) -> StaggeredIoColumnSp
             raise RuntimeError(f"{bitcell.name}: no single M2 bar under its {net} label")
         (_, b0), (_, b1) = bars[0]
         heights[net] = round(1000 * (float(b0) + float(b1)) / 2 - 1000 * y0, 1)
-    return StaggeredIoColumnSpec(
-        selects=selects,
-        row_pitch=round(1000 * (y1 - y0)),
-        bitline_entry=(heights["BL"], heights["BLN"]),
-    )
+    if round(1000 * (y1 - y0)) != SidewaysIoColumnSpec.row_pitch:
+        raise RuntimeError(f"{bitcell.name}: a {round(1000 * (y1 - y0))} nm row; the block's leaves are 270 nm")
+    return SidewaysIoColumnSpec(selects=selects, bitline_entry=(heights["BL"], heights["BLN"]))
 
 
 def iocol_pin_name(pin: str) -> str:
@@ -123,11 +122,11 @@ def iocol_pin_name(pin: str) -> str:
     return BLOCK_PIN[pin]
 
 
-def build_io_block(spec: StaggeredIoColumnSpec) -> tuple[gdstk.Cell, list[gdstk.Cell], str]:
+def build_io_block(spec: SidewaysIoColumnSpec) -> tuple[gdstk.Cell, list[gdstk.Cell], str]:
     """Draw the block with chipforge (nm), read it back in um; and its netlist with the tile's pin names."""
     nm = gdspy.GdsLibrary(unit=1e-9, precision=1e-10)
     gdspy.current_library = nm
-    name = build_staggered_io_column(spec, lib=nm, draw_pin_labels=False).name
+    name = build_sideways_io_column(spec, lib=nm, draw_pin_labels=False).name
     with tempfile.TemporaryDirectory() as scratch:
         path = Path(scratch) / "io_block.gds"
         nm.write_gds(str(path))
@@ -137,7 +136,7 @@ def build_io_block(spec: StaggeredIoColumnSpec) -> tuple[gdstk.Cell, list[gdstk.
     pins = io_column_pins(spec)
     name = io_name(spec.selects)
     block_name = name.replace("iocol_sram_6t", "iocol_block_6t")
-    netlist = staggered_block_netlist(spec, name=block_name).replace(".END\n", "")
+    netlist = sideways_block_netlist(spec, name=block_name).replace(".END\n", "")
     wrapper_pins = [iocol_pin_name(pin) for pin in pins]
     netlist += (
         f".SUBCKT {name} {' '.join(wrapper_pins)}\n"
@@ -147,7 +146,7 @@ def build_io_block(spec: StaggeredIoColumnSpec) -> tuple[gdstk.Cell, list[gdstk.
     return block, list(block.dependencies(True)), netlist
 
 
-def build_io(library: gdstk.Library, block: gdstk.Cell, spec: StaggeredIoColumnSpec) -> gdstk.Cell:
+def build_io(library: gdstk.Library, block: gdstk.Cell, spec: SidewaysIoColumnSpec) -> gdstk.Cell:
     """The tile's IO column: the block, labelled with the tile's names."""
     cell = library.new_cell(io_name(spec.selects))
     cell.add(gdstk.Reference(block))
@@ -284,7 +283,7 @@ def build_end_row(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordline
 
 
 def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: int,
-               io: gdstk.Cell, spec: StaggeredIoColumnSpec,
+               io: gdstk.Cell, spec: SidewaysIoColumnSpec,
                bottom: bool = False, top: bool = False) -> gdstk.Cell:
     """``edge filler | cap | array | IO``, the array's row 0 at y = 0; a dummy row below and/or above.
 

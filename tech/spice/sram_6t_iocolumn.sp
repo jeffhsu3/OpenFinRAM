@@ -1,4 +1,4 @@
-* ASAP7 column IO, staggered leaves: bitline mux, sense amplifier, write driver, output latch
+* ASAP7 column IO, 270 nm leaves in one column: bitline mux, sense amplifier, write driver, output latch
 .SUBCKT iocol_block_6t BL[0] BLN[0] YSEL[0] YSELN[0] BL[1] BLN[1] YSEL[1] YSELN[1] BL[2] BLN[2] YSEL[2] YSELN[2] BL[3] BLN[3] YSEL[3] YSELN[3] PRECHN SAE D WRENA WRENAN OE OEB Q VDD VSS
 M0_NT BL[0] YSEL[0] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M0_NC BLN[0] YSEL[0] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
@@ -76,7 +76,7 @@ Mol_PE1 Q OEB ol_N1_1 VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 .SUBCKT iocol_sram_6t BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS
 X_block BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_block_6t
 .ENDS iocol_sram_6t
-* ASAP7 column IO, staggered leaves: bitline mux, sense amplifier, write driver, output latch
+* ASAP7 column IO, 270 nm leaves in one column: bitline mux, sense amplifier, write driver, output latch
 .SUBCKT iocol_block_6t_x8 BL[0] BLN[0] YSEL[0] YSELN[0] BL[1] BLN[1] YSEL[1] YSELN[1] BL[2] BLN[2] YSEL[2] YSELN[2] BL[3] BLN[3] YSEL[3] YSELN[3] BL[4] BLN[4] YSEL[4] YSELN[4] BL[5] BLN[5] YSEL[5] YSELN[5] BL[6] BLN[6] YSEL[6] YSELN[6] BL[7] BLN[7] YSEL[7] YSELN[7] PRECHN SAE D WRENA WRENAN OE OEB Q VDD VSS
 M0_NT BL[0] YSEL[0] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M0_NC BLN[0] YSEL[0] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
@@ -178,7 +178,7 @@ Mol_PE1 Q OEB ol_N1_1 VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 .SUBCKT iocol_sram_6t_x8 BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] BL_A[4] BLN_A[4] yselA[4] yselnA[4] BL_A[5] BLN_A[5] yselA[5] yselnA[5] BL_A[6] BLN_A[6] yselA[6] yselnA[6] BL_A[7] BLN_A[7] yselA[7] yselnA[7] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS
 X_block BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] BL_A[4] BLN_A[4] yselA[4] yselnA[4] BL_A[5] BLN_A[5] yselA[5] yselnA[5] BL_A[6] BLN_A[6] yselA[6] yselnA[6] BL_A[7] BLN_A[7] yselA[7] yselnA[7] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_block_6t_x8
 .ENDS iocol_sram_6t_x8
-* ASAP7 column IO, staggered leaves: bitline mux, sense amplifier, write driver, output latch
+* ASAP7 column IO, 270 nm leaves in one column: bitline mux, sense amplifier, write driver, output latch
 .SUBCKT iocol_block_6t_x16 BL[0] BLN[0] YSEL[0] YSELN[0] BL[1] BLN[1] YSEL[1] YSELN[1] BL[2] BLN[2] YSEL[2] YSELN[2] BL[3] BLN[3] YSEL[3] YSELN[3] BL[4] BLN[4] YSEL[4] YSELN[4] BL[5] BLN[5] YSEL[5] YSELN[5] BL[6] BLN[6] YSEL[6] YSELN[6] BL[7] BLN[7] YSEL[7] YSELN[7] BL[8] BLN[8] YSEL[8] YSELN[8] BL[9] BLN[9] YSEL[9] YSELN[9] BL[10] BLN[10] YSEL[10] YSELN[10] BL[11] BLN[11] YSEL[11] YSELN[11] BL[12] BLN[12] YSEL[12] YSELN[12] BL[13] BLN[13] YSEL[13] YSELN[13] BL[14] BLN[14] YSEL[14] YSELN[14] BL[15] BLN[15] YSEL[15] YSELN[15] PRECHN SAE D WRENA WRENAN OE OEB Q VDD VSS
 M0_NT BL[0] YSEL[0] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M0_NC BLN[0] YSEL[0] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
