@@ -834,11 +834,14 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     waves = read_csv(waves_path)
     verdict = evaluate(waves, plan, program, cells, g, vdd)
     if supply_probes:
-        # The narrowest rail-to-rail voltage any watched tile saw.
+        # The narrowest rail-to-rail voltage any watched tile saw, once the
+        # rails are up: the transient starts every node at 0 V (NOOP), so the
+        # first period is the supply's own ramp.
         worst = {}
+        settled = [i for i, t in enumerate(waves["TIME"]) if t >= period]
         for vdd_node, vss_node in zip(supply_probes[::2], supply_probes[1::2]):
             hi, lo = waves[f"V(XDUT:{vdd_node.upper()})"], waves[f"V(XDUT:{vss_node.upper()})"]
-            worst[vdd_node.rsplit(":", 1)[0]] = round(min(a - b for a, b in zip(hi, lo)), 4)
+            worst[vdd_node.rsplit(":", 1)[0]] = round(min(hi[i] - lo[i] for i in settled), 4)
         verdict["supply"] = {"strap_ohms": strap_ohms, "min_rail_V": worst}
     verdict.update(cell=top, result_dir=str(result_dir), period_ns=period * 1e9, vdd=vdd, corner=corner, spaced=spaced,
                    program=[[f"{op.kind}{op.address}" + (f"={op.data:0{g.bits}b}" if op.kind == "W" else "")
