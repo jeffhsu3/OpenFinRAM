@@ -58,20 +58,18 @@ Mol_N1A ol_Y1 ol_Y2 ol_M1 VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_N1B ol_M1 QA VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_P1A ol_Y1 ol_Y2 VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_P1B ol_Y1 QA VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_N2A ol_M2 QAN VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_N2B ol_Y2 ol_Y1 ol_M2 VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_N2A ol_Y2 QAN ol_M2 VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_N2B ol_M2 ol_Y1 VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_P2A ol_Y2 QAN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_P2B ol_Y2 ol_Y1 VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_NI ol_Y2N ol_Y2 VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_PI ol_Y2N ol_Y2 VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_NA0 ol_N2_0 ol_Y2N VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_NE0 Q OE ol_N2_0 VSS nmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_PA0 ol_N1_0 ol_Y2N VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_PE0 Q OEB ol_N1_0 VDD pmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_NA1 ol_N2_1 ol_Y2N VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_NE1 Q OE ol_N2_1 VSS nmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_PA1 ol_N1_1 ol_Y2N VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
-Mol_PE1 Q OEB ol_N1_1 VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_NI0 ol_Y2N ol_Y2 VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_NI1 ol_Y2N ol_Y2 VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_PI0 ol_Y2N ol_Y2 VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_PI1 ol_Y2N ol_Y2 VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_NA ol_N2 ol_Y2N VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_NE Q OE ol_N2 VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_PA ol_N1 ol_Y2N VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+Mol_PE Q OEB ol_N1 VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 .ENDS iocol_block_6t
 .SUBCKT iocol_sram_6t BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS
 X_block BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_block_6t

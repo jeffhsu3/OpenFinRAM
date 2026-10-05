@@ -109,7 +109,9 @@ def io_spec(bitcell: gdstk.Cell, selects: int = MUX_ROWS) -> SidewaysIoColumnSpe
         heights[net] = round(1000 * (float(b0) + float(b1)) / 2 - 1000 * y0, 1)
     if round(1000 * (y1 - y0)) != SidewaysIoColumnSpec.row_pitch:
         raise RuntimeError(f"{bitcell.name}: a {round(1000 * (y1 - y0))} nm row; the block's leaves are 270 nm")
-    return SidewaysIoColumnSpec(selects=selects, bitline_entry=(heights["BL"], heights["BLN"]))
+    # 4:1 takes the compact logic: the one-row write driver under the sense
+    # amplifier, the 270 nm output latch beside them (1998 nm against 2862).
+    return SidewaysIoColumnSpec(selects=selects, bitline_entry=(heights["BL"], heights["BLN"]), compact=selects == 4)
 
 
 def iocol_pin_name(pin: str) -> str:

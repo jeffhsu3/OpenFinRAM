@@ -269,9 +269,12 @@ std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options)
         {"sel_hi_A", pf(strips * 4.0 * nand_fins, strips)},
     };
     // Fins per IO block (tech/spice/sram_6t_iocolumn.sp, iocol_block_6t*).
+    // The 4:1 block's output latch drives Q through one 3-fin tristate (the
+    // compact block's 270 nm latch), the taller blocks' through two.
+    const double oe_fins = mux == 4 ? 3 : 6;
     const std::map<std::string, double> io_fins = {
         {"ysel_A", 6}, {"yseln_A", 6}, {"blprechn_A", 6.0 * mux}, {"sae_A", 18},
-        {"wrena_A", 6}, {"wrenan_A", 12}, {"oe_out_A", 6}, {"oeb_out_A", 6}};
+        {"wrena_A", 6}, {"wrenan_A", 12}, {"oe_out_A", oe_fins}, {"oeb_out_A", oe_fins}};
     for (const auto& [pin, fins] : io_fins) loads[pin] = pf(fins * ios, ios);
     return loads;
 }
