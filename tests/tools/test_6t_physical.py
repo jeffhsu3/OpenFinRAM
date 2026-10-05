@@ -120,8 +120,10 @@ class SixTTileTests(unittest.TestCase):
             _, y0, _, y1 = boundary(tile)
             self.assertAlmostEqual(y1 - y0, mux * 0.27)
             names = {label.text for label in tile.labels}
-            self.assertEqual({n for n in names if n.startswith("yselA[")}, {f"yselA[{r}]" for r in range(mux)})
-            self.assertEqual(leaf_net(f"yselA[{mux - 1}]", 1, 0, ROWS // 2, 4, mux=mux), f"ysel_A[{2 * mux - 1}]")
+            # From 8:1 each leaf makes YSEL from YSELN: only the complements are pins.
+            self.assertEqual({n for n in names if n.startswith("yselnA[")}, {f"yselnA[{r}]" for r in range(mux)})
+            self.assertFalse({n for n in names if n.startswith("yselA[")})
+            self.assertEqual(leaf_net(f"yselnA[{mux - 1}]", 1, 0, ROWS // 2, 4, mux=mux), f"yseln_A[{2 * mux - 1}]")
 
     def test_m5_supply_stripes_run_the_tile_on_its_straps(self):
         # 0.12 um M5 stripes the tile's height (so abutted tiles make them the

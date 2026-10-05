@@ -111,7 +111,11 @@ def io_spec(bitcell: gdstk.Cell, selects: int = MUX_ROWS) -> SidewaysIoColumnSpe
         raise RuntimeError(f"{bitcell.name}: a {round(1000 * (y1 - y0))} nm row; the block's leaves are 270 nm")
     # 4:1 takes the compact logic: the one-row write driver under the sense
     # amplifier, the 270 nm output latch beside them (1998 nm against 2862).
-    return SidewaysIoColumnSpec(selects=selects, bitline_entry=(heights["BL"], heights["BLN"]), compact=selects == 4)
+    # From 8:1 each leaf makes its own YSEL from YSELN, which halves the
+    # select tracks that set the leaves' width (1944 -> 1728 nm at 8:1,
+    # 2484 -> 1944 at 16:1); the block then has no YSEL pins.
+    return SidewaysIoColumnSpec(selects=selects, bitline_entry=(heights["BL"], heights["BLN"]),
+                                compact=selects == 4, local_ysel=selects >= 8)  # fmt: skip
 
 
 def iocol_pin_name(pin: str) -> str:

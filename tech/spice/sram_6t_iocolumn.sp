@@ -75,49 +75,65 @@ Mol_PE Q OEB ol_N1 VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 X_block BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_block_6t
 .ENDS iocol_sram_6t
 * ASAP7 column IO, 270 nm leaves in one column: bitline mux, sense amplifier, write driver, output latch
-.SUBCKT iocol_block_6t_x8 BL[0] BLN[0] YSEL[0] YSELN[0] BL[1] BLN[1] YSEL[1] YSELN[1] BL[2] BLN[2] YSEL[2] YSELN[2] BL[3] BLN[3] YSEL[3] YSELN[3] BL[4] BLN[4] YSEL[4] YSELN[4] BL[5] BLN[5] YSEL[5] YSELN[5] BL[6] BLN[6] YSEL[6] YSELN[6] BL[7] BLN[7] YSEL[7] YSELN[7] PRECHN SAE D WRENA WRENAN OE OEB Q VDD VSS
+.SUBCKT iocol_block_6t_x8 BL[0] BLN[0] YSELN[0] BL[1] BLN[1] YSELN[1] BL[2] BLN[2] YSELN[2] BL[3] BLN[3] YSELN[3] BL[4] BLN[4] YSELN[4] BL[5] BLN[5] YSELN[5] BL[6] BLN[6] YSELN[6] BL[7] BLN[7] YSELN[7] PRECHN SAE D WRENA WRENAN OE OEB Q VDD VSS
+M0_NI YSEL[0] YSELN[0] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M0_PI YSEL[0] YSELN[0] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M0_NT BL[0] YSEL[0] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M0_NC BLN[0] YSEL[0] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M0_PT SA YSELN[0] BL[0] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M0_PC SAN YSELN[0] BLN[0] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M0_PPT BL[0] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M0_PPC BLN[0] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M1_NI YSEL[1] YSELN[1] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M1_PI YSEL[1] YSELN[1] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M1_NT BL[1] YSEL[1] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M1_NC BLN[1] YSEL[1] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M1_PT SA YSELN[1] BL[1] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M1_PC SAN YSELN[1] BLN[1] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M1_PPT BL[1] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M1_PPC BLN[1] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M2_NI YSEL[2] YSELN[2] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M2_PI YSEL[2] YSELN[2] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M2_NT BL[2] YSEL[2] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M2_NC BLN[2] YSEL[2] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M2_PT SA YSELN[2] BL[2] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M2_PC SAN YSELN[2] BLN[2] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M2_PPT BL[2] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M2_PPC BLN[2] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M3_NI YSEL[3] YSELN[3] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M3_PI YSEL[3] YSELN[3] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M3_NT BL[3] YSEL[3] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M3_NC BLN[3] YSEL[3] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M3_PT SA YSELN[3] BL[3] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M3_PC SAN YSELN[3] BLN[3] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M3_PPT BL[3] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M3_PPC BLN[3] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M4_NI YSEL[4] YSELN[4] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M4_PI YSEL[4] YSELN[4] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M4_NT BL[4] YSEL[4] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M4_NC BLN[4] YSEL[4] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M4_PT SA YSELN[4] BL[4] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M4_PC SAN YSELN[4] BLN[4] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M4_PPT BL[4] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M4_PPC BLN[4] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M5_NI YSEL[5] YSELN[5] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M5_PI YSEL[5] YSELN[5] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M5_NT BL[5] YSEL[5] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M5_NC BLN[5] YSEL[5] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M5_PT SA YSELN[5] BL[5] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M5_PC SAN YSELN[5] BLN[5] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M5_PPT BL[5] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M5_PPC BLN[5] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M6_NI YSEL[6] YSELN[6] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M6_PI YSEL[6] YSELN[6] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M6_NT BL[6] YSEL[6] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M6_NC BLN[6] YSEL[6] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M6_PT SA YSELN[6] BL[6] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M6_PC SAN YSELN[6] BLN[6] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M6_PPT BL[6] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M6_PPC BLN[6] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M7_NI YSEL[7] YSELN[7] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M7_PI YSEL[7] YSELN[7] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M7_NT BL[7] YSEL[7] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M7_NC BLN[7] YSEL[7] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M7_PT SA YSELN[7] BL[7] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
@@ -173,101 +189,133 @@ Mol_NE1 Q OE ol_N2_1 VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_PA1 ol_N1_1 ol_Y2N VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_PE1 Q OEB ol_N1_1 VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 .ENDS iocol_block_6t_x8
-.SUBCKT iocol_sram_6t_x8 BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] BL_A[4] BLN_A[4] yselA[4] yselnA[4] BL_A[5] BLN_A[5] yselA[5] yselnA[5] BL_A[6] BLN_A[6] yselA[6] yselnA[6] BL_A[7] BLN_A[7] yselA[7] yselnA[7] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS
-X_block BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] BL_A[4] BLN_A[4] yselA[4] yselnA[4] BL_A[5] BLN_A[5] yselA[5] yselnA[5] BL_A[6] BLN_A[6] yselA[6] yselnA[6] BL_A[7] BLN_A[7] yselA[7] yselnA[7] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_block_6t_x8
+.SUBCKT iocol_sram_6t_x8 BL_A[0] BLN_A[0] yselnA[0] BL_A[1] BLN_A[1] yselnA[1] BL_A[2] BLN_A[2] yselnA[2] BL_A[3] BLN_A[3] yselnA[3] BL_A[4] BLN_A[4] yselnA[4] BL_A[5] BLN_A[5] yselnA[5] BL_A[6] BLN_A[6] yselnA[6] BL_A[7] BLN_A[7] yselnA[7] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS
+X_block BL_A[0] BLN_A[0] yselnA[0] BL_A[1] BLN_A[1] yselnA[1] BL_A[2] BLN_A[2] yselnA[2] BL_A[3] BLN_A[3] yselnA[3] BL_A[4] BLN_A[4] yselnA[4] BL_A[5] BLN_A[5] yselnA[5] BL_A[6] BLN_A[6] yselnA[6] BL_A[7] BLN_A[7] yselnA[7] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_block_6t_x8
 .ENDS iocol_sram_6t_x8
 * ASAP7 column IO, 270 nm leaves in one column: bitline mux, sense amplifier, write driver, output latch
-.SUBCKT iocol_block_6t_x16 BL[0] BLN[0] YSEL[0] YSELN[0] BL[1] BLN[1] YSEL[1] YSELN[1] BL[2] BLN[2] YSEL[2] YSELN[2] BL[3] BLN[3] YSEL[3] YSELN[3] BL[4] BLN[4] YSEL[4] YSELN[4] BL[5] BLN[5] YSEL[5] YSELN[5] BL[6] BLN[6] YSEL[6] YSELN[6] BL[7] BLN[7] YSEL[7] YSELN[7] BL[8] BLN[8] YSEL[8] YSELN[8] BL[9] BLN[9] YSEL[9] YSELN[9] BL[10] BLN[10] YSEL[10] YSELN[10] BL[11] BLN[11] YSEL[11] YSELN[11] BL[12] BLN[12] YSEL[12] YSELN[12] BL[13] BLN[13] YSEL[13] YSELN[13] BL[14] BLN[14] YSEL[14] YSELN[14] BL[15] BLN[15] YSEL[15] YSELN[15] PRECHN SAE D WRENA WRENAN OE OEB Q VDD VSS
+.SUBCKT iocol_block_6t_x16 BL[0] BLN[0] YSELN[0] BL[1] BLN[1] YSELN[1] BL[2] BLN[2] YSELN[2] BL[3] BLN[3] YSELN[3] BL[4] BLN[4] YSELN[4] BL[5] BLN[5] YSELN[5] BL[6] BLN[6] YSELN[6] BL[7] BLN[7] YSELN[7] BL[8] BLN[8] YSELN[8] BL[9] BLN[9] YSELN[9] BL[10] BLN[10] YSELN[10] BL[11] BLN[11] YSELN[11] BL[12] BLN[12] YSELN[12] BL[13] BLN[13] YSELN[13] BL[14] BLN[14] YSELN[14] BL[15] BLN[15] YSELN[15] PRECHN SAE D WRENA WRENAN OE OEB Q VDD VSS
+M0_NI YSEL[0] YSELN[0] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M0_PI YSEL[0] YSELN[0] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M0_NT BL[0] YSEL[0] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M0_NC BLN[0] YSEL[0] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M0_PT SA YSELN[0] BL[0] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M0_PC SAN YSELN[0] BLN[0] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M0_PPT BL[0] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M0_PPC BLN[0] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M1_NI YSEL[1] YSELN[1] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M1_PI YSEL[1] YSELN[1] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M1_NT BL[1] YSEL[1] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M1_NC BLN[1] YSEL[1] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M1_PT SA YSELN[1] BL[1] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M1_PC SAN YSELN[1] BLN[1] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M1_PPT BL[1] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M1_PPC BLN[1] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M2_NI YSEL[2] YSELN[2] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M2_PI YSEL[2] YSELN[2] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M2_NT BL[2] YSEL[2] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M2_NC BLN[2] YSEL[2] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M2_PT SA YSELN[2] BL[2] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M2_PC SAN YSELN[2] BLN[2] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M2_PPT BL[2] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M2_PPC BLN[2] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M3_NI YSEL[3] YSELN[3] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M3_PI YSEL[3] YSELN[3] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M3_NT BL[3] YSEL[3] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M3_NC BLN[3] YSEL[3] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M3_PT SA YSELN[3] BL[3] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M3_PC SAN YSELN[3] BLN[3] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M3_PPT BL[3] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M3_PPC BLN[3] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M4_NI YSEL[4] YSELN[4] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M4_PI YSEL[4] YSELN[4] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M4_NT BL[4] YSEL[4] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M4_NC BLN[4] YSEL[4] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M4_PT SA YSELN[4] BL[4] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M4_PC SAN YSELN[4] BLN[4] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M4_PPT BL[4] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M4_PPC BLN[4] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M5_NI YSEL[5] YSELN[5] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M5_PI YSEL[5] YSELN[5] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M5_NT BL[5] YSEL[5] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M5_NC BLN[5] YSEL[5] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M5_PT SA YSELN[5] BL[5] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M5_PC SAN YSELN[5] BLN[5] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M5_PPT BL[5] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M5_PPC BLN[5] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M6_NI YSEL[6] YSELN[6] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M6_PI YSEL[6] YSELN[6] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M6_NT BL[6] YSEL[6] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M6_NC BLN[6] YSEL[6] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M6_PT SA YSELN[6] BL[6] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M6_PC SAN YSELN[6] BLN[6] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M6_PPT BL[6] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M6_PPC BLN[6] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M7_NI YSEL[7] YSELN[7] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M7_PI YSEL[7] YSELN[7] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M7_NT BL[7] YSEL[7] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M7_NC BLN[7] YSEL[7] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M7_PT SA YSELN[7] BL[7] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M7_PC SAN YSELN[7] BLN[7] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M7_PPT BL[7] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M7_PPC BLN[7] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M8_NI YSEL[8] YSELN[8] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M8_PI YSEL[8] YSELN[8] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M8_NT BL[8] YSEL[8] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M8_NC BLN[8] YSEL[8] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M8_PT SA YSELN[8] BL[8] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M8_PC SAN YSELN[8] BLN[8] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M8_PPT BL[8] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M8_PPC BLN[8] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M9_NI YSEL[9] YSELN[9] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M9_PI YSEL[9] YSELN[9] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M9_NT BL[9] YSEL[9] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M9_NC BLN[9] YSEL[9] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M9_PT SA YSELN[9] BL[9] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M9_PC SAN YSELN[9] BLN[9] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M9_PPT BL[9] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M9_PPC BLN[9] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M10_NI YSEL[10] YSELN[10] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M10_PI YSEL[10] YSELN[10] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M10_NT BL[10] YSEL[10] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M10_NC BLN[10] YSEL[10] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M10_PT SA YSELN[10] BL[10] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M10_PC SAN YSELN[10] BLN[10] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M10_PPT BL[10] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M10_PPC BLN[10] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M11_NI YSEL[11] YSELN[11] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M11_PI YSEL[11] YSELN[11] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M11_NT BL[11] YSEL[11] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M11_NC BLN[11] YSEL[11] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M11_PT SA YSELN[11] BL[11] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M11_PC SAN YSELN[11] BLN[11] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M11_PPT BL[11] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M11_PPC BLN[11] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M12_NI YSEL[12] YSELN[12] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M12_PI YSEL[12] YSELN[12] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M12_NT BL[12] YSEL[12] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M12_NC BLN[12] YSEL[12] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M12_PT SA YSELN[12] BL[12] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M12_PC SAN YSELN[12] BLN[12] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M12_PPT BL[12] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M12_PPC BLN[12] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M13_NI YSEL[13] YSELN[13] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M13_PI YSEL[13] YSELN[13] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M13_NT BL[13] YSEL[13] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M13_NC BLN[13] YSEL[13] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M13_PT SA YSELN[13] BL[13] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M13_PC SAN YSELN[13] BLN[13] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M13_PPT BL[13] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M13_PPC BLN[13] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M14_NI YSEL[14] YSELN[14] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M14_PI YSEL[14] YSELN[14] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M14_NT BL[14] YSEL[14] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M14_NC BLN[14] YSEL[14] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M14_PT SA YSELN[14] BL[14] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M14_PC SAN YSELN[14] BLN[14] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M14_PPT BL[14] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M14_PPC BLN[14] PRECHN VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
+M15_NI YSEL[15] YSELN[15] VSS VSS nmos_rvt nfin=3 l=20n nf=1 m=1
+M15_PI YSEL[15] YSELN[15] VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 M15_NT BL[15] YSEL[15] SA VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M15_NC BLN[15] YSEL[15] SAN VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 M15_PT SA YSELN[15] BL[15] VDD pmos_rvt nfin=3 l=20n nf=1 m=1
@@ -323,7 +371,7 @@ Mol_NE1 Q OE ol_N2_1 VSS nmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_PA1 ol_N1_1 ol_Y2N VDD VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 Mol_PE1 Q OEB ol_N1_1 VDD pmos_rvt nfin=3 l=20n nf=1 m=1
 .ENDS iocol_block_6t_x16
-.SUBCKT iocol_sram_6t_x16 BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] BL_A[4] BLN_A[4] yselA[4] yselnA[4] BL_A[5] BLN_A[5] yselA[5] yselnA[5] BL_A[6] BLN_A[6] yselA[6] yselnA[6] BL_A[7] BLN_A[7] yselA[7] yselnA[7] BL_A[8] BLN_A[8] yselA[8] yselnA[8] BL_A[9] BLN_A[9] yselA[9] yselnA[9] BL_A[10] BLN_A[10] yselA[10] yselnA[10] BL_A[11] BLN_A[11] yselA[11] yselnA[11] BL_A[12] BLN_A[12] yselA[12] yselnA[12] BL_A[13] BLN_A[13] yselA[13] yselnA[13] BL_A[14] BLN_A[14] yselA[14] yselnA[14] BL_A[15] BLN_A[15] yselA[15] yselnA[15] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS
-X_block BL_A[0] BLN_A[0] yselA[0] yselnA[0] BL_A[1] BLN_A[1] yselA[1] yselnA[1] BL_A[2] BLN_A[2] yselA[2] yselnA[2] BL_A[3] BLN_A[3] yselA[3] yselnA[3] BL_A[4] BLN_A[4] yselA[4] yselnA[4] BL_A[5] BLN_A[5] yselA[5] yselnA[5] BL_A[6] BLN_A[6] yselA[6] yselnA[6] BL_A[7] BLN_A[7] yselA[7] yselnA[7] BL_A[8] BLN_A[8] yselA[8] yselnA[8] BL_A[9] BLN_A[9] yselA[9] yselnA[9] BL_A[10] BLN_A[10] yselA[10] yselnA[10] BL_A[11] BLN_A[11] yselA[11] yselnA[11] BL_A[12] BLN_A[12] yselA[12] yselnA[12] BL_A[13] BLN_A[13] yselA[13] yselnA[13] BL_A[14] BLN_A[14] yselA[14] yselnA[14] BL_A[15] BLN_A[15] yselA[15] yselnA[15] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_block_6t_x16
+.SUBCKT iocol_sram_6t_x16 BL_A[0] BLN_A[0] yselnA[0] BL_A[1] BLN_A[1] yselnA[1] BL_A[2] BLN_A[2] yselnA[2] BL_A[3] BLN_A[3] yselnA[3] BL_A[4] BLN_A[4] yselnA[4] BL_A[5] BLN_A[5] yselnA[5] BL_A[6] BLN_A[6] yselnA[6] BL_A[7] BLN_A[7] yselnA[7] BL_A[8] BLN_A[8] yselnA[8] BL_A[9] BLN_A[9] yselnA[9] BL_A[10] BLN_A[10] yselnA[10] BL_A[11] BLN_A[11] yselnA[11] BL_A[12] BLN_A[12] yselnA[12] BL_A[13] BLN_A[13] yselnA[13] BL_A[14] BLN_A[14] yselnA[14] BL_A[15] BLN_A[15] yselnA[15] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS
+X_block BL_A[0] BLN_A[0] yselnA[0] BL_A[1] BLN_A[1] yselnA[1] BL_A[2] BLN_A[2] yselnA[2] BL_A[3] BLN_A[3] yselnA[3] BL_A[4] BLN_A[4] yselnA[4] BL_A[5] BLN_A[5] yselnA[5] BL_A[6] BLN_A[6] yselnA[6] BL_A[7] BLN_A[7] yselnA[7] BL_A[8] BLN_A[8] yselnA[8] BL_A[9] BLN_A[9] yselnA[9] BL_A[10] BLN_A[10] yselnA[10] BL_A[11] BLN_A[11] yselnA[11] BL_A[12] BLN_A[12] yselnA[12] BL_A[13] BLN_A[13] yselnA[13] BL_A[14] BLN_A[14] yselnA[14] BL_A[15] BLN_A[15] yselnA[15] blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_block_6t_x16
 .ENDS iocol_sram_6t_x16
 .END

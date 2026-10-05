@@ -272,8 +272,12 @@ std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options)
     // The 4:1 block's output latch drives Q through one 3-fin tristate (the
     // compact block's 270 nm latch), the taller blocks' through two.
     const double oe_fins = mux == 4 ? 3 : 6;
+    // From 8:1 a leaf makes YSEL itself (local_ysel): YSELN drives its
+    // transmission gates' pFETs and the inverter, YSEL leaves the block.
+    const bool local_ysel = mux >= 8;
     const std::map<std::string, double> io_fins = {
-        {"ysel_A", 6}, {"yseln_A", 6}, {"blprechn_A", 6.0 * mux}, {"sae_A", 18},
+        {"ysel_A", local_ysel ? 0 : 6}, {"yseln_A", local_ysel ? 12 : 6},
+        {"blprechn_A", 6.0 * mux}, {"sae_A", 18},
         {"wrena_A", 6}, {"wrenan_A", 12}, {"oe_out_A", oe_fins}, {"oeb_out_A", oe_fins}};
     for (const auto& [pin, fins] : io_fins) loads[pin] = pf(fins * ios, ios);
     return loads;

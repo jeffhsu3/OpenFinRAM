@@ -713,10 +713,15 @@ std::string SpiceGenerator::generate_colgrp_6t() {
     // wrapped as iocol_sram_6t in tech/spice/sram_6t_iocolumn.sp, in the pin
     // order generate_asap7_6t_iocolumn.py writes: per leaf bitline,
     // complement, select, complement select; then precharge, sense enable,
-    // data in, write enables, output enables, data out, supplies.
+    // data in, write enables, output enables, data out, supplies.  From 8:1
+    // each leaf makes its own select from the complement (local_ysel): the
+    // block has no select pins, and yselA stays a port of the tile only.
+    const bool local_ysel = mux >= 8;
     instances << "XIO_A";
     for (int r = 0; r < mux; ++r) {
-        instances << " BL_A[" << r << "] BLN_A[" << r << "] yselA[" << r << "] yselnA[" << r << "]";
+        instances << " BL_A[" << r << "] BLN_A[" << r << "]";
+        if (!local_ysel) instances << " yselA[" << r << "]";
+        instances << " yselnA[" << r << "]";
     }
     // iocol_sram_6t at 4:1, iocol_sram_6t_x<mux> otherwise.
     instances << " blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_sram_6t"
