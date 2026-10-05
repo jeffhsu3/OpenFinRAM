@@ -74,8 +74,12 @@ def bbox_origin(cell):
     return tuple(math.floor(float(v) * 1000) / 1000 for v in low)
 
 
+#: How far a tile's supply pins stay inside its abutting edges (`abstract`).
+SUPPLY_PIN_INSET = 0.05
+
+
 def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_supply=None,
-             snap_half_nm=False):
+             snap_half_nm=False, supply_span=None):
     """Create an exact metal abstract and a pin for every named component.
 
     Nets `abutted` names are joined by abutment, never routed: they are
@@ -90,6 +94,11 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
     23.5 nm from a 24 nm rule.  Its pins stay as drawn: snapped in, a
     supply pin would be half a nanometre short of its metal and the router
     would land beside it that much too close (x64x64x1's M1 on vdd).
+    `supply_span` ``(y_lo, y_hi)`` keeps the supply pins `SUPPLY_PIN_INSET`
+    inside those edges (the rest of their metal is an obstruction), so that
+    no two abutted instances' pins of one net overlap: the router takes
+    overlapping pins as joined, its connectivity check does not
+    (x8x4x1 at 16:1, a stack of two end tiles under the strips: DRT-0206 on vss).
     """
     graph = MetalGraph(cell)
     roots = {}
@@ -217,6 +226,21 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
                     for x, y in p.points for v in (x - ox, y - oy))]  # fmt: skip
                 access = above or polys
             obstacles.extend(p for p in polys if not any(p is a for a in access))
+            if supply_span is not None:
+                y_lo, y_hi = supply_span
+                lo, hi = y_lo + SUPPLY_PIN_INSET, y_hi - SUPPLY_PIN_INSET
+                x0, x1 = (float(v) for v in (low[0], high[0]))
+                keep = gdstk.rectangle((x0 - 1, lo), (x1 + 1, hi))
+                inside, outside = [], []
+                for poly in access:
+                    inside += [gdstk.Polygon(q.points, layer=poly.layer)
+                               for q in gdstk.boolean(poly, keep, "and", precision=1e-6)]
+                    outside += [gdstk.Polygon(q.points, layer=poly.layer)
+                                for q in gdstk.boolean(poly, keep, "not", precision=1e-6)]
+                # A component wholly at an edge (an end row's bar) keeps its pin whole.
+                if inside:
+                    access = inside
+                    obstacles.extend(outside)
         else:
             access_layer = max(p.layer for p in polys)
             access = [p for p in polys if p.layer == access_layer]
@@ -1122,6 +1146,7 @@ def run(args):
             shift=(0.0, HALF_NM) if args.band is not None else (0.0, 0.0),
             abutted_supply=None if bottom or top else through,
             snap_half_nm=single,
+            supply_span=(y_lo, y_hi),
         ))  # fmt: skip
     leaf = next(iter(variants.values()))[0]
     size = next(iter(variants.values()))[4]
