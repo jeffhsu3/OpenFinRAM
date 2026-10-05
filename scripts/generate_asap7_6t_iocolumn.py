@@ -42,7 +42,8 @@ from chipforge_asap7.devices import (
 
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / "tech/gds/srambank_32b_boundary_2.gds"
-BOUNDARY, M1, M2, M3, M4 = 100, 19, 20, 30, 40
+BOUNDARY, M1, M2, M3, M4, M5 = 100, 19, 20, 30, 40, 50
+V3, V4 = 35, 45
 GCUT = 10
 PIN_TEXTTYPE = 251
 MUX_ROWS = 4
@@ -282,6 +283,67 @@ def build_end_row(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordline
     return row
 
 
+#: The tile's M5 supply stripes: 0.12 um (a table width; V4 under it a bar
+#: as wide), one beside each of the IO block's full-height M3 supply straps,
+#: away from its pair's other strap, 72 nm or more from the next (M5 over
+#: 25 nm wide).  An M4 pad per strap and tile joins strap and stripe.
+STRIPE_WIDTH = 0.120
+STRIPE_FROM_STRAP = {"left": (-0.138, -0.018), "right": (0.030, 0.150)}  # stripe x0, x1 from the strap's centre
+#: A pad is clear of other M4 40 nm along its track, or two tracks (96 nm) off
+#: it: M4's tip-to-tip rule grows every M4 48 nm up and down (M4.S.3/S.4).
+M4_TIP, M4_TRACKS = 0.040, 0.096
+
+
+def io_supply_straps(io: gdstk.Cell) -> list[tuple[str, float]]:
+    """(net, x centre) of each of the block's M3 supply straps that runs its full height."""
+    from chipforge_asap7.verification.connectivity import MetalGraph
+
+    graph = MetalGraph(io)
+    nets = {graph.label_root(l): l.text.upper() for l in io.labels if l.text.upper() in ("VDD", "VSS")}
+    _, y0, _, y1 = boundary_box(io)
+    straps = []
+    for i, poly in enumerate(graph.polygons):
+        (a, b), (c, d) = poly.bounding_box()
+        if poly.layer == M3 and graph.root(i) in nets and d - b > 0.95 * (y1 - y0):
+            straps.append((nets[graph.root(i)], round((a + c) / 2, 4)))
+    return sorted(set(straps), key=lambda s: s[1])
+
+
+def add_supply_stripes(tile: gdstk.Cell, io: gdstk.Cell, io_x: float, y_low: float, y_high: float) -> None:
+    """M5 stripes the tile's height beside the IO block's supply straps, joined to them.
+
+    A middle tile took its supply only through its neighbours' two
+    minimum-width M3 straps a net (~135 ohm a 4:1 tile); abutted, the
+    stripes run the stack's length at about a tenth of that.
+    """
+    straps = io_supply_straps(io)
+    if len(straps) % 2:
+        raise RuntimeError(f"{io.name}: unpaired supply straps {straps}")
+    _, _, _, io_top = boundary_box(io)
+    # The block's M4, and the abutted neighbours' a block above and below.
+    blocked = [((a, b + dy), (c, d + dy)) for p in io.get_polygons(depth=None) if p.layer == M4
+               for (a, b), (c, d) in [p.bounding_box()] for dy in (-io_top, 0.0, io_top)]
+    for k, (net, x) in enumerate(straps):
+        side = "left" if k % 2 == 0 else "right"
+        s0, s1 = (round(x + d, 3) for d in STRIPE_FROM_STRAP[side])
+        pad0, pad1 = (round(min(s0, x - 0.009) - 0.011, 3), round(max(s1, x + 0.009) + 0.011, 3))
+        y = 0.040
+        while y < io_top - 0.040:
+            box = (pad0, y - 0.012, pad1, y + 0.012)
+            if all(b[0][0] >= box[2] + M4_TIP or b[1][0] <= box[0] - M4_TIP
+                   or b[0][1] >= box[3] + M4_TRACKS or b[1][1] <= box[1] - M4_TRACKS for b in blocked):
+                break
+            y = round(y + 0.001, 3)
+        else:
+            raise RuntimeError(f"{io.name}: no M4 row free to join the {net} strap at {x}")
+        blocked.append(((box[0], box[1]), (box[2], box[3])))
+        X = io_x
+        rect(tile, (X + pad0, y - 0.012, X + pad1, y + 0.012), M4)
+        rect(tile, (X + x - 0.009, y - 0.012, X + x + 0.009, y + 0.012), V3)
+        rect(tile, (X + s0, y - 0.012, X + s1, y + 0.012), V4)
+        rect(tile, (X + s0, y_low, X + s1, y_high), M5)
+
+
 def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: int,
                io: gdstk.Cell, spec: SidewaysIoColumnSpec,
                bottom: bool = False, top: bool = False) -> gdstk.Cell:
@@ -340,6 +402,7 @@ def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: 
         # mirrored corner's (where the v1 cap's meets it): close the gap.
         rect(tile, (array_x - 0.108, height - 0.0045, array_x - 0.067, height + 0.0045), M1)
     reach = END_ROW_HEIGHT + END_ROW_MARGIN
+    add_supply_stripes(tile, io, io_x, -reach if bottom else 0.0, height + (reach if top else 0.0))
     rect(tile, (0.0, -reach if bottom else 0.0, io_x + boundary_box(io)[2], height + (reach if top else 0.0)),
          BOUNDARY)
     return tile

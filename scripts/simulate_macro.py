@@ -413,6 +413,65 @@ def port_a_name(pin: str) -> str:
     return re.sub(r"^([ADQ])\[", r"\1_A[", pin, flags=re.IGNORECASE)
 
 
+def supply_network(source: str, ohms: float) -> tuple[str, dict[str, tuple[int, int]]]:
+    """The deck with each stack's tiles on their own supply nodes, `ohms` apart, fed at the stack's ends.
+
+    A middle column tile takes its supply only through its neighbours (the
+    IO block's M3 straps: two minimum-width straps a net, ~135 ohms a 4:1
+    tile); only the end tiles' supply is routed.  Each tile ``X<b>_<k>`` of
+    a ``stacked_colgrp`` subckt gets ``vdd_<b>_<k>``/``vss_<b>_<k>``, joined
+    to the next by `ohms`; the first and last tile (and the end rows) are
+    tied to the subckt's VDD/VSS.  Returns the deck and, by stack subckt,
+    the (bank, tile) to watch: the middle of the chain.
+    """
+    out, block, watch = [], None, {}
+
+    def flush(block):
+        name, lines = block
+        chains: dict[int, list[int]] = {}
+        for line in lines:
+            m = re.match(r"X(\d+)_(\d+)\s", line, re.I)
+            if m and line.split()[-1].lower().startswith("colgrp"):
+                chains.setdefault(int(m[1]), []).append(int(m[2]))
+        result = []
+        for line in lines:
+            tokens = line.split()
+            tile = re.fullmatch(r"X(\d+)_(\d+)", tokens[0], re.I) if tokens else None
+            end = re.fullmatch(r"XE(\d+)_([BT])", tokens[0], re.I) if tokens else None
+            if (tile or end) and [t.upper() for t in tokens[-3:-1]] == ["VDD", "VSS"]:
+                if tile:
+                    b, k = int(tile[1]), int(tile[2])
+                else:
+                    b = int(end[1])
+                    k = min(chains[b]) if end[2].upper() == "B" else max(chains[b])
+                tokens[-3:-1] = [f"vdd_{b}_{k}", f"vss_{b}_{k}"]
+                line = " ".join(tokens)
+            if line.upper().startswith(".ENDS"):
+                for b, ks in chains.items():
+                    ks = sorted(ks)
+                    for net in ("vdd", "vss"):
+                        for k0, k1 in zip(ks, ks[1:]):
+                            result.append(f"R{net}_strap_{b}_{k0} {net}_{b}_{k0} {net}_{b}_{k1} {ohms:g}")
+                        for k in {ks[0], ks[-1]}:
+                            result.append(f"R{net}_feed_{b}_{k} {net}_{b}_{k} {net.upper()} 1m")
+                    watch[name] = (b, ks[len(ks) // 2])
+            result.append(line)
+        return result
+
+    for line in fold(source):
+        if block is None and re.match(r"\.SUBCKT\s+stacked_colgrp", line, re.I):
+            block = (line.split()[1].lower(), [line])
+            continue
+        if block is not None:
+            block[1].append(line)
+            if line.upper().startswith(".ENDS"):
+                out += flush(block)
+                block = None
+            continue
+        out.append(line)
+    return "\n".join(out) + "\n", watch
+
+
 def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cells: list[dict], g: Geometry,
                program: list[tuple[Op, Op]], *, period: float, vdd: float, load: float,
                probes: tuple[str, ...] = ()) -> tuple[str, dict]:  # fmt: skip
@@ -703,7 +762,7 @@ def find_xyce() -> Path:
 def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 0.7, corner: str = "TT",
              load: float = 1e-15, netlist: Path | None = None, timeout: float = 7200,
              program: list[tuple[Op, Op]] | None = None, probes: tuple[str, ...] = (),
-             spaced: bool = False) -> dict:  # fmt: skip
+             spaced: bool = False, strap_ohms: float = 0.0) -> dict:  # fmt: skip
     result_dir = result_dir.resolve()
     described = json.loads(next(result_dir.glob("*.physical.json")).read_text())
     top = described["cell"]
@@ -745,6 +804,14 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     out = out.resolve()  # the deck includes by path, and Xyce runs from there
     out.mkdir(parents=True, exist_ok=True)
     dut, model = out / f"{top}.xyce.sp", out / f"asap7_{corner}.xyce.pm"
+    supply_probes: list[str] = []
+    if strap_ohms:
+        source, watch = supply_network(source, strap_ohms)
+        stacks = [(i[0], i[2].lower()) for i in parse_subckts(source)[top.lower()].instances if i[2].lower() in watch]
+        for inst, ref in stacks:
+            b, k = watch[ref]
+            supply_probes += [f"{inst}:vdd_{b}_{k}", f"{inst}:vss_{b}_{k}"]
+        probes = tuple(probes) + tuple(supply_probes)
     dut.write_text(for_xyce(source))
     card = (REPO_ROOT / f"tech/models/hspice/7nm_{corner}.pm").read_text()
     model.write_text(re.sub(r"level\s*=\s*72", "level = 107", card))
@@ -764,7 +831,15 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
         raise RuntimeError(
             f"Xyce failed (exit {completed.returncode}); see {out / 'xyce.log'}\n{tail}"
         )
-    verdict = evaluate(read_csv(waves_path), plan, program, cells, g, vdd)
+    waves = read_csv(waves_path)
+    verdict = evaluate(waves, plan, program, cells, g, vdd)
+    if supply_probes:
+        # The narrowest rail-to-rail voltage any watched tile saw.
+        worst = {}
+        for vdd_node, vss_node in zip(supply_probes[::2], supply_probes[1::2]):
+            hi, lo = waves[f"V(XDUT:{vdd_node.upper()})"], waves[f"V(XDUT:{vss_node.upper()})"]
+            worst[vdd_node.rsplit(":", 1)[0]] = round(min(a - b for a, b in zip(hi, lo)), 4)
+        verdict["supply"] = {"strap_ohms": strap_ohms, "min_rail_V": worst}
     verdict.update(cell=top, result_dir=str(result_dir), period_ns=period * 1e9, vdd=vdd, corner=corner, spaced=spaced,
                    program=[[f"{op.kind}{op.address}" + (f"={op.data:0{g.bits}b}" if op.kind == "W" else "")
                              for op in ops] for ops in program],
@@ -792,6 +867,10 @@ def describe(verdict: dict) -> str:
               for w in verdict["cells_wrong"][:8]]  # fmt: skip
     if verdict["unproven"]:
         lines.append("  never proven: " + ", ".join(verdict["unproven"]))
+    if verdict.get("supply"):
+        worst = verdict["supply"]["min_rail_V"]
+        lines.append(f"  supply ({verdict['supply']['strap_ohms']:g} ohm a tile): narrowest rail-to-rail "
+                     f"{min(worst.values()):.3f} V at the middle tile of {min(worst, key=worst.get)}")
     for hazard in verdict["hazards"]:
         lines.append(
             f"  HAZARD cycle {hazard['cycle']} port {hazard['port']}: {hazard['what']} ({hazard['volts']} V)"
@@ -819,6 +898,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--timeout", type=float, default=7200,
                         help="Seconds Xyce may take (a large macro takes days).")
+    parser.add_argument("--strap-ohms", type=float, default=0.0,
+                        help="supply resistance between neighbouring column tiles (6T 4:1: ~135); 0 = ideal")
     parser.add_argument("--probe", action="append", default=[], metavar="NODE",
                         help="Also print V(Xdut:NODE), e.g. XDATA_LO:X0_0:XIO_A:X_block:SA (repeatable).")
     args = parser.parse_args(argv)
@@ -829,7 +910,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     verdict = simulate(args.result_dir, out, period=args.period, vdd=args.vdd, corner=args.corner,
                        netlist=args.netlist, spaced=args.spaced, timeout=args.timeout,
-                       probes=tuple(args.probe))  # fmt: skip
+                       probes=tuple(args.probe), strap_ohms=args.strap_ohms)  # fmt: skip
     print(describe(verdict))
     print(f"wrote {out / 'simulation.json'}")
     return 0 if verdict["passed"] else 1

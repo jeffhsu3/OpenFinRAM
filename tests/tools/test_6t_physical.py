@@ -123,6 +123,36 @@ class SixTTileTests(unittest.TestCase):
             self.assertEqual({n for n in names if n.startswith("yselA[")}, {f"yselA[{r}]" for r in range(mux)})
             self.assertEqual(leaf_net(f"yselA[{mux - 1}]", 1, 0, ROWS // 2, 4, mux=mux), f"ysel_A[{2 * mux - 1}]")
 
+    def test_m5_supply_stripes_run_the_tile_on_its_straps(self):
+        # 0.12 um M5 stripes the tile's height (so abutted tiles make them the
+        # stack's), one beside each of the IO block's straps, each one conductor
+        # with that net's straps.
+        for mux, (bottom, top) in ((4, (True, False)), (4, (False, False)), (8, (False, True)), (16, (False, False))):
+            tile = build_leaf_6t(ROWS, bottom=bottom, top=top, mux=mux)
+            _, y0, _, y1 = boundary(tile)
+            graph = MetalGraph(tile)
+            supply = {}
+            for label in tile.labels:
+                if label.text.upper() in ("VDD", "VSS"):
+                    supply.setdefault(label.text.upper(), set()).add(graph.label_root(label))
+            stripes = {"VDD": 0, "VSS": 0}
+            for i, poly in enumerate(graph.polygons):
+                if poly.layer != 50:
+                    continue
+                (a, b), (c, d) = poly.bounding_box()
+                self.assertAlmostEqual(c - a, 0.12, places=6)
+                self.assertAlmostEqual(b, y0, places=6)
+                self.assertAlmostEqual(d, y1, places=6)
+                net = next(n for n, roots in supply.items() if graph.root(i) in roots)
+                stripes[net] += 1
+            # One stripe a strap of the IO block, and at least one a net.
+            spec = columns6.io_spec(columns6.load_source()[columns6.BITCELL], mux)
+            io = columns6.build_io(gdstk.Library(), columns6.build_io_block(spec)[0], spec)
+            straps = columns6.io_supply_straps(io)
+            expected = {net: sum(1 for n, _ in straps if n == net) for net in ("VDD", "VSS")}
+            self.assertEqual(stripes, expected, (mux, bottom, top))
+            self.assertTrue(all(expected.values()), expected)
+
     def test_the_io_blocks_bitlines_meet_the_rows(self):
         cells = columns6.load_source()
         spec = columns6.io_spec(cells[columns6.BITCELL])
