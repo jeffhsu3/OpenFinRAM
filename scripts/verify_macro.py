@@ -89,10 +89,14 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Pat
     KLayout's comparer does not finish on a whole multi-bank macro: every
     bit's column appears once per bank on the same data nets, and it gets
     lost pairing the copies.  Each view keeps one bank's tiles and all the
-    rest (controller, strips, routing), so it is a single-bank problem.  What
-    no view sees, a short between tiles of different banks, is what the
-    compiler's connectivity gate already rules out (every net one conductor,
-    isolated from every other).
+    rest (controller, routing), so it is a single-bank problem.  A bank's
+    wordline strips (``Xwl_<half>[_m<k><d|u>]_<bank>``, the strip masters
+    standing in its column) go with its tiles: left behind, a segmented 6T
+    macro's other-bank strips drive wordlines nothing loads on either side,
+    and the comparer leaves them unpaired.  What no view sees, a short
+    between tiles of different banks, is what the compiler's connectivity
+    gate already rules out (every net one conductor, isolated from every
+    other).
     """
     import gdstk
 
@@ -116,13 +120,26 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Pat
         view.mkdir(parents=True, exist_ok=True)
         library = gdstk.read_gds(str(gds))
         view_top = next(c for c in library.cells if c.name == cell)
-        view_top.remove(*[r for r in view_top.references
-                          if r.cell.name.startswith("dp_col") and round(float(r.origin[0]), 3) not in xs_bank])  # fmt: skip
+        def other_bank(ref, xs_bank=xs_bank):
+            x = round(float(ref.origin[0]), 3)
+            if ref.cell.name.startswith("dp_col"):
+                return x not in xs_bank
+            return ref.cell.name.startswith("dp_wl_strips") and all(abs(x - xb) >= 1.0 for xb in xs_bank)
+
+        view_top.remove(*[r for r in view_top.references if other_bank(r)])
         library.write_gds(str(view / gds.name))
         # The column groups are X<bank>_<bit> in the stacked column group,
         # and a 6T stack's dummy end rows XE<bank>_B/_T (inside its end tiles).
-        kept = [line for line in text.splitlines()
-                if not re.match(rf"X(?!{bank}_)\d+_\d+ |XE(?!{bank}_)\d+_[BT] ", line)]
+        kept, dropping = [], False
+        for line in text.splitlines():
+            if line.startswith("+"):
+                if not dropping:
+                    kept.append(line)
+                continue
+            dropping = bool(re.match(rf"X(?!{bank}_)\d+_\d+ |XE(?!{bank}_)\d+_[BT] "
+                                     rf"|Xwl_(?:lo|hi)(?:_m\d+[du])?_(?!{bank} )\d+ ", line))  # fmt: skip
+            if not dropping:
+                kept.append(line)
         (view / netlist.name).write_text("\n".join(kept) + "\n")
         views.append((view / gds.name, view / netlist.name))
     return views
@@ -202,15 +219,11 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
     started = time.time()
     shared = described and json.loads(described[0].read_text()).get("shared_port_b", False)
     units = banks // 2 if shared else banks
-    # Per-bank views keep KLayout's comparer from losing itself in an 8T
-    # macro's identical banks.  A 6T macro is compared whole: its nets are
-    # named at their terminals, and a view that drops a bank's tiles also
-    # drops the metal some of those names stand on (a segmented two-bank
-    # 6T macro failed in views and matched whole, in minutes).
-    six_t = described and json.loads(described[0].read_text()).get("bitcell") == "6t"
-    views = bank_views(gds, netlist, cell, out / "banks") if units > 1 and not six_t else [(gds, netlist)]
-    if six_t:
-        units = 1
+    # Per-bank views keep KLayout's comparer from losing itself in identical
+    # banks: a whole two-bank 6T macro at 8:1 (x8x8x2) did not finish in
+    # four hours; its views match in minutes once each takes its bank's
+    # wordline strips with its tiles.
+    views = bank_views(gds, netlist, cell, out / "banks") if units > 1 else [(gds, netlist)]
     strict, relaxed = [], []
     for index, (view_gds, view_netlist) in enumerate(views):
         tag = f"bank{index}/" if units > 1 else ""
