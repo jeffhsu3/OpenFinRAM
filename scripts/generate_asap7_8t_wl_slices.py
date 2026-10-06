@@ -29,6 +29,7 @@ from chipforge_asap7.devices import (
     build_driver_slice_support,
     size_decoder,
 )
+from chipforge_asap7.devices.driver_slice import RUNSET_ACTIVE_FINS
 
 FIXED_GDS_TIMESTAMP = dt.datetime(2020, 1, 1, 0, 0, 0)
 #: fF one 8T cell presents to its wordline, with its 0.594 um of M3 (the
@@ -53,7 +54,10 @@ def load_class(cells: int) -> int:
 
 
 def slice_spec(cells: int) -> DriverSliceSpec:
-    return DriverSliceSpec.from_sizing(size_decoder(WORDLINE_FF_PER_CELL * cells, 32))
+    # Driver rows within the public runset's ACTIVE heights (12 fins): the
+    # 64-cell slice's 17-fin row tripped ACTIVE.W.2; it is 9 + 8 instead.
+    return DriverSliceSpec.from_sizing(size_decoder(WORDLINE_FF_PER_CELL * cells, 32),
+                                       max_active_fins=RUNSET_ACTIVE_FINS)
 
 
 def _subcircuits(netlist: str) -> dict[str, str]:
