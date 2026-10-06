@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -202,7 +203,7 @@ def waive(report: Path, waivers: list[dict]) -> tuple[dict, dict, list[dict]]:
 
 
 def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = True,
-           drc_engine: str = "klayout", waivers: Path | None = DEFAULT_WAIVERS,
+           drc_engine: str = "gdscheck", waivers: Path | None = DEFAULT_WAIVERS,
            lvs_timeout: float = 3600) -> dict:
     from chipforge_asap7.verification import drc_counts, run_drc, run_hierarchical_lvs
 
@@ -243,6 +244,15 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
         verdict["lvs_without_double_implant_taps"] = relaxed[0] if units == 1 else _merge_findings(relaxed)
     if drc:
         if drc_engine == "gdscheck":
+            from drc import find_gdscheck, run_full_drc
+
+            binary = find_gdscheck()
+            version = subprocess.run([str(binary), "--version"], capture_output=True, text=True).stdout.strip()
+            verdict["drc"] = {"engine": "gdscheck", "version": version,
+                              **run_full_drc(gds, cell, out / "drc", binary=binary, timeout=7200)}
+            print(f"\nDRC (gdscheck ASAP7 main suite): {verdict['drc']['markers']} markers in "
+                  f"{len(verdict['drc']['rules'])} rules")
+        elif drc_engine == "gdscheck-device":
             from drc import find_gdscheck, provenance, run_device_drc
 
             binary = find_gdscheck()
@@ -285,7 +295,8 @@ def known_findings(verdict: dict) -> dict:
     }
     if verdict.get("drc", {}).get("engine") == "gdscheck":
         findings["drc_identity"] = {key: verdict["drc"][key]
-                                    for key in ("engine", "profile", "version", "deck_sha256")}
+                                    for key in ("engine", "suite", "profile", "version", "deck_sha256")
+                                    if key in verdict["drc"]}
     return findings
 
 
@@ -315,8 +326,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cell", default=None, help="Top cell; read from <cell>.physical.json when omitted.")
     parser.add_argument("--out", type=Path, default=None, help="Work and report folder (default tmp/verify_<name>).")
     parser.add_argument("--no-drc", action="store_true")
-    parser.add_argument("--drc-engine", choices=("klayout", "gdscheck"), default="klayout",
-                        help="Public full runset (klayout), or calibrated device subset (gdscheck).")
+    parser.add_argument("--drc-engine", choices=("gdscheck", "klayout", "gdscheck-device"), default="gdscheck",
+                        help="gdscheck's ASAP7 main suite (default), the public KLayout runset, "
+                             "or gdscheck's calibrated device subset.")
     parser.add_argument("--waivers", type=Path, default=DEFAULT_WAIVERS,
                         help="DRC waivers (KLayout engine); reported but not counted.")
     parser.add_argument("--no-waivers", action="store_true", help="Count every DRC marker.")

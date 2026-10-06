@@ -1,7 +1,9 @@
-"""gdscheck adapter for the calibrated ASAP7 device subset.
+"""gdscheck adapter: its full ASAP7 suite, and the calibrated device subset.
 
-The full public ASAP7 KLayout runset has different coverage and rule names;
-it remains a separate reference check. Never compare its baseline to this one.
+`run_full_drc` (``--process asap7 --suite main``) is verify_macro.py's DRC.
+`run_device_drc` is the earlier calibrated subset (``tech/drc/asap7``).  The
+public KLayout runset has different coverage and rule names; never compare
+its baseline to these.
 """
 
 from __future__ import annotations
@@ -48,6 +50,41 @@ def require_directional_gcut(binary: Path) -> None:
     ):
         raise RuntimeError("gdscheck lacks native ASAP7 directional gate-cut rules; "
                            "run bash scripts/install_gdscheck.sh or set GDSCHECK to a current build")
+
+
+@lru_cache(maxsize=None)
+def require_full_asap7(binary: Path) -> None:
+    """The embedded ASAP7 process with the main suite and the DRM's ACTIVE.W.2."""
+    suites = subprocess.run([str(binary), "list-suites", "--process", "asap7"],
+                            capture_output=True, text=True, timeout=10)
+    active = subprocess.run([str(binary), "show-deck", "--process", "asap7", "--deck", "active"],
+                            capture_output=True, text=True, timeout=10)
+    if suites.returncode or active.returncode or not re.search(r"^\s*main\b", suites.stdout, re.M) \
+            or "ACTIVE.W.2" not in active.stdout:
+        raise RuntimeError("gdscheck lacks the full ASAP7 process (suite main, ACTIVE.W.2); "
+                           "GDSCHECK_SRC=<checkout> bash scripts/install_gdscheck.sh, or set GDSCHECK")
+
+
+def run_full_drc(gds: Path, cell: str, out: Path, *, binary: Path | None = None,
+                 timeout: int = 3600) -> dict:
+    """gdscheck's whole ASAP7 suite on `cell`: markers per rule (flat, on the top cell)."""
+    binary = binary or find_gdscheck()
+    require_full_asap7(binary)
+    out.mkdir(parents=True, exist_ok=True)
+    report = out / "drc.lyrdb"
+    report.unlink(missing_ok=True)
+    cmd = [str(binary), "run", "--input", str(gds.resolve()), "--process", "asap7",
+           "--suite", "main", "--topcell", cell, "--report", str(report.resolve())]
+    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    (out / "drc.log").write_text(proc.stdout + proc.stderr)
+    if proc.returncode not in (0, 2) or not report.is_file():
+        raise RuntimeError(f"gdscheck failed ({proc.returncode}); see {out / 'drc.log'}")
+    rules: dict[str, int] = {}
+    for item in ET.parse(report).getroot().findall("./items/item"):
+        rule = item.findtext("category", "").strip("'\"")
+        rules[rule] = rules.get(rule, 0) + int(item.findtext("multiplicity", "1"))
+    return {"cell": cell, "report": str(report), "suite": "main",
+            "rules": dict(sorted(rules.items())), "markers": sum(rules.values())}
 
 
 def provenance(binary: Path) -> dict:
