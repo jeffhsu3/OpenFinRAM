@@ -87,11 +87,14 @@ std::string YosysTclGenerator::generate_script(
         oss << "read_verilog -sv " << join_path(rtl_path, "row_decoder.v") << "\n";
     }
     oss << "read_verilog -sv " << join_path(rtl_path, one_port ? "sram_control_1p.v" : "sram_control.v") << "\n";
+    // The 6T IO block decodes 16:1 selects itself from two predecoded groups.
+    const char* predecode = one_port && column_mux >= 16 ? " -set YSEL_PREDECODE 1" : "";
     if (single_port) {
         oss << "chparam -set ADDR_WIDTH " << addr_width
             << " -set NUM_WL " << num_wls
             << " -set NUM_BANK " << num_banks
             << " -set COLUMN_MUX " << column_mux
+            << predecode
             << " ctrl_decode\n";
     } else {
         oss << "chparam -set ADDR_WIDTH " << addr_width
@@ -101,6 +104,7 @@ std::string YosysTclGenerator::generate_script(
             << " -set WL_BUF " << num_wl_buf
             << " -set SAE_BUF " << num_sae_buf
             << (shared_port_b ? " -set SHARED_B 1" : "")
+            << predecode
             << " ctrl_decode\n";
     }
     oss << "hierarchy -check -top ctrl_decode\n";

@@ -437,8 +437,12 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             const std::vector<const char*> buses = cli_options_.bitcell_6t
                 ? std::vector<const char*>{"yseln_A", "ysel_A"}
                 : std::vector<const char*>{"yseln_A", "ysel_A", "yseln_B", "ysel_B"};
+            // A bank's select bus: a line a column, or for the 6T block at
+            // 16:1 the two predecoded groups (the controller's YSEL_W).
+            const int mux = static_cast<int>(cli_options_.num_rows_per_mux);
+            const int ysel_w = cli_options_.bitcell_6t && mux >= 16 ? 4 + mux / 4 : mux;
             for (const char* bus : buses) {
-                for (int index = 0; index < static_cast<int>(cli_options_.num_banks * cli_options_.num_rows_per_mux); ++index) {
+                for (int index = 0; index < static_cast<int>(cli_options_.num_banks) * ysel_w; ++index) {
                     oss << " " << bus << "[" << index << "]";
                 }
                 oss << "\n+";

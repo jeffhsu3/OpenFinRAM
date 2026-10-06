@@ -700,8 +700,11 @@ std::string SpiceGenerator::generate_colgrp_6t() {
     std::vector<std::string> ports;
     append_indexed_ports(ports, "WLA[", rows, "]");
     append_ports(ports, {"DA", "QA", "wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA"});
-    append_indexed_ports(ports, "yselnA[", mux, "]");
-    append_indexed_ports(ports, "yselA[", mux, "]");
+    // A bank's select bus: a line a column, or from 16:1 the two predecoded
+    // groups (the controller's YSEL_W).
+    const int ysel_w = mux >= 16 ? 4 + mux / 4 : mux;
+    append_indexed_ports(ports, "yselnA[", ysel_w, "]");
+    append_indexed_ports(ports, "yselA[", ysel_w, "]");
     append_ports(ports, {"sae_A", "VDD", "VSS"});
     std::stringstream instances;
     instances << "X0 ";
@@ -716,12 +719,20 @@ std::string SpiceGenerator::generate_colgrp_6t() {
     // data in, write enables, output enables, data out, supplies.  From 8:1
     // each leaf makes its own select from the complement (local_ysel): the
     // block has no select pins, and yselA stays a port of the tile only.
+    // From 16:1 the leaves decode it from two predecoded groups the block
+    // takes once, after the leaves' bitlines: yselA[0..3] and yselA[4..].
     const bool local_ysel = mux >= 8;
+    const bool predecode = mux >= 16;
     instances << "XIO_A";
     for (int r = 0; r < mux; ++r) {
         instances << " BL_A[" << r << "] BLN_A[" << r << "]";
+        if (predecode) continue;
         if (!local_ysel) instances << " yselA[" << r << "]";
         instances << " yselnA[" << r << "]";
+    }
+    if (predecode) {
+        instances << " ";
+        append_indexed_tokens(instances, "yselA[", 4 + mux / 4, "]");
     }
     // iocol_sram_6t at 4:1, iocol_sram_6t_x<mux> otherwise.
     instances << " blprechnA sae_A DA wrenaA wrenanA oe_outA oeb_outA QA VDD VSS iocol_sram_6t"
@@ -742,8 +753,9 @@ std::string SpiceGenerator::generate_stacked_colgrp_6t() {
     for (const char* name : {"wrenaA", "wrenanA", "oeb_outA", "oe_outA", "blprechnA", "sae_A"}) {
         append_indexed_ports(ports, std::string(name) + "[", config_.num_banks, "]");
     }
-    append_indexed_ports(ports, "yselnA[", mux * config_.num_banks, "]");
-    append_indexed_ports(ports, "yselA[", mux * config_.num_banks, "]");
+    const int ysel_w = mux >= 16 ? 4 + mux / 4 : mux;  // a bank's select bus (generate_colgrp_6t)
+    append_indexed_ports(ports, "yselnA[", ysel_w * config_.num_banks, "]");
+    append_indexed_ports(ports, "yselA[", ysel_w * config_.num_banks, "]");
     append_ports(ports, {"VDD", "VSS"});
 
     std::stringstream instances;
@@ -754,8 +766,8 @@ std::string SpiceGenerator::generate_stacked_colgrp_6t() {
             append_indexed_tokens(instances, "WLA[", rows, "]", bank * rows);
             instances << " DA[" << bit << "] QA[" << bit << "] wrenaA[" << b << "] wrenanA[" << b
                       << "] oeb_outA[" << b << "] oe_outA[" << b << "] blprechnA[" << b << "] ";
-            append_indexed_tokens(instances, "yselnA[", mux, "]", bank * mux);
-            append_indexed_tokens(instances, "yselA[", mux, "]", bank * mux);
+            append_indexed_tokens(instances, "yselnA[", ysel_w, "]", bank * ysel_w);
+            append_indexed_tokens(instances, "yselA[", ysel_w, "]", bank * ysel_w);
             instances << " sae_A[" << b << "] VDD VSS colgrp_sram_6t\n";
         }
         // The stack's two ends each carry a dummy row on its wordlines.

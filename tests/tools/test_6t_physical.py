@@ -120,10 +120,17 @@ class SixTTileTests(unittest.TestCase):
             _, y0, _, y1 = boundary(tile)
             self.assertAlmostEqual(y1 - y0, mux * 0.27)
             names = {label.text for label in tile.labels}
-            # From 8:1 each leaf makes YSEL from YSELN: only the complements are pins.
-            self.assertEqual({n for n in names if n.startswith("yselnA[")}, {f"yselnA[{r}]" for r in range(mux)})
-            self.assertFalse({n for n in names if n.startswith("yselA[")})
-            self.assertEqual(leaf_net(f"yselnA[{mux - 1}]", 1, 0, ROWS // 2, 4, mux=mux), f"yseln_A[{2 * mux - 1}]")
+            if mux == 8:
+                # Each leaf makes YSEL from YSELN: only the complements are pins.
+                self.assertEqual({n for n in names if n.startswith("yselnA[")}, {f"yselnA[{r}]" for r in range(mux)})
+                self.assertFalse({n for n in names if n.startswith("yselA[")})
+                self.assertEqual(leaf_net(f"yselnA[{mux - 1}]", 1, 0, ROWS // 2, 4, mux=mux), f"yseln_A[{2 * mux - 1}]")
+            else:
+                # Two predecoded groups on the select bus: 4 + mux/4 pins, no complements.
+                self.assertEqual({n for n in names if n.startswith("yselA[")}, {f"yselA[{r}]" for r in range(4 + mux // 4)})
+                self.assertFalse({n for n in names if n.startswith("yselnA[")})
+                # Bank 1's bus starts after bank 0's 4 + mux/4 lines.
+                self.assertEqual(leaf_net("yselA[7]", 1, 0, ROWS // 2, 4, mux=mux), f"ysel_A[{4 + mux // 4 + 7}]")
 
     def test_m5_supply_stripes_run_the_tile_on_its_straps(self):
         # 0.12 um M5 stripes the tile's height (so abutted tiles make them the

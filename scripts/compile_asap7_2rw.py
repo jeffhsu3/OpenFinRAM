@@ -326,10 +326,12 @@ def leaf_net(name, bank, bit, wordlines, bits, shared_b=False, segment=None, mux
     wl = WORDLINE.fullmatch(name)
     if wl:
         return f"{wordline_bus(wl[1], half_of(bit, bits), segment)}[{bank * 2 * wordlines + int(wl[2])}]"
-    mux_ratio = mux
+    # A bank's select bus: a line a column, or from 16:1 (6T) the two
+    # predecoded groups the controller's YSEL_W carries.
+    stride = 4 + mux // 4 if mux >= 16 else mux
     mux = re.fullmatch(r"(yseln|ysel)([AB])\[(\d+)\]", name)
     if mux:
-        return f"{mux[1]}_{mux[2]}[{bank * mux_ratio + int(mux[3])}]"
+        return f"{mux[1]}_{mux[2]}[{bank * stride + int(mux[3])}]"
     ctrl = re.fullmatch(r"(wrena|wrenan|oeb_out|oe_out|blprechn|sae_)([AB])(R?)", name)
     if ctrl:
         signal = ctrl[1].rstrip("_")

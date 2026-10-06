@@ -19,6 +19,12 @@ module ctrl_decode #(
     parameter COLUMN_MUX = 4,
     parameter WL_BUF     = 5,
     parameter SAE_BUF    = 15,
+    // 6T at 16:1: the leaves decode their own select from two one-hot
+    // groups, carried on ysel_A[bank][0 +: 4] (the low two column bits) and
+    // ysel_A[bank][4 +: COLUMN_MUX/4] (the rest); yseln_A is then unused.
+    parameter YSEL_PREDECODE = 0,
+    // The select bus a bank takes: one line a column, or the two groups.
+    parameter YSEL_W     = (YSEL_PREDECODE != 0) ? 4 + COLUMN_MUX / 4 : COLUMN_MUX,  // not to be overridden
     parameter SLICES     = (2 * NUM_WL) / 4  // four wordlines per driver slice; not to be overridden
 )(
     input  logic                  clk,
@@ -31,8 +37,8 @@ module ctrl_decode #(
     output logic [NUM_BANK-1:0][SLICES-1:0]     sel_hi_A,
     output logic [3:0]                          sel_lo_A,
     output logic [NUM_BANK-1:0]                 blprechn_A,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] ysel_A,
-    output logic [NUM_BANK-1:0][COLUMN_MUX-1:0] yseln_A,
+    output logic [NUM_BANK-1:0][YSEL_W-1:0]     ysel_A,
+    output logic [NUM_BANK-1:0][YSEL_W-1:0]     yseln_A,
     output logic [NUM_BANK-1:0]                 wrena_A,
     output logic [NUM_BANK-1:0]                 wrenan_A,
     output logic [NUM_BANK-1:0]                 oeb_out_A,
@@ -169,8 +175,15 @@ module ctrl_decode #(
 
         if (read_req || write_req) begin
             blprechn_A[slice_sel_r] = prech_off;
-            ysel_A[slice_sel_r]     = ONEHOT_BASE << col_sel_r;
-            yseln_A[slice_sel_r]    = ~ysel_A[slice_sel_r];
+            if (YSEL_PREDECODE != 0) begin
+                ysel_A[slice_sel_r][col_sel_r[1:0]]     = 1'b1;
+                ysel_A[slice_sel_r][4 + (col_sel_r >> 2)] = 1'b1;
+            end else begin
+                ysel_A[slice_sel_r] = ONEHOT_BASE << col_sel_r;
+            end
+            // (Unused with the groups, but each its own driven net: tied
+            // constants would share one tie cell's output across pins.)
+            yseln_A[slice_sel_r] = ~ysel_A[slice_sel_r];
 
             if (read_req) begin
                 oeb_out_A[slice_sel_r] = oe_n_A;

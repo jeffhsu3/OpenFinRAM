@@ -109,17 +109,26 @@ def io_spec(bitcell: gdstk.Cell, selects: int = MUX_ROWS) -> SidewaysIoColumnSpe
         heights[net] = round(1000 * (float(b0) + float(b1)) / 2 - 1000 * y0, 1)
     if round(1000 * (y1 - y0)) != SidewaysIoColumnSpec.row_pitch:
         raise RuntimeError(f"{bitcell.name}: a {round(1000 * (y1 - y0))} nm row; the block's leaves are 270 nm")
-    # 4:1 takes the compact logic: the one-row write driver under the sense
-    # amplifier, the 270 nm output latch beside them (1998 nm against 2862).
-    # From 8:1 each leaf makes its own YSEL from YSELN, which halves the
-    # select tracks that set the leaves' width (1944 -> 1728 nm at 8:1,
-    # 2484 -> 1944 at 16:1); the block then has no YSEL pins.
+    # The compact logic: the one-row write driver under the sense amplifier,
+    # the 270 nm output latch beside them at 4:1 (1998 nm against 2862),
+    # above them from 8:1.  From 8:1 each leaf also makes its own YSEL from
+    # YSELN, which halves the select tracks that set the leaves' width; the
+    # block then has no YSEL pins (8:1 1674 nm wide).  From 16:1 each leaf
+    # decodes YSELN from two predecoded groups the block takes once (YPA[0..3],
+    # YPB[...], on the tile's yselA[0..]): 8 select tracks, 1782 nm.
     return SidewaysIoColumnSpec(selects=selects, bitline_entry=(heights["BL"], heights["BLN"]),
-                                compact=selects == 4, local_ysel=selects >= 8)  # fmt: skip
+                                compact=True, local_ysel=selects >= 8, predecode=selects >= 16)  # fmt: skip
 
 
 def iocol_pin_name(pin: str) -> str:
-    """The tile's name for a block pin: ``BL[2]`` -> ``BL_A[2]``, ``YSEL[1]`` -> ``yselA[1]``."""
+    """The tile's name for a block pin: ``BL[2]`` -> ``BL_A[2]``, ``YSEL[1]`` -> ``yselA[1]``.
+
+    The predecoded groups ride the select bus: ``YPA[k]`` -> ``yselA[k]``,
+    ``YPB[k]`` -> ``yselA[4 + k]`` (the controller's YSEL_PREDECODE).
+    """
+    group = re.fullmatch(r"YP([AB])\[(\d+)\]", pin)
+    if group:
+        return f"yselA[{int(group[2]) + (4 if group[1] == 'B' else 0)}]"
     match = re.fullmatch(r"(BL|BLN|YSEL|YSELN)\[(\d+)\]", pin)
     if match:
         bus = match.group(1)

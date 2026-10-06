@@ -269,14 +269,18 @@ std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options)
         {"sel_hi_A", pf(strips * 4.0 * nand_fins, strips)},
     };
     // Fins per IO block (tech/spice/sram_6t_iocolumn.sp, iocol_block_6t*).
-    // The 4:1 block's output latch drives Q through one 3-fin tristate (the
-    // compact block's 270 nm latch), the taller blocks' through two.
-    const double oe_fins = mux == 4 ? 3 : 6;
+    // The compact block's 270 nm output latch drives Q through one 3-fin
+    // tristate (every mux ratio).
+    const double oe_fins = 3;
     // From 8:1 a leaf makes YSEL itself (local_ysel): YSELN drives its
     // transmission gates' pFETs and the inverter, YSEL leaves the block.
+    // From 16:1 ysel_A carries two predecoded groups, each line a NAND input
+    // in four leaves (3n + 3p fins each), and yseln_A leaves the block.
     const bool local_ysel = mux >= 8;
+    const bool predecode = mux >= 16;
     const std::map<std::string, double> io_fins = {
-        {"ysel_A", local_ysel ? 0 : 6}, {"yseln_A", local_ysel ? 12 : 6},
+        {"ysel_A", predecode ? 24 : local_ysel ? 0 : 6},
+        {"yseln_A", predecode ? 0 : local_ysel ? 12 : 6},
         {"blprechn_A", 6.0 * mux}, {"sae_A", 18},
         {"wrena_A", 6}, {"wrenan_A", 12}, {"oe_out_A", oe_fins}, {"oeb_out_A", oe_fins}};
     for (const auto& [pin, fins] : io_fins) loads[pin] = pf(fins * ios, ios);
