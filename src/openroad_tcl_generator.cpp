@@ -292,6 +292,12 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
             file << "set_io_pin_constraint -pin_names [dp_port_inputs B] -region right:* -group -order\n";
         }
     }
+    // The inputs stand 192 nm apart, the macro's side-pin pitch
+    // (compile_asap7_2rw.py SIDE_PIN_PITCH, a whole number of M4 and M6
+    // tracks), so each macro pin is level with its input and the router
+    // drops straight onto it: at the default 96 the two pitches drifted
+    // apart until the address nets' M5 jogs overlapped.
+    const std::string min_distance = single_port ? "" : " -min_distance 0.192";
     if (band_.enabled) {
         // The strips go in as fixed physical instances with a keep-out; the
         // band's bottom and top edges touch the column tiles, so its pins
@@ -299,9 +305,9 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         file << "source {" << join_path(band_.dir, "band.tcl") << "}\n";
         file << "band_place_strips " << height << "\n";
         file << "cut_rows -halo_width_x " << band_.halo_x << " -halo_width_y " << band_.halo_y << "\n";
-        file << "place_pins -hor_layers M4 -ver_layers M5 -exclude bottom:* -exclude top:*\n\n";
+        file << "place_pins -hor_layers M4 -ver_layers M5 -exclude bottom:* -exclude top:*" << min_distance << "\n\n";
     } else {
-        file << "place_pins -hor_layers M4 -ver_layers M5\n\n";
+        file << "place_pins -hor_layers M4 -ver_layers M5" << min_distance << "\n\n";
     }
 
     // Global connections

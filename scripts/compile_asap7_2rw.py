@@ -2019,7 +2019,14 @@ def jog_patches(shape, touching):
 #: Side-edge pins: track pitch and wire width per horizontal layer (nm), and
 #: how far a pin reaches into the macro.
 SIDE_PIN_LAYERS = {4: (48, 24), 6: (64, 32)}
-SIDE_PIN_DEPTH, SIDE_PIN_TRACKS = 69, 2
+SIDE_PIN_DEPTH = 69
+#: The side pins' pitch: the controller's own input pitch (openroad_tcl_generator's
+#: place_pins -min_distance), and a whole number of M4 and M6 tracks, so each
+#: pin stands level with its controller input.  At two M6 tracks (128 nm)
+#: against the controller's 96 the offsets grew a pin at a time until the
+#: address nets' M5 jogs onto the controller's edge column overlapped
+#: (x16x8x1 with narrower tiles: M5 shorts on A[0..2] at a 0.3 um margin).
+SIDE_PIN_PITCH = 192
 
 
 def single_port_name(net):
@@ -2063,8 +2070,8 @@ def side_pin_placements(external, probes, width, height, layer, ports=("A", "B")
             controls += [n for n in ("clk", "rst_n") if n in external]
         groups.append(controls)
         groups.sort(key=lambda group: sum(map(target, group)) / len(group))
-        sep = SIDE_PIN_TRACKS * pitch
-        y_next = pitch * SIDE_PIN_TRACKS
+        sep = SIDE_PIN_PITCH
+        y_next = SIDE_PIN_PITCH
         for group in groups:
             centre = sum(map(target, group)) / len(group)
             start = max(round((centre - (len(group) - 1) * sep / 2) / pitch) * pitch, y_next)
