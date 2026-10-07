@@ -702,9 +702,11 @@ TEST(SpiceTemplates6T, DeeperMuxesTakeTheirOwnIoBlock) {
         EXPECT_EQ(count_occurrences(colgrp, io + "\n"), 1U);
         EXPECT_EQ(instance_node_count(colgrp, "XIO_A"), subckt_port_count(wrapper));
         EXPECT_EQ(count_occurrences(subckt_text(deck, "array_sram_6t"), "sram_cell_row_6t"), mux);
-        // Every bank its own mux's selects.
+        // Every bank its own mux's selects, predecoded to 4 + mux/4 at 16:1.
+        const int selects = mux >= 16 ? 4 + mux / 4 : mux;
         const std::string stack = subckt_text(deck, "stacked_colgrp_x4x1x2");
-        EXPECT_NE(stack.find("yselA[" + std::to_string(2 * mux - 1) + "]"), std::string::npos);
+        EXPECT_NE(stack.find("yselA[" + std::to_string(2 * selects - 1) + "]"), std::string::npos);
+        EXPECT_EQ(stack.find("yselA[" + std::to_string(2 * selects) + "]"), std::string::npos);
         // A cell per mux row along the wordline: one bit a stack, `mux` cells.
         EXPECT_FALSE(subckt_text(deck, "wl_strip_c" + std::to_string(mux) + "_x1").empty());
     }

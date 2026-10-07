@@ -297,7 +297,9 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     // tracks), so each macro pin is level with its input and the router
     // drops straight onto it: at the default 96 the two pitches drifted
     // apart until the address nets' M5 jogs overlapped.
-    const std::string min_distance = single_port ? "" : " -min_distance 0.192";
+    // The band has only its two side edges for every pin, too few slots at 192.
+    const std::string min_distance =
+        single_port || band_.enabled ? "" : " -min_distance 0.192";
     if (band_.enabled) {
         // The strips go in as fixed physical instances with a keep-out; the
         // band's bottom and top edges touch the column tiles, so its pins
@@ -328,7 +330,12 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         file << "catch {remove_nets -net zero_}\n";
     }
     file << "set_voltage 0.7\n";
-    file << "tapcell -distance 14 -tapcell_master TAPCELL_ASAP7_75t_R";
+    // tapcell starts even rows `distance` in and odd rows twice that, dropping any tap
+    // past the row's end, so 14 um places none in a die a few microns wide. Half the
+    // width puts one mid-row in every even row (each shares its N-well with the
+    // flipped row above) and the top row, well within ACTIVE.LUP.1's 30 um.
+    file << "tapcell -distance " << std::min(14.0, width / 2.0)
+         << " -tapcell_master TAPCELL_ASAP7_75t_R";
     if (band_.enabled) {
         // tapcell cuts the rows around blocks again, with a 2 um halo unless told.
         file << " -halo_width_x " << band_.halo_x << " -halo_width_y " << band_.halo_y;

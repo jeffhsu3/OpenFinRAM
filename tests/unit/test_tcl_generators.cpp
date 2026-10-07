@@ -362,7 +362,7 @@ TEST(OpenRoadTclGeneratorTest, BandTakesTheStripsInAndHandsTheirPinsTheSelects) 
     const auto place = script.find("band_place_strips ");
     const auto cut = script.find("cut_rows -halo_width_x 0.216 -halo_width_y 0.270");
     const auto pins = script.find("place_pins -hor_layers M4 -ver_layers M5 -exclude bottom:* -exclude top:*");
-    const auto tap = script.find("tapcell -distance 14 -tapcell_master TAPCELL_ASAP7_75t_R -halo_width_x");
+    const auto tap = script.find("tapcell -distance 3.672 -tapcell_master TAPCELL_ASAP7_75t_R -halo_width_x");
     const auto connect = script.find("band_connect_strips");
     const auto route = script.find("global_route -critical_nets_percentage 0");
     const auto remove = script.find("band_remove_strips");

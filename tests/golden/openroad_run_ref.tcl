@@ -38,7 +38,7 @@ add_global_connection -net VSS -pin_pattern {^VSS$} -ground
 global_connect
 
 set_voltage 0.7
-tapcell -distance 14 -tapcell_master TAPCELL_ASAP7_75t_R
+tapcell -distance 5.000 -tapcell_master TAPCELL_ASAP7_75t_R
 
 set physical_delay_cells [get_cells -hierarchical -quiet {physical_delay_*}]
 if {[llength $physical_delay_cells] != 108} { error "PERIPHERY_STRUCTURE: expected 108 named physical delay inverters, found [llength $physical_delay_cells]" }
