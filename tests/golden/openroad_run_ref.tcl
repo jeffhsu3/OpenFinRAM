@@ -39,6 +39,30 @@ global_connect
 
 set_voltage 0.7
 tapcell -distance 5.000 -tapcell_master TAPCELL_ASAP7_75t_R
+proc flush_taps_to_row_ends {master} {
+    set block [ord::get_db_block]
+    set rows [$block getRows]
+    foreach inst [$block getInsts] {
+        if {[[$inst getMaster] getName] ne $master} { continue }
+        lassign [$inst getLocation] x y
+        set w [[$inst getMaster] getWidth]
+        foreach row $rows {
+            set box [$row getBBox]
+            if {$y != [$box yMin] || $x < [$box xMin] || $x + $w > [$box xMax]} { continue }
+            set site [[$row getSite] getWidth]
+            set dx 0
+            if {[$box xMax] - ($x + $w) == $site} { set dx $site }
+            if {$x - [$box xMin] == $site} { set dx [expr {-$site}] }
+            if {$dx != 0} {
+                set status [$inst getPlacementStatus]
+                $inst setPlacementStatus PLACED
+                $inst setLocation [expr {$x + $dx}] $y
+                $inst setPlacementStatus $status
+            }
+        }
+    }
+}
+flush_taps_to_row_ends TAPCELL_ASAP7_75t_R
 
 set physical_delay_cells [get_cells -hierarchical -quiet {physical_delay_*}]
 if {[llength $physical_delay_cells] != 108} { error "PERIPHERY_STRUCTURE: expected 108 named physical delay inverters, found [llength $physical_delay_cells]" }

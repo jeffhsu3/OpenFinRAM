@@ -340,7 +340,36 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         // tapcell cuts the rows around blocks again, with a 2 um halo unless told.
         file << " -halo_width_x " << band_.halo_x << " -halo_width_y " << band_.halo_y;
     }
-    file << "\n\n";
+    file << "\n";
+    // tapcell puts taps on even sites only (-disallow_one_site_gaps does not
+    // move them): in a row of an odd number of sites the boundary rows' end
+    // tap leaves one site, and the half-site filler there has the tap's
+    // opposite implants beside it and the edge on its other side
+    // (NSELECT.W.1/PSELECT.W.1).  Such a tap slides flush with its row's end.
+    file << "proc flush_taps_to_row_ends {master} {\n"
+         << "    set block [ord::get_db_block]\n"
+         << "    set rows [$block getRows]\n"
+         << "    foreach inst [$block getInsts] {\n"
+         << "        if {[[$inst getMaster] getName] ne $master} { continue }\n"
+         << "        lassign [$inst getLocation] x y\n"
+         << "        set w [[$inst getMaster] getWidth]\n"
+         << "        foreach row $rows {\n"
+         << "            set box [$row getBBox]\n"
+         << "            if {$y != [$box yMin] || $x < [$box xMin] || $x + $w > [$box xMax]} { continue }\n"
+         << "            set site [[$row getSite] getWidth]\n"
+         << "            set dx 0\n"
+         << "            if {[$box xMax] - ($x + $w) == $site} { set dx $site }\n"
+         << "            if {$x - [$box xMin] == $site} { set dx [expr {-$site}] }\n"
+         << "            if {$dx != 0} {\n"
+         << "                set status [$inst getPlacementStatus]\n"
+         << "                $inst setPlacementStatus PLACED\n"
+         << "                $inst setLocation [expr {$x + $dx}] $y\n"
+         << "                $inst setPlacementStatus $status\n"
+         << "            }\n"
+         << "        }\n"
+         << "    }\n"
+         << "}\n"
+         << "flush_taps_to_row_ends TAPCELL_ASAP7_75t_R\n\n";
 
     if (single_port) {
         // Preserve the explicitly instantiated physical delay line while allowing
