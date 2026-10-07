@@ -1138,6 +1138,16 @@ def run(args):
         # tile's bottom one) join theirs end to end, so only the end tiles'
         # are routed.
         _, y_lo, _, y_hi = columns.boundary_box(cell)
+        # A supply component reaching from under the band is offered where the
+        # tile is its own, short of the band's edge: one wholly under it keeps
+        # its pin and joins the controller's there (the seam ties of 369624b
+        # merged a VSS rail under the band with two stubs below it, and the
+        # router chose its access on the rail: DRT-1231 on x8x2x2).
+        span_lo, span_hi = y_lo, y_hi
+        if banding:
+            band_lo, band_hi = band_edges(cell)
+            span_lo = y_lo if band_lo is None else band_lo
+            span_hi = y_hi if band_hi is None else band_hi
 
         def through(polys, y_lo=y_lo, y_hi=y_hi):
             return (min(p.bounding_box()[0][1] for p in polys) <= y_lo + 0.001
@@ -1148,7 +1158,7 @@ def run(args):
             shift=(0.0, HALF_NM) if args.band is not None else (0.0, 0.0),
             abutted_supply=None if bottom or top else through,
             snap_half_nm=single,
-            supply_span=(y_lo, y_hi),
+            supply_span=(span_lo, span_hi),
         ))  # fmt: skip
     leaf = next(iter(variants.values()))[0]
     size = next(iter(variants.values()))[4]
@@ -1661,19 +1671,22 @@ def end_row_spans(tile, shared_b):
     return sorted(spans)
 
 
+def band_edges(tile):
+    """Where the band takes over a tile's IO columns: ``(bottom, top)``, None at an end without a dummy row."""
+    pitch, offset = _bitcell_row()
+    _, y0, _, y1 = columns.boundary_box(tile)
+    top = y1 - pitch + offset if y1 > 4 * pitch + 1e-6 else None  # a dummy row above the array
+    bottom = y0 + pitch + offset if y0 < -1e-6 else None
+    return bottom, top
+
+
 def notch_band_edges(tile, spans):
     """Cut the tile's outline back to its IO blocks over the IO columns, at each end with a dummy row."""
-    pitch, offset = _bitcell_row()
     x0, y0, x1, y1 = columns.boundary_box(tile)
-    rows_top = y1 - pitch if y1 > 4 * pitch + 1e-6 else None  # a dummy row above the array
-    rows_bottom = y0 + pitch if y0 < -1e-6 else None
-    cut = []
-    for edge, io_edge in ((rows_top, None if rows_top is None else rows_top + offset),
-                          (rows_bottom, None if rows_bottom is None else rows_bottom + offset)):  # fmt: skip
-        if edge is None:
-            continue
-        band = (io_edge, y1) if edge is rows_top else (y0, io_edge)
-        cut.append(gdstk.rectangle((x0, band[0]), (x1, band[1])))
+    bottom, top = band_edges(tile)
+    cut = [gdstk.rectangle((x0, top), (x1, y1))] if top is not None else []
+    if bottom is not None:
+        cut.append(gdstk.rectangle((x0, y0), (x1, bottom)))
     if not cut:
         return
     keep = [gdstk.rectangle((a, y0), (b, y1)) for a, b in spans]
