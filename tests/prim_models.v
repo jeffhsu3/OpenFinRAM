@@ -25,3 +25,7 @@ endmodule
 module AND3x1_ASAP7_75t_R (input A, B, C, output Y);
     assign Y = A & B & C;
 endmodule
+
+module AND4x1_ASAP7_75t_R (input A, B, C, D, output Y);
+    assign Y = A & B & C & D;
+endmodule

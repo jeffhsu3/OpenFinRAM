@@ -6,6 +6,7 @@ module tb_ctrl_decode_dp #(
     parameter int NUM_WL     = 8,
     parameter int NUM_BANK   = 1,
     parameter int COLUMN_MUX = 4,
+    parameter int ROW_PREDECODE = 3,  // address bits per sel_hi predecode group
     parameter int SHARED_B   = 0   // banks share port B's IO block in pairs
 );
     localparam int B_IO = SHARED_B ? NUM_BANK / 2 : NUM_BANK;
@@ -34,7 +35,8 @@ module tb_ctrl_decode_dp #(
 
     ctrl_decode #(
         .ADDR_WIDTH(ADDR_WIDTH), .NUM_WL(NUM_WL), .NUM_BANK(NUM_BANK),
-        .COLUMN_MUX(COLUMN_MUX), .WL_BUF(2), .SAE_BUF(2), .SHARED_B(SHARED_B)
+        .COLUMN_MUX(COLUMN_MUX), .WL_BUF(2), .SAE_BUF(2), .SHARED_B(SHARED_B),
+        .ROW_PREDECODE(ROW_PREDECODE)
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .ce_n_A(ce_n_A), .ce_n_B(ce_n_B),

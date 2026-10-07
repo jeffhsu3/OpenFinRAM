@@ -138,6 +138,21 @@ TEST(YosysTclGeneratorTest, DualPortSharesPortBIoOnlyWhenAsked) {
     EXPECT_EQ(script(false).find("SHARED_B"), std::string::npos);
 }
 
+TEST(YosysTclGeneratorTest, RowPredecodeGroupSetOnlyWhenNotThree) {
+    YosysTclGenerator gen;
+    auto script = [&](bool one_port, unsigned bits) {
+        return gen.generate_script(
+            std::string(REPO_ROOT) + "/tech/verilog_dp", "tmp/syn_dp_fixed",
+            "ADDR_WIDTH=7,NUM_WL=8,NUM_BANK=2,COLUMN_MUX=4,WL_BUF=3,SAE_BUF=2",
+            7, 8, 2, 4, 3, 2, 24.5, 2500.0, "", std::string(REPO_ROOT) + "/tech/lib",
+            /*single_port=*/false, /*shared_port_b=*/false, one_port, bits);
+    };
+    EXPECT_NE(script(false, 4).find("-set SAE_BUF 2 -set ROW_PREDECODE 4 ctrl_decode"),
+              std::string::npos);
+    EXPECT_NE(script(true, 2).find("-set ROW_PREDECODE 2 ctrl_decode"), std::string::npos);
+    EXPECT_EQ(script(false, 3).find("ROW_PREDECODE"), std::string::npos);
+}
+
 TEST(YosysTclGeneratorTest, DualPortChecksAndNamesExactPhysicalStructure) {
     YosysTclGenerator gen;
     const std::string script = gen.generate_script(

@@ -52,7 +52,8 @@ std::string YosysTclGenerator::generate_script(
     const std::string& tech_lib_path,
     bool single_port,
     bool shared_port_b,
-    bool one_port) const {
+    bool one_port,
+    unsigned row_predecode_bits) const {
 
     auto libs = resolve_liberty_files(platform_path, tech_lib_path);
     std::ostringstream lib_list;
@@ -103,8 +104,9 @@ std::string YosysTclGenerator::generate_script(
             << " -set COLUMN_MUX " << column_mux
             << " -set WL_BUF " << num_wl_buf
             << " -set SAE_BUF " << num_sae_buf
-            << (shared_port_b ? " -set SHARED_B 1" : "")
-            << predecode
+            << (shared_port_b ? " -set SHARED_B 1" : "");
+        if (row_predecode_bits != 3) oss << " -set ROW_PREDECODE " << row_predecode_bits;
+        oss << predecode
             << " ctrl_decode\n";
     }
     oss << "hierarchy -check -top ctrl_decode\n";

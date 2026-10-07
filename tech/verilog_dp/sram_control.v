@@ -26,6 +26,8 @@ module ctrl_decode #(
     parameter COLUMN_MUX = 4,
     parameter WL_BUF     = 5,
     parameter SAE_BUF    = 15,
+    // The address bits of a group in the slice decode (sel_hi): 2, 3 or 4.
+    parameter ROW_PREDECODE = 3,
     parameter SLICES     = (2 * NUM_WL) / 4,  // four wordlines per driver slice; not to be overridden
     parameter SHARED_B   = 0,
     parameter B_IO       = (SHARED_B != 0) ? NUM_BANK / 2 : NUM_BANK  // port-B IO blocks; not to be overridden
@@ -175,9 +177,11 @@ module ctrl_decode #(
     sram_row_decode #(.NUM_WL(4), .ADDR_BITS(2)) u_lo_B
         (.A(wl_index_B[1:0]), .SEL(lo_B));
     if (SLICES > 1) begin : g_hi
-        sram_row_decode #(.NUM_WL(SLICES), .ADDR_BITS(WL_BITS - 2)) u_hi_A
+        sram_row_decode #(.NUM_WL(SLICES), .ADDR_BITS(WL_BITS - 2),
+                          .PREDECODE_BITS(ROW_PREDECODE)) u_hi_A
             (.A(wl_index_A[WL_BITS-1:2]), .SEL(hi_A));
-        sram_row_decode #(.NUM_WL(SLICES), .ADDR_BITS(WL_BITS - 2)) u_hi_B
+        sram_row_decode #(.NUM_WL(SLICES), .ADDR_BITS(WL_BITS - 2),
+                          .PREDECODE_BITS(ROW_PREDECODE)) u_hi_B
             (.A(wl_index_B[WL_BITS-1:2]), .SEL(hi_B));
     end else begin : g_one_slice
         assign hi_A = 1'b1;

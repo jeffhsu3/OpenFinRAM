@@ -49,7 +49,10 @@ public:
         bool shared_port_b = false,
         // The generated single-port macro: port A's controller alone
         // (tech/verilog_dp/sram_control_1p.v).
-        bool one_port = false) const;
+        bool one_port = false,
+        // Slice-driven macros: address bits per sel_hi predecode group
+        // (ROW_PREDECODE); 3 is the RTL's default and is not set.
+        unsigned row_predecode_bits = 3) const;
 };
 
 } // namespace OpenFinRAM

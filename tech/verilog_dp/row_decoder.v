@@ -9,7 +9,8 @@ module sram_row_decode #(
     input  wire [ADDR_BITS-1:0] A,
     output wire [NUM_WL-1:0] SEL
 );
-    // Balance groups: 5 address bits -> 3+2, 7 -> 3+2+2, 8 -> 3+3+2.
+    // Balance groups: 5 address bits -> 3+2, 7 -> 3+2+2, 8 -> 3+3+2; with
+    // 4-bit groups 7 -> 4+3, 9 -> 3+3+3, 12 -> 4+4+4 (three groups, AND3).
     localparam integer GROUPS = (ADDR_BITS + PREDECODE_BITS - 1) / PREDECODE_BITS;
     localparam integer BASE_BITS = ADDR_BITS / GROUPS;
     localparam integer EXTRA = ADDR_BITS % GROUPS;
@@ -17,7 +18,7 @@ module sram_row_decode #(
     (* keep = "true" *) wire [GROUPS*STRIDE-1:0] predecoded;
     wire [ADDR_BITS-1:0] inverted;
     if (NUM_WL < 1 || ADDR_BITS < 1 || ADDR_BITS < $clog2(NUM_WL)
-        || (PREDECODE_BITS != 2 && PREDECODE_BITS != 3)) begin : g_bad_parameters
+        || PREDECODE_BITS < 2 || PREDECODE_BITS > 4) begin : g_bad_parameters
         invalid_sram_row_decoder_parameters u_invalid ();
     end
     for (genvar bit_index = 0; bit_index < ADDR_BITS; bit_index = bit_index + 1) begin : g_invert
@@ -35,7 +36,11 @@ module sram_row_decode #(
                 end
                 // Hard gates make the predecode boundary survive ABC;
                 // keeping only wires permits it to rebuild flat comparators.
-                if (BITS == 3) begin : g_three
+                if (BITS == 4) begin : g_four
+                    (* keep = "true", physical_predecode = 1 *)
+                    AND4x1_ASAP7_75t_R u_term (.A(literals[0]), .B(literals[1]), .C(literals[2]),
+                                             .D(literals[3]), .Y(predecoded[g*STRIDE+term]));
+                end else if (BITS == 3) begin : g_three
                     (* keep = "true", physical_predecode = 1 *)
                     AND3x1_ASAP7_75t_R u_term (.A(literals[0]), .B(literals[1]), .C(literals[2]),
                                              .Y(predecoded[g*STRIDE+term]));

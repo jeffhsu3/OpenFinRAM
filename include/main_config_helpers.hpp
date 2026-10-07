@@ -32,6 +32,9 @@ struct MainCliOptions {
     // as placement keep-outs, the band abutting both stacks of column tiles
     // (--strips-in-controller).
     bool strips_in_controller = false;
+    // Address bits per predecode group of the controller's slice decode
+    // (sel_hi): 2, 3 or 4 (--row-predecode-bits).
+    unsigned row_predecode_bits = 3;
     bool skip_characterization = true;
     std::string output_sp_name = "sram.sp";
     std::string output_gds_name = "sram.gds";

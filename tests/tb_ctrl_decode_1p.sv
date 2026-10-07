@@ -6,7 +6,8 @@
 module tb_ctrl_decode_1p #(
     parameter int NUM_WL     = 8,
     parameter int NUM_BANK   = 1,
-    parameter int COLUMN_MUX = 4
+    parameter int COLUMN_MUX = 4,
+    parameter int ROW_PREDECODE = 3   // address bits per sel_hi predecode group
 );
     localparam int ROW_BITS   = $clog2(NUM_WL);
     localparam int COL_BITS   = (COLUMN_MUX > 1) ? $clog2(COLUMN_MUX) : 1;
@@ -26,7 +27,8 @@ module tb_ctrl_decode_1p #(
 
     ctrl_decode #(
         .ADDR_WIDTH(ADDR_WIDTH), .NUM_WL(NUM_WL), .NUM_BANK(NUM_BANK),
-        .COLUMN_MUX(COLUMN_MUX), .WL_BUF(2), .SAE_BUF(2)
+        .COLUMN_MUX(COLUMN_MUX), .WL_BUF(2), .SAE_BUF(2),
+        .ROW_PREDECODE(ROW_PREDECODE)
     ) dut (
         .clk(clk), .rst_n(rst_n),
         .ce_n_A(ce_n_A), .we_n_A(we_n_A), .oe_n_A(oe_n_A), .A_A(A_A),

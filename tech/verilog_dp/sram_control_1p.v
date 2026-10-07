@@ -19,6 +19,8 @@ module ctrl_decode #(
     parameter COLUMN_MUX = 4,
     parameter WL_BUF     = 5,
     parameter SAE_BUF    = 15,
+    // The address bits of a group in the slice decode (sel_hi): 2, 3 or 4.
+    parameter ROW_PREDECODE = 3,
     // 6T at 16:1: the leaves decode their own select from two one-hot
     // groups, carried on ysel_A[bank][0 +: 4] (the low two column bits) and
     // ysel_A[bank][4 +: COLUMN_MUX/4] (the rest); yseln_A is then unused.
@@ -116,7 +118,8 @@ module ctrl_decode #(
     sram_row_decode #(.NUM_WL(4), .ADDR_BITS(2)) u_lo
         (.A(wl_index[1:0]), .SEL(lo));
     if (SLICES > 1) begin : g_hi
-        sram_row_decode #(.NUM_WL(SLICES), .ADDR_BITS(WL_BITS - 2)) u_hi
+        sram_row_decode #(.NUM_WL(SLICES), .ADDR_BITS(WL_BITS - 2),
+                          .PREDECODE_BITS(ROW_PREDECODE)) u_hi
             (.A(wl_index[WL_BITS-1:2]), .SEL(hi));
     end else begin : g_one_slice
         assign hi = 1'b1;

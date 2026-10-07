@@ -46,6 +46,13 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .default_value(false)
         .implicit_value(true);
 
+    program.add_argument("--row-predecode-bits")
+        .help("Address bits per predecode group of the controller's wordline-slice decode: "
+              "2, 3 (default) or 4.  4-bit groups are for 256 or more wordlines a bank, where "
+              "they drop a group: smaller arrays decode slower and larger with them.")
+        .default_value(unsigned{3})
+        .scan<'u', unsigned>();
+
     program.add_argument("--strips-in-controller")
         .help("Two-port: place and route the controller around the wordline driver strips, "
               "its band filling the space between the two stacks of column tiles.")
@@ -146,6 +153,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.bitcell_6t            = bitcell == "6t";
     options.segment_bits          = program.get<unsigned>("--segment-bits");
     options.strips_in_controller  = program.get<bool>("--strips-in-controller");
+    options.row_predecode_bits    = program.get<unsigned>("--row-predecode-bits");
     options.skip_characterization = program.get<bool>("--skip-characterization");
     options.num_wl_buf            = program.get<unsigned>("--num-wl-buf");
     options.num_sae_buf           = program.get<unsigned>("--num-sae-buf");
@@ -226,6 +234,14 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     }
     if (options.strips_in_controller && options.single_port) {
         LOGE << "Error: --strips-in-controller is for the two-port macro.";
+        std::exit(1);
+    }
+    if (options.row_predecode_bits < 2 || options.row_predecode_bits > 4) {
+        LOGE << "Error: --row-predecode-bits is 2, 3 or 4.";
+        std::exit(1);
+    }
+    if (options.row_predecode_bits != 3 && options.single_port) {
+        LOGE << "Error: --row-predecode-bits is for the slice-driven macros (two-port or --bitcell 6t).";
         std::exit(1);
     }
     if (options.share_port_b && (options.single_port || options.num_banks < 2)) {
