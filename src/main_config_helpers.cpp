@@ -54,8 +54,9 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .scan<'u', unsigned>();
 
     program.add_argument("--strips-in-controller")
-        .help("Two-port: place and route the controller around the wordline driver strips, "
-              "its band filling the space between the two stacks of column tiles.")
+        .help("Place and route the controller around the wordline driver strips, its band "
+              "filling the space between the two stacks of column tiles.  One tile column: "
+              "one bank, or (two-port) a pair sharing port B.")
         .default_value(false)
         .implicit_value(true);
 
@@ -191,8 +192,8 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         options.bitcell_6t = true;
         options.single_port = false;
     }
-    if (options.bitcell_6t && (options.share_port_b || options.strips_in_controller)) {
-        LOGE << "Error: --bitcell 6t has one port and takes no --share-port-b or --strips-in-controller yet.";
+    if (options.bitcell_6t && options.share_port_b) {
+        LOGE << "Error: --bitcell 6t has one port and takes no --share-port-b.";
         std::exit(1);
     }
     if (options.segment_bits && options.segment_bits < options.num_data_bits / 2) {
@@ -242,6 +243,11 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     }
     if (options.row_predecode_bits != 3 && options.single_port) {
         LOGE << "Error: --row-predecode-bits is for the slice-driven macros (two-port or --bitcell 6t).";
+        std::exit(1);
+    }
+    if (options.strips_in_controller &&
+        options.num_banks > (options.share_port_b ? 2u : 1u)) {
+        LOGE << "Error: --strips-in-controller abuts one tile column: one bank, or a pair with --share-port-b.";
         std::exit(1);
     }
     if (options.share_port_b && (options.single_port || options.num_banks < 2)) {

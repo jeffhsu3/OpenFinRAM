@@ -45,6 +45,8 @@ import generate_asap7_8t_wl_slices as wl_slices
 
 REPO = Path(__file__).resolve().parents[1]
 LAYER_NAMES = dict(zip(METALS, (f"M{i}" for i in range(1, 10))))
+#: Each metal's minimum width, um.
+MIN_WIDTH_UM = dict(zip(METALS, (0.018, 0.018, 0.018, 0.024, 0.024, 0.032, 0.032, 0.040, 0.040)))
 #: A driver slice: four wordlines at the array's pitch, its outputs 54 nm in.
 SLICE_WIDTH, WORDLINE_PITCH = 0.432, 0.108
 #: The array centres a fin on its edge, the slices a fin space on theirs: this
@@ -162,7 +164,17 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
             out.append(f"    LAYER {LAYER_NAMES[layer]} ;")
             merged = gdstk.boolean(polys, [], "or", precision=1e-6)
             if snap and snapped:
-                merged = gdstk.offset(merged, snap if outward else -snap, join="miter", precision=1e-7)
+                shapes = []
+                for poly in merged:
+                    moved = gdstk.offset(poly, snap if outward else -snap, join="miter", precision=1e-7)
+                    if not outward and any(min(b - a for a, b in zip(*q.bounding_box()))
+                                           < MIN_WIDTH_UM[layer] - 1e-6 for q in moved):  # fmt: skip
+                        # A minimum-width pin on half nanometres would come out
+                        # a nanometre narrower than its layer allows, and the
+                        # router finds no access on it (6T band, M4 at 23 nm).
+                        moved = gdstk.offset(poly, snap, join="miter", precision=1e-7)
+                    shapes += moved
+                merged = shapes
             for poly in merged:
                 coords = [(x - ox, y - oy) for x, y in poly.points]
                 if snap and snapped:
@@ -215,6 +227,15 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
                 # its 18 nm landings to 17 would leave no access; let the
                 # reader round them whole instead.
                 exact = bool(on_grid)
+                if snap_half_nm:
+                    # The 6T tile's half-nanometre rails leave only stubs in
+                    # its IO block's M1 on the grid, and a route there never
+                    # converged (6T band, x64x8x1).  Its vertical straps (M3,
+                    # M5) are whole across: only their ends move, inward.
+                    straps = [p for p in polys if p.layer in (METALS[2], METALS[4]) and all(
+                        abs((x - ox) * 1000 - round((x - ox) * 1000)) < 1e-3 for x, _ in p.points)]  # fmt: skip
+                    if straps:
+                        access, exact = straps, True
             elif snap_half_nm:
                 # The 6T end row's M1 comb is half-nanometre metal with
                 # 4 nm steps; a router wire landed on it leaves a notch
@@ -268,7 +289,13 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
             "    USE SIGNAL ;",
             "    PORT",
         ]
-        lef += geometry(access, outward=False, snapped=snap_pins and (net not in ("vdd", "vss") or exact))
+        # The 6T tile's signal pins stay as drawn even shifted, as unshifted:
+        # the router centres its via on a half-nanometre pin and lands flush,
+        # where on a snapped one it would leave a half-nanometre step
+        # (M4.AUX.3), or find no access on 23 nm (DRT-0073).
+        supply_net = net in ("vdd", "vss")
+        lef += geometry(access, outward=False, snapped=snap_pins and (
+            exact if supply_net else not snap_half_nm))
         lef += ["    END", f"  END {pin}"]
         polygon = max(access, key=lambda p: p.area())
         point = probe_point(polygon, (ox, oy))
@@ -393,7 +420,7 @@ def wordline_tracks(cell):
 
 
 def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_reach=0.0, segment_bits=None,
-                          mux=4):
+                          mux=4, rail_on_grid=None):
     """The strip pair for each side of the controller band, in the tile's x.
 
     A strip is one slice per four of the tile's port-A wordlines, the slice's
@@ -480,7 +507,7 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
                 gdstk.Label(f"B[{j}]", (x0_slice + x, y), layer=layer, texttype=251)
             )
     if ports == ("A",) and len(starts) > 1:  # one slice has nothing to join
-        _predecode_rails(strip, starts, pins)
+        _predecode_rails(strip, starts, pins, RAIL_ON_GRID if rail_on_grid is None else rail_on_grid)
     spans = [(x0, x0 + SLICE_WIDTH) for x0 in starts]
     gaps = [
         (spans[0][0] - WORDLINE_PITCH, spans[0][0]),
@@ -597,11 +624,13 @@ PREDECODE_JOIN = {"B0": (0.108, 0.0), "B1": (0.036, 0.0), "B2": (0.254, -0.048),
 #: the slices' own metal lands on half nanometres; the rails are the
 #: router's M4, which must not (23.5 nm from its wires, half-nm jogs where
 #: it joins them).  Half a nanometre up puts them on whole nanometres in
-#: either orientation: the strip's height is whole.
+#: either orientation: the strip's height is whole.  In the controller's
+#: band the strips' masters carry half a nanometre of their placement
+#: (`abstract`'s shift), which does the same: the rails are drawn without it.
 RAIL_ON_GRID = 0.0005
 
 
-def _predecode_rails(strip, starts, pins):
+def _predecode_rails(strip, starts, pins, on_grid=None):
     """Join each predecode input B<j> across the strip's slices on an M4 rail.
 
     Each slice's B<j> is its own short M2 run; B1/B3 (and B0/B2) alternate
@@ -614,7 +643,7 @@ def _predecode_rails(strip, starts, pins):
     for j in range(4):
         sx, dy = PREDECODE_JOIN[f"B{j}"]
         _, y, _ = pins[f"B{j}"]
-        rail_y = y + dy + RAIL_ON_GRID
+        rail_y = y + dy + (RAIL_ON_GRID if on_grid is None else on_grid)
         xs = [x0 + sx for x0 in starts]
         for x in xs:
             strip.add(gdstk.rectangle((x - 0.009, y - 0.009), (x + 0.009, y + 0.009), layer=25))  # V2
@@ -1082,8 +1111,8 @@ def run(args):
     ports = ("A",) if single else ("A", "B")
     if args.mux not in ((4, 8, 16) if single else (4,)):
         raise RuntimeError(f"a {args.mux}:1 column mux is not built for the {args.bitcell} macro")
-    if single and (shared_b or args.band is not None or args.plan_band is not None or args.strap_pitch):
-        raise RuntimeError("the 6T macro takes no --share-port-b, controller-band strips or straps yet")
+    if single and (shared_b or args.strap_pitch):
+        raise RuntimeError("the 6T macro takes no --share-port-b or straps yet")
     # What the floorplan repeats across: a bank, or a pair of banks.
     units, banks_per_unit = (args.banks // 2, 2) if shared_b else (args.banks, 1)
     if args.plan_band is None:
@@ -1130,8 +1159,12 @@ def run(args):
         if banding:
             # Over the IO columns an end tile stops at its IO blocks: the
             # controller's band takes the rest.
-            notch_band_edges(cell, end_row_spans(cell, shared_b))
+            notch_band_edges(cell, end_row_spans(cell, shared_b), single)
         labels = [label for label in cell.labels if not supply(label.text)]
+        if single and args.band is not None:
+            # The tile lands at the bank's margin, its boundary's left edge there.
+            add_m5_landings(cell, [label for label in labels if not is_wordline(label.text)],
+                            args.margin - columns.boundary_box(cell)[0])  # fmt: skip
         master = ("dp_colpair" if shared_b else "dp_column") + ends_tag(bottom, top)
         # A tile between a stack's ends meets tiles above and below: its IO
         # blocks' supply straps (and the top rail past the block, the next
@@ -1145,7 +1178,7 @@ def run(args):
         # router chose its access on the rail: DRT-1231 on x8x2x2).
         span_lo, span_hi = y_lo, y_hi
         if banding:
-            band_lo, band_hi = band_edges(cell)
+            band_lo, band_hi = band_edges(cell, single)
             span_lo = y_lo if band_lo is None else band_lo
             span_hi = y_hi if band_hi is None else band_hi
 
@@ -1169,6 +1202,7 @@ def run(args):
         strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits,
         ports=ports,
         segment_bits=segment if segments > 1 else None, mux=args.mux,
+        rail_on_grid=0.0 if banding else None,
     )
     if shared_b:
         tile_width = columns.boundary_box(leaf)[2]
@@ -1209,7 +1243,7 @@ def run(args):
     # half-fin-pitch offset of it over the IO columns.  There the rows,
     # fins, gate grid and VSS rail of the block and a standard-cell row are
     # the same, so the controller's first row abuts the block.
-    seam_lo, seam_hi = band_seams()
+    seam_lo, seam_hi = band_seams(single)
     dummy_spans = end_row_spans(leaf, shared_b)
 
     def strip_placements(die_height):
@@ -1232,6 +1266,16 @@ def run(args):
         if units > 1:
             raise RuntimeError("the controller band abuts one tile column (a bank or a pair) so far: "
                                "a second one would put its gates off the band's 54 nm grid")  # fmt: skip
+    def tile_height(index):
+        _, y0, _, y1 = columns.boundary_box(variants[ends_of(index)][0])
+        return y1 - y0
+
+    mid_height = columns.boundary_box(strip_pairs["mid"])[3] if segments > 1 else 0.0
+    # A tile's offset in its stack: the tiles below it and the mid pairs between their segments.
+    offsets = [sum(tile_height(k) for k in range(index)) + (index // segment) * mid_height
+               for index in range(half_bits)]  # fmt: skip
+    stack = offsets[-1] + tile_height(half_bits - 1)
+
     if args.plan_band is not None:
         keepouts = [(x0, x1, half) for x0, x1 in dummy_spans for half in ("lo", "hi")]
         plan_band(args, pair_masters, strip_placements, band_width, pair_height,
@@ -1240,6 +1284,26 @@ def run(args):
     ctrl_lib = gdstk.read_gds(str(args.controller))
     ctrl = next(c for c in ctrl_lib.cells if c.name == "ctrl_decode")
     add_pin_conductors(ctrl)
+    if in_band:
+        # The controller's router took the band's strips' SEL/B rails as its
+        # own metal, and may have reached one pin of a net through another's
+        # rail: without them that branch is a piece of its own, which the
+        # assembled macro then joins to the net (6T, x64x8x1: a short of
+        # sel_lo_A[1] with the controller's internal_5908).  Its abstract
+        # sees the rails as they lie in the band.
+        for _, drawn, _, _, (x, y) in strip_placements(band_die(args.band)[1]):
+            pair = strip_pairs[drawn]
+            pox, poy = bbox_origin(pair)
+            graph = MetalGraph(pair)
+            for label in pair.labels:
+                if not is_strip_select(label.text):
+                    continue
+                root = graph.label_root(label)
+                polys = [p for i, p in enumerate(graph.polygons) if graph.root(i) == root]
+                top_layer = max(p.layer for p in polys)
+                for poly in polys:
+                    if poly.layer == top_layer:
+                        ctrl.add(gdstk.Polygon(poly.points + (x - pox, y - poy), layer=poly.layer))
     # Its router did not know the run-length rule either.
     ctrl_prl = fix_short_parallel_runs(ctrl)
     ctrl_labels = [
@@ -1249,7 +1313,9 @@ def run(args):
     ]
     controller, ctrl_pins, ctrl_lef, ctrl_size = abstract(
         ctrl, "dp_controller", ctrl_labels,
-        abutted=(lambda net: net.startswith("sel_")) if in_band else None,
+        # The band's strips take its selects inside it; with segments the
+        # mid pairs take the same nets outside it, from its pins.
+        abutted=(lambda net: net.startswith("sel_")) if in_band and segments == 1 else None,
     )
     masters = {v[1].name: (v[1], v[2]) for v in variants.values()}
     masters["dp_controller"] = (controller, ctrl_pins)
@@ -1300,15 +1366,6 @@ def run(args):
     # channel; the upper stack's pair facing up; the upper stack.  A tile's
     # IO columns are shorter than its array, so the stacks keep a channel per
     # tile on each IO side for the controls and data.
-    def tile_height(index):
-        _, y0, _, y1 = columns.boundary_box(variants[ends_of(index)][0])
-        return y1 - y0
-
-    mid_height = columns.boundary_box(strip_pairs["mid"])[3] if segments > 1 else 0.0
-    # A tile's offset in its stack: the tiles below it and the mid pairs between their segments.
-    offsets = [sum(tile_height(k) for k in range(index)) + (index // segment) * mid_height
-               for index in range(half_bits)]  # fmt: skip
-    stack = offsets[-1] + tile_height(half_bits - 1)
     y_lo_tiles = margin_y
     if in_band:
         # The controller's die is the whole band between the stacks, the
@@ -1645,7 +1702,21 @@ def _bitcell_row():
     return y1 - y0, columns.fin_grid_offset(bitcell) / 1000
 
 
-def band_seams():
+def _end_reach(single):
+    """How far an end tile's dummy row reaches past its array, and its IO blocks' rail offset, um.
+
+    8T: a bitcell row, the blocks on the fin grid's offset in it.  6T: the
+    end row and its margin; the blocks' leaves, and so their rails, stand
+    half a fin pitch above the block's frame (`SidewaysIoColumnSpec`).
+    """
+    if single:
+        import generate_asap7_6t_iocolumn as columns6
+
+        return columns6.END_ROW_HEIGHT + columns6.END_ROW_MARGIN, FIN_HALF_PITCH
+    return _bitcell_row()
+
+
+def band_seams(single=False):
     """How far into an end tile the band reaches over its IO columns: ``(lower, upper)``.
 
     The lower stack's last tile ends a dummy row above its IO blocks, whose
@@ -1653,49 +1724,134 @@ def band_seams():
     stack's first tile starts a dummy row below its blocks' bottom edge,
     which sits the offset above the array's first row.
     """
-    pitch, offset = _bitcell_row()
-    return pitch - offset, pitch + offset
+    reach, offset = _end_reach(single)
+    return reach - offset, reach + offset
 
 
 def end_row_spans(tile, shared_b):
     """x ranges of a tile's dummy rows (over its cap and array), in the tile."""
     half = tile.references[0].cell if shared_b else tile
-    spans = []
+    spans = set()
     for ref in half.references:
-        for inner in ([ref] if ref.cell.name.startswith("dp_array_end_rows") else []):
-            (x0, _), (x1, _) = inner.bounding_box()
-            spans.append((round(float(x0), 4), round(float(x1), 4)))
+        if ref.cell.name.startswith(("dp_array_end_rows", "end_row_")):
+            (x0, _), (x1, _) = ref.bounding_box()
+            spans.add((round(float(x0), 4), round(float(x1), 4)))
     width = columns.boundary_box(tile)[2]
     if shared_b:
-        spans += [(round(width - x1, 4), round(width - x0, 4)) for x0, x1 in spans]
+        spans |= {(round(width - x1, 4), round(width - x0, 4)) for x0, x1 in spans}
     return sorted(spans)
 
 
-def band_edges(tile):
+def band_edges(tile, single=False):
     """Where the band takes over a tile's IO columns: ``(bottom, top)``, None at an end without a dummy row."""
-    pitch, offset = _bitcell_row()
+    reach, offset = _end_reach(single)
     _, y0, _, y1 = columns.boundary_box(tile)
-    top = y1 - pitch + offset if y1 > 4 * pitch + 1e-6 else None  # a dummy row above the array
-    bottom = y0 + pitch + offset if y0 < -1e-6 else None
+    if single:
+        # The 6T tile's top end row is its bottom one mirrored.
+        rows = [r for r in tile.references if r.cell.name.startswith("end_row_")]
+        above, below = any(r.x_reflection for r in rows), any(not r.x_reflection for r in rows)
+    else:
+        above, below = y1 > 4 * reach + 1e-6, y0 < -1e-6
+    top = y1 - reach + offset if above else None
+    bottom = y0 + reach + offset if below else None
     return bottom, top
 
 
-def notch_band_edges(tile, spans):
-    """Cut the tile's outline back to its IO blocks over the IO columns, at each end with a dummy row."""
+#: An M5 landing on an M4 pin (`add_m5_landings`): V4's side, M5's pitch,
+#: the landing's length (V4.M5.EN.2 and M5.W.5), V4's reach into the M4
+#: past its ends (V4.M4.EN.1), and the space it keeps from other M5 and V4.
+V4_LAYER = 45
+V4_SIDE, M5_PITCH, M5_LANDING = 0.024, 0.048, 0.072
+V4_M4_END, M5_SPACE, V4_SPACE = 0.011, 0.040, 0.033
+
+
+def add_m5_landings(cell, labels, x_macro):
+    """Raise each M4-topped signal pin of a band tile onto a V4 and an M5 landing.
+
+    Half a nanometre up in its master, the 6T tile's whole-nanometre M4
+    lies between the macro's nanometres, and a router via on it leaves a
+    half-nanometre step (M4.AUX.3; a half-nanometre via is off the
+    manufacturing grid).  An M5 landing on the macro's M5 tracks is whole
+    across: the router's via on it leaves a rectangle.  `x_macro` is where
+    the cell's x = 0 lands in the macro.
+    """
+    graph = MetalGraph(cell)
+    m5 = [p.bounding_box() for p in cell.get_polygons(layer=METALS[4], datatype=0)]
+    v4 = [p.bounding_box() for p in cell.get_polygons(layer=V4_LAYER, datatype=0)]
+    done = set()
+    for label in labels:
+        root = graph.label_root(label)
+        if root in done:
+            continue
+        done.add(root)
+        polys = [p for i, p in enumerate(graph.polygons) if graph.root(i) == root and p.layer in METALS]
+        if max(p.layer for p in polys) != METALS[3]:
+            continue
+        (x0, y0), (x1, y1) = max((p for p in polys if p.layer == METALS[3]), key=lambda p: p.area()).bounding_box()
+        y = (y0 + y1) / 2
+        lo, hi = y - M5_LANDING / 2, y + M5_LANDING / 2
+        k = math.ceil((x0 + x_macro + V4_M4_END + V4_SIDE / 2) / M5_PITCH)
+        while (c := k * M5_PITCH - x_macro) + V4_SIDE / 2 + V4_M4_END <= x1 + 1e-9:
+            a, b = c - V4_SIDE / 2, c + V4_SIDE / 2
+            clear = all(b + M5_SPACE <= p0[0] or p1[0] + M5_SPACE <= a or hi + M5_SPACE <= p0[1]
+                        or p1[1] + M5_SPACE <= lo for p0, p1 in m5) and all(
+                b + V4_SPACE <= p0[0] or p1[0] + V4_SPACE <= a or y1 + V4_SPACE <= p0[1]
+                or p1[1] + V4_SPACE <= y0 for p0, p1 in v4)  # fmt: skip
+            if clear:
+                cell.add(gdstk.rectangle((a, y0), (b, y1), layer=V4_LAYER),
+                         gdstk.rectangle((a, lo), (b, hi), layer=METALS[4]))  # fmt: skip
+                m5.append(((a, lo), (b, hi)))
+                v4.append(((a, y0), (b, y1)))
+                break
+            k += 1
+        else:
+            raise RuntimeError(f"{cell.name}: no M5 track over {label.text}'s M4 for a landing")
+
+
+#: GCUT (layer, datatype); how far a standard cell's cut reaches past its row's
+#: edge, and the space between cuts (GCUT.S.3).
+GCUT = (10, 0)
+GCUT_REACH, GCUT_SPACE = 0.022, 0.035
+
+
+def notch_band_edges(tile, spans, single=False):
+    """Cut the tile's outline back to its IO blocks over the IO columns, at each end with a dummy row.
+
+    The 6T tile's supply stripes run to its outline there: they stop at the
+    blocks' edge, the controller's band taking the rest.
+    """
     x0, y0, x1, y1 = columns.boundary_box(tile)
-    bottom, top = band_edges(tile)
+    bottom, top = band_edges(tile, single)
     cut = [gdstk.rectangle((x0, top), (x1, y1))] if top is not None else []
     if bottom is not None:
         cut.append(gdstk.rectangle((x0, y0), (x1, bottom)))
     if not cut:
         return
     keep = [gdstk.rectangle((a, y0), (b, y1)) for a, b in spans]
-    outline = gdstk.boolean(
-        gdstk.boolean(gdstk.rectangle((x0, y0), (x1, y1)), gdstk.boolean(cut, keep, "not"), "not"), [], "or"
-    )
+    taken = gdstk.boolean(cut, keep, "not")
+    outline = gdstk.boolean(gdstk.boolean(gdstk.rectangle((x0, y0), (x1, y1)), taken, "not"), [], "or")
     if len(outline) != 1:
         raise RuntimeError(f"{tile.name}: the notched outline is not one polygon")
     tile.remove(*[p for p in tile.polygons if p.layer == 100 and p.datatype == 0])
+    if single:
+        for poly in [p for p in tile.polygons if p.layer != 100]:
+            if gdstk.boolean(poly, taken, "and"):
+                tile.remove(poly)
+                for piece in gdstk.boolean(poly, taken, "not", layer=poly.layer, datatype=poly.datatype):
+                    tile.add(piece)
+        # The controller's top (bottom) row cuts its gates GCUT_REACH either
+        # side of the rail it shares with an IO block; the block's own first
+        # cut stands back from that rail, too little to clear one: bridge them
+        # (6T, x64x8x1: GCUT.S.3 at 10 nm).
+        for poly in tile.get_polygons(layer=GCUT[0], datatype=GCUT[1]):
+            (a, lo), (b, hi) = poly.bounding_box()
+            for edge, end, past in ((bottom, lo, -0.01), (top, hi, 0.01)):
+                if edge is None or not 0 < (end - edge) * -past / 0.01 < GCUT_REACH + GCUT_SPACE:
+                    continue
+                # Only over the IO columns, where the band lies past the edge.
+                if gdstk.boolean(gdstk.rectangle((a, edge), (b, edge + past)), taken, "and"):
+                    tile.add(gdstk.rectangle((a, min(edge, end)), (b, max(edge, end)),
+                                             layer=GCUT[0], datatype=GCUT[1]))  # fmt: skip
     outline[0].layer = 100
     tile.add(outline[0])
 
@@ -1778,10 +1934,22 @@ def plan_band(args, pair_masters, strip_placements, band_width, pair_height, kee
                 continue
             net = strip_net(info["net"], bank=bank, half=half, wordlines=args.wordlines)
             if net.startswith("sel_"):
-                tcl.append(f"  [[$block findInst {inst}] findITerm {pin}] connect "
-                           f"[[$block findBTerm {{{net}}}] getNet]")  # fmt: skip
+                # A net the controller keeps whole for its port driver
+                # (the 6T one's sel_hi/sel_lo) is opened for the connection.
+                tcl += [f"  set net [[$block findBTerm {{{net}}}] getNet]",
+                        "  set kept [$net isDoNotTouch]",
+                        "  $net setDoNotTouch 0",
+                        f"  [[$block findInst {inst}] findITerm {pin}] connect $net",
+                        "  $net setDoNotTouch $kept"]  # fmt: skip
     tcl += ["}", "proc band_remove_strips {} {", "  global band_strips",
-            "  foreach inst $band_strips { odb::dbInst_destroy $inst }", "  set band_strips {}", "}"]  # fmt: skip
+            # Removing a strip disconnects its pins from nets kept whole (above).
+            "  foreach inst $band_strips {",
+            "    foreach iterm [$inst getITerms] {",
+            "      set net [$iterm getNet]",
+            "      if {$net ne \"NULL\"} { $net setDoNotTouch 0 }",
+            "    }",
+            "    odb::dbInst_destroy $inst",
+            "  }", "  set band_strips {}", "}"]  # fmt: skip
     (out / "band.tcl").write_text("\n".join(tcl) + "\n")
     print(f"PLAN: band {band_width:.3f} um wide, {len(placed)} strip pairs, {reserved:.2f} um^2 kept out")
 
