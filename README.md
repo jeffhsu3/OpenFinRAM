@@ -24,11 +24,14 @@ make
 
 Runs Yosys synthesis -> OpenROAD P&R/CTS/STA -> KLayout DEF->GDS streaming,
 then assembles the macro. Requires `yosys`, `openroad` (or `--openroad-path`),
-and KLayout's Python bindings — see External Dependencies.
+KLayout's Python bindings, and licensed Calibre `v2lvs` for controller SPICE
+conversion — see External Dependencies. Synthesis/APR uses open-source tools;
+SPICE conversion currently still requires this commercial dependency.
 
 Notes:
 - The commercial flow remains the default when `--openroad` is omitted; dual-port falls back to it.
 - The build hard-fails on missing timing paths, setup/hold, or slew/capacitance/fanout violations.
+- Missing or failed `v2lvs` conversion is an error; placeholder SPICE is not accepted.
 - STA uses routed global parasitics at TT only — a conservative implementation target, not a characterized frequency claim. Use `scripts/characterize_read.py` for the array datapath.
 
 ## Tests
@@ -45,6 +48,10 @@ cmake -S . -B build && ctest --test-dir build --output-on-failure
   `equiv_*`) between the `ctrl_decode` RTL and the mapped ASAP7 netlist,
   including the production structural signoff assertions. This catches
   synthesis-introduced decode bugs that RTL simulation cannot see.
+- `python3 tests/check_macro_pins.py path/to/macro.gds path/to/macro.lef`:
+  checks that generated macro pins match the LEF interface and have metal on
+  their labeled layers, including routed OpenROAD M4/M5 control/address pins.
+  This geometry check does not replace connectivity LVS.
 
 ## Commercial Flow (Cadence / Synopsys, default)
 
@@ -70,6 +77,7 @@ LEF export is native GDSTK and no longer needs Cadence Abstract or `tcsh`.
 | [OpenROAD](https://github.com/The-OpenROAD-Project/OpenROAD) | v2.0-15391+ (git master) | P&R, CTS, STA; pin `--openroad-path` |
 | ASAP7 platform | OpenROAD `platform/asap7` | LEF/lib/GDS/RC; pin `--platform-path` |
 | KLayout Python bindings (`pip install klayout`) | 0.29+ | DEF -> merged GDS streaming (`scripts/def_to_gds.py`) |
+| Licensed Calibre `v2lvs` | site installation | Controller Verilog -> SPICE; required even when characterization is skipped |
 
 **Tests (`ctest`):**
 | Tool | Tested with | Used by |

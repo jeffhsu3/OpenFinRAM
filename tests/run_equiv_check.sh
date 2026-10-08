@@ -48,7 +48,7 @@ read_verilog -sv $RTL/sram_control.v
 chparam -set ADDR_WIDTH $addr -set NUM_WL $nw -set NUM_BANK $nb -set COLUMN_MUX $mux ctrl_decode
 hierarchy -check -top ctrl_decode
 synth -top ctrl_decode -flatten
-dfflibmap -liberty $LIB/asap7sc7p5t_SEQ_RVT_TT.lib
+dfflibmap -dont_use DFFHQx4_ASAP7_75t_R -dont_use DFFHQNx2_ASAP7_75t_R -dont_use DFFHQNx3_ASAP7_75t_R -liberty $LIB/asap7sc7p5t_SEQ_RVT_TT.lib
 abc -liberty $LIB/asap7sc7p5t_AO_RVT_TT.lib -liberty $LIB/asap7sc7p5t_INVBUF_RVT_TT.lib -liberty $LIB/asap7sc7p5t_OA_RVT_TT.lib -liberty $LIB/asap7sc7p5t_SEQ_RVT_TT.lib -liberty $LIB/asap7sc7p5t_SIMPLE_RVT_TT.lib
 opt
 opt_clean -purge
