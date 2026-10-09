@@ -53,6 +53,40 @@ cmake -S . -B build && ctest --test-dir build --output-on-failure
   macro's GDS pin labels match its LEF pins and sit on metal of their own
   layer, including routed M4/M5 control and address pins. It is a geometry
   check, not connectivity LVS.
+- `asap7_tech_gds_check`: the built `tech/gds` libraries against their
+  recorded geometry digests.
+- `tests/run_wordline_array_check.sh`: deterministic parameterized 8T/6T
+  wordline-row and array hierarchy, including a non-standard x18/mux-2 case.
+- `tests/run_8t_iocolumn_check.sh`: deterministic dual-port IO-column routing,
+  capped array abutment, internal read-port ties, and a non-standard x18 case.
+- `tests/run_8t_wl_slices_check.sh`: the wordline driver slice ladder.
+
+## ASAP7 cell libraries
+
+The flow builds on generated native ASAP7 cells (schematics in `tech/spice/`).
+The GDS libraries are build output: the `tech_gds` target (part of the default
+build when `.venv/bin/python`, or `python3`, can import `gdstk` and
+`chipforge_asap7`) runs `scripts/tech_gds.py`, which writes them into
+`tech/gds/` in about 15 s. Git tracks only their geometry digests
+(`tech/gds/digests.json`); after an intended generator change, run
+`scripts/tech_gds.py --update`.
+
+- `tech/gds/sram_cell_8t.gds`: the 8T bitcell and its mirrored-slot variants,
+  built from the published ASAP7 6T core with ASAP7-native port-B geometry and
+  the public OpenRAM dual-port topology. The matching dummy, row-cap,
+  column-cap and corner family is in `tech/gds/sram_cell_8t_edges.gds`. See
+  [docs/asap7_8t_bitcell.md](docs/asap7_8t_bitcell.md) for the pin map,
+  provenance, rebuild commands and verification scope.
+- `tech/gds/sram_wordline_arrays.gds`: parameterized `sramcol_xN` and
+  `array_xNxM` hierarchy for 8T and 6T. The tracked ladder has 2/32/64/128
+  wordlines; `scripts/generate_asap7_wordline_arrays.py` accepts any positive
+  count, and the macro compiler generates the tapped arrays it needs on demand.
+- `tech/gds/sram_8t_iocolumn.gds`: the port-A, port-B and two-sided port-B IO
+  blocks (`iocol_sram_8t_a/b/b2`) and the `colgrp_x{N}x4_sram_8t` column
+  groups that join them to an array, written with their SPICE by
+  `scripts/generate_asap7_8t_iocolumn.py`.
+- `tech/gds/sram_8t_wl_slices.gds` and `tech/gds/sram_6t_iocolumn.gds`: the
+  wordline driver slices and the 6T IO block (both chipforge_asap7 devices).
 
 ## Commercial Flow (Cadence / Synopsys, default)
 
