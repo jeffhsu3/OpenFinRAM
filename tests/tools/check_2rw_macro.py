@@ -29,9 +29,10 @@ def check(folder):
         "LEF pin interface differs from physical ports"
     )
     obstruction = lef.split("  OBS")[1]
-    assert all(f"LAYER M{layer} ;" in obstruction for layer in range(1, 10)), (
-        "macro routing layers not blocked in LEF"
-    )
+    blocked = {int(layer) for layer in re.findall(r"LAYER M(\d) ;", obstruction)}
+    # Every layer the macro routes on is blocked; M8/M9 stay the chip's, whose
+    # grid lands on the macro's M7 supply stripes.
+    assert blocked == set(range(1, 8)), f"macro LEF blocks M{sorted(blocked)}, not M1-M7"
     size = re.search(r"SIZE ([\d.]+) BY ([\d.]+)", lef)
     assert all(
         abs(float(size[i + 1]) - v) < 1e-6 for i, v in enumerate(report["size_um"])
@@ -90,8 +91,11 @@ def check(folder):
     assert devices(name) == expected, "SPICE storage-cell count mismatch"
     lib = gdstk.read_gds(str(folder / f"{name}.gds"))
 
+    # The bitcell and its mirrored-slot variants (generate_asap7_wordline_arrays).
+    storage = {"sram_cell_8t", "sram_cell_8t_b", "sram_cell_8t_b_end"}
+
     def cells(cell):
-        if cell.name == "sram_cell_8t":
+        if cell.name in storage:
             return 1
         return sum(
             cells(ref.cell) * max(1, ref.repetition.size) for ref in cell.references

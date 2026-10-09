@@ -16,6 +16,7 @@ if ! "$python_bin" -c 'import gdstk' >/dev/null 2>&1 ||
     echo "SKIP: gdstk or KLayout bindings unavailable"
     exit 77
 fi
+mkdir -p "$repo_root/tmp"
 scratch="$(mktemp -d "$repo_root/tmp/2rw_integration_XXXXXX")"
 binary="${OPENFINRAM_BIN:-$repo_root/build/OpenFinRAM}"
 if ! "$binary" --openroad --num-wls 2 --num-data-bits 2 --num-banks 1 \
