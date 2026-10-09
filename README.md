@@ -60,8 +60,12 @@ Options:
 - `--share-port-b`: banks in pairs, mirrored about one two-sided port-B IO
   block (needs an even bank count).
 - `--strips-in-controller`: put the wordline driver strips in the controller's
-  band, abutting the IO blocks. Supported for one column of tiles (one bank,
-  or one shared pair) so far.
+  band, abutting the IO blocks (see [Controller band](#controller-band---strips-in-controller)).
+  Supported for one column of tiles (one bank, or one shared pair) so far.
+- `--row-predecode-bits 2|3|4`: address bits per predecode group in the
+  controller's wordline decode (default 3). 4-bit groups only pay off at 256 or
+  more wordlines a bank; on an x64x8x1 they decode slower (327 vs 276 ps, OpenSTA)
+  and take more area.
 
 Floorplan: each data bit is a column tile, `port-A IO | cap | array | port-B
 IO`, with port A's IO at one end of the bitlines and port B's at the other.
@@ -70,6 +74,14 @@ wordlines run through each stack by abutment from a pair of driver strips at
 its edge. Each IO block carries full-height VDD/VSS M3 straps, tied to the
 array's supply bars at every seam, so a stack's supplies join end to end and
 only its end tiles' are routed.
+
+Power grid: vdd and vss are full-height stripes on the top routing layer (M7
+by default), alternating, one vdd every 1.28 um with vss halfway between.
+Every stripe is a shape of its pin in the LEF, so the chip's horizontal M8
+straps can drop vias onto them anywhere along the macro; the router joins each
+block's supply pins to them. They are minimum width, as ASAP7's V6 must be
+exactly as wide as the M7 it lands on. The assembler's `--power-pitch` sets
+the spacing, and `--power-pitch 0` gives the old single pin per supply.
 
 The assembler can be run on its own against an existing controller GDS, which
 skips synthesis; it then writes only the `.gds` and `.physical.json`:
@@ -131,10 +143,55 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   program (`scripts/simulate_macro.py`) passes on x4x2x1, x16x16x1 and x256x2x1
   (clk->Q ~250 ps).  x16x16x1 is 6.64 x 25.28 um against 6.00 x 52.71 um for the
   8T x16x16x1.
-- Limits so far: `--share-port-b`/`--strips-in-controller` do not apply; the
-  timing model is fit to small macros and to the old BUFx2 controller outputs.
+- `--strips-in-controller` works with one bank, segmented or not (see
+  [Controller band](#controller-band---strips-in-controller)); `--share-port-b`
+  does not apply.
+- Limits so far: the timing model is fit to small macros and to the old BUFx2 controller outputs.
   The public DRC count is the released 6T cells' own findings, the end rows'
   gate pitch, standard cells, and a few router M1 markers.
+
+## Controller band (`--strips-in-controller`)
+
+By default the wordline driver strips stand beside the tile stacks and the
+controller is a separate block. With `--strips-in-controller`, OpenROAD places
+and routes the controller around the strips, and its band fills the space
+between the two stacks, so the strips abut the IO blocks directly. It applies to
+both bitcells:
+
+```
+# 8T two-port: one bank, or one pair sharing port B
+./build/OpenFinRAM --num-wls 2 --num-data-bits 2 --num-banks 2 --share-port-b \
+  --strips-in-controller --openroad
+
+# 6T single-port: one bank, optionally segmented
+./build/OpenFinRAM --num-wls 32 --num-data-bits 8 --num-banks 1 --bitcell 6t \
+  --num-rows-per-mux 4 --segment-bits 2 --strips-in-controller --openroad
+```
+
+The flow has three steps:
+
+1. `compile_asap7_2rw.py --plan-band` writes the strip placement (`plan.txt`),
+   the strips' abstract (`strips.lef`) and the floorplan script (`band.tcl`).
+2. OpenROAD builds the controller on that band die, keeping the strips fixed,
+   and reports the die it used (`die.txt`).
+3. The assembler (`--band`) abuts the two tile stacks on the band's edges.
+
+The tiles and strips sit half a nanometre off the whole-nm grid in their
+masters, to land on the band's grid. For the 6T tile, the shift puts its M4 pins
+off the LEF's 1 nm grid. Each pin therefore also gets a V4 and a short M5
+landing on the macro's 48 nm M5 track, so the router can reach it.
+
+Results (`scripts/verify_macro.py`, `scripts/simulate_macro.py`):
+
+- 8T x4x2x2 with `--share-port-b`: 20 % smaller than without the band, LVS match.
+  x8x2x2 also matches LVS.
+- 6T x64x8x1 with `--segment-bits 2`: 9.99 x 20.20 um (202 um²) against
+  10.03 x 22.52 um (226 um²) without the band, 11 % smaller. LVS matches; the
+  macro is too large to simulate at transistor level.
+- 6T x16x8x1: 4.81 x 16.91 um, LVS match. The Xyce program passes, with clk->WL
+  128 ps, clk->SAE 223 ps and clk->Q about 260 ps.
+- DRC findings fall in the same categories as without the band: 52 against 63
+  on x64x8x1.
 
 ### 8T cell libraries
 

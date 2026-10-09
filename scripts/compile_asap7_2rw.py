@@ -1498,15 +1498,32 @@ def run(args):
                     "point": [x + info["point"][0], y + info["point"][1]],
                 }
             )
-    d += ["END COMPONENTS", f"PINS {len(external)} ;"]
+    stripes = (power_stripes(width, height, args.top_layer, args.power_pitch)
+               if args.power_pitch > 0 else [])  # fmt: skip
+    # The supplies' pins are their stripes, fixed before routing: the
+    # router takes one pin shape a terminal, so each stripe is a terminal
+    # of its own (vdd, vdd_stripe1, ...), renamed to its net once routed.
+    # A signal net to the router, which joins the blocks to them.
+    stripe_pins = {}
+    for net, x, y_top in stripes:
+        name = net if net not in stripe_pins.values() else f"{net}_stripe{len(stripe_pins)}"
+        stripe_pins[name] = net
+    half = STRIPE_LAYERS[args.top_layer][1] // 2
+    d += ["END COMPONENTS", f"PINS {len(external) + len(stripe_pins) - len(set(stripe_pins.values()))} ;"]
     for net in sorted(external):
         direction = (
             "INOUT"
             if net in ("vdd", "vss")
             else ("OUTPUT" if net.startswith("Q_") else "INPUT")
         )
+        if net in stripe_pins.values():
+            continue
         d.append(f"- {net} + NET {net} + DIRECTION {direction} + USE SIGNAL ;")
         nets[net].append(("PIN", net))
+    for name, (net, x, y_top) in zip(stripe_pins, stripes):
+        d.append(f"- {name} + NET {net} + DIRECTION INOUT + USE SIGNAL"
+                 f" + LAYER M{args.top_layer} ( {-half} 0 ) ( {half} {y_top} ) + FIXED ( {x} 0 ) N ;")
+        nets[net].append(("PIN", name))
     d += ["END PINS", f"NETS {len(nets)} ;"]
     for net, ends in sorted(nets.items()):
         d.append(
@@ -1548,8 +1565,10 @@ def run(args):
         # take its horizontal neighbour below for the side edges and itself
         # for the top and bottom.  M7 by default: M8/M9 are the chip's, and
         # the public deck sizes them by length, which the tech LEF does not.
-        # The signal pins are placed above; this places the supplies.
-        f"place_pins -hor_layers M{args.top_layer - 1} -ver_layers M{args.top_layer}",
+        # The signal pins are placed above; this places the supplies, unless
+        # their stripes already are.
+        *([] if stripes else
+          [f"place_pins -hor_layers M{args.top_layer - 1} -ver_layers M{args.top_layer}"]),
         f"set_routing_layers -signal M1-M{args.top_layer}",
         "global_route",
         f"detailed_route -droute_end_iter {args.route_iterations} -output_drc macro_drc.rpt",
@@ -1599,6 +1618,8 @@ def run(args):
     # KLayout writes DEF BPin rectangles on purpose 251. They are real
     # conductor landings as well as LEF pin markers, not label-only geometry.
     add_pin_conductors(top)
+    for label in top.labels:
+        label.text = stripe_pins.get(label.text, label.text)
     # The router does not know ASAP7's run-length rule on M4-M7; the gate
     # below proves the lengthened wires changed no net.
     top_prl = fix_short_parallel_runs(top)
@@ -1618,6 +1639,11 @@ def run(args):
     # margin may route, not a connectivity defect of the blocks.
     check_route_drc(work / "macro_drc.rpt")
     verify(work / "routed.gds", manifest)
+    # The LEF takes a pin shape for each pin label: one on every stripe.
+    for net, x, y_top in stripes:
+        point = (x / 1000, y_top / 2000)
+        if not any(label.text == net and abs(label.origin[0] - point[0]) < 1e-3 for label in top.labels):
+            top.add(gdstk.Label(net, point, layer=METALS[args.top_layer - 1], texttype=251))
     top.add(gdstk.rectangle((0, 0), (width, height), layer=100))
     # Name every net at a point the connectivity gate has just proven is on
     # it.  Transistor LVS uses matching names as starting points (it still
@@ -2209,6 +2235,31 @@ SIDE_PIN_DEPTH = 69
 #: (x16x8x1 with narrower tiles: M5 shorts on A[0..2] at a 0.3 um margin).
 SIDE_PIN_PITCH = 192
 
+#: Supply stripes: track pitch and wire width per vertical top layer (nm).
+#: Minimum width, as the router's V6 must be exactly as wide as the M7 it
+#: lands on (V6.M7.AUX.2); its ends on the layer's 32 (24) nm line-end grid.
+STRIPE_LAYERS = {5: (48, 24), 7: (64, 32), 9: (80, 40)}
+
+
+def power_stripes(width, height, layer, pitch):
+    """The macro's supply grid on its top layer: ``[(net, x_centre, y_top)]`` in nm.
+
+    Full-height vertical stripes, vdd and vss alternating, an even count
+    spread over the width about one stripe per ``pitch / 2`` um, each on a
+    routing track.  The chip's own grid lands on them from the layer above;
+    the router joins every block's supply pins to them.
+    """
+    track, wire = STRIPE_LAYERS[layer]
+    count = 2 * max(1, round(width / pitch))
+    top = int(1000 * height) // wire * wire
+    stripes = []
+    for k in range(count):
+        x = round(1000 * width * (k + 0.5) / count / track) * track
+        stripes.append(("vdd" if k % 2 == 0 else "vss", x, top))
+    if len({x for _, x, _ in stripes}) < count:
+        raise RuntimeError(f"{count} supply stripes do not fit in {width} um")
+    return stripes
+
 
 def single_port_name(net):
     """The single-port macro's boundary name for port A's: ``ce_n_A`` -> ``ce_n``, ``A_A[3]`` -> ``A[3]``."""
@@ -2349,6 +2400,8 @@ def main():
         choices=(5, 7, 9),
         help="highest metal the macro routes and pins on",
     )
+    parser.add_argument("--power-pitch", type=float, default=1.28,
+                        help="um between vdd stripes on the top layer (vss halfway); 0: one supply pin each")  # fmt: skip
     parser.add_argument(
         "--max-margin",
         type=float,
