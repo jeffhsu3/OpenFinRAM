@@ -129,6 +129,10 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   stack's ends. Controller: `tech/verilog_dp/sram_control_1p.v`.
 - Pins: `clk rst_n ce_n we_n oe_n A[] D[] Q[]` (port A of the two-port
   machinery inside; the GDS/LEF, the deck's top subckt and the `.lib` agree).
+  D[] and Q[] are on the right edge, at the IO end of the bitlines, each bit's
+  pair level with its tile; the address and controls are on the left, level
+  with the controller's inputs. (The two-port macro has port A's pins on the
+  left and port B's on the right, at their IO blocks' ends.)
 - `--single-port` with `--openroad` builds this macro; without it (the commercial
   flow) it is still the legacy srambank flow.
 - Larger banks: `--segment-bits N` divides each stack's wordlines into segments of

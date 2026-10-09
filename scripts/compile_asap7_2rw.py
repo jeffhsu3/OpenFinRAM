@@ -1559,7 +1559,8 @@ def run(args):
         tcl.append(
             f"make_tracks M{i} -x_offset 0 -y_offset 0 -x_pitch {pitch} -y_pitch {pitch}"
         )
-    tcl += side_pin_placements(external, probes, width, height, args.top_layer - 1, ports=ports)
+    tcl += side_pin_placements(external, probes, width, height, args.top_layer - 1, ports=ports,
+                               dq_side="right" if single else None)
     tcl += [
         # The macro routes and pins on M1 up to --top-layer: odd, so the pins
         # take its horizontal neighbour below for the side edges and itself
@@ -2267,11 +2268,13 @@ def single_port_name(net):
     return re.sub(r"^([ADQ])_A\[", r"\1[", net)
 
 
-def side_pin_placements(external, probes, width, height, layer, ports=("A", "B")):
+def side_pin_placements(external, probes, width, height, layer, ports=("A", "B"), dq_side=None):
     """``place_pin`` commands for the signal pins: port A's on the left edge, B's on the right.
 
     With port A alone (the single-port macro) clk and rst_n join port A's
-    controls on the left.
+    controls on the left.  ``dq_side`` puts every D and Q on that edge
+    instead, the one at the IO end of the bitlines (the 6T tile's IO is at
+    its right end).
 
     A bit's D and Q go level with the tile terminals they drive and read; a
     port's address bus then its enables (port B's followed by clk and rst_n)
@@ -2290,17 +2293,18 @@ def side_pin_placements(external, probes, width, height, layer, ports=("A", "B")
             raise RuntimeError(f"{net}: no terminal to place its pin by")
         return 1000 * sum(ys) / len(ys)
 
-    commands = []
+    edges = {"left": [], "right": []}
     for port, side in (("A", "left"), ("B", "right"))[: len(ports)]:
-        groups = []
         for bit in sorted({index(n) for n in external if re.fullmatch(rf"[DQ]_{port}\[\d+\]", n)}):
             pair = sorted((n for n in (f"D_{port}[{bit}]", f"Q_{port}[{bit}]") if n in external), key=target)
-            groups.append(pair)
+            edges[dq_side or side].append(pair)
         controls = sorted((n for n in external if n.startswith(f"A_{port}[")), key=index)
         controls += [n for n in (f"ce_n_{port}", f"we_n_{port}", f"oe_n_{port}") if n in external]
         if port == ports[-1]:
             controls += [n for n in ("clk", "rst_n") if n in external]
-        groups.append(controls)
+        edges[side].append(controls)
+    commands = []
+    for side, groups in edges.items():
         groups.sort(key=lambda group: sum(map(target, group)) / len(group))
         sep = SIDE_PIN_PITCH
         y_next = SIDE_PIN_PITCH
@@ -2316,7 +2320,7 @@ def side_pin_placements(external, probes, width, height, layer, ports=("A", "B")
                 )
             y_next = start + len(group) * sep
         if y_next > round(1000 * height) - pitch:
-            raise RuntimeError(f"port {port}'s pins do not fit on the {side} edge")
+            raise RuntimeError(f"the {side} edge's pins do not fit")
     return commands
 
 
