@@ -115,11 +115,14 @@ std::string YosysTclGenerator::generate_script(
     oss << "synth -top ctrl_decode -flatten\n";
     oss << "opt\n";
     oss << "\n# Technology mapping\n";
-    // dfflibmap using SEQ lib for flops
+    // Keep the mapped flop aligned with structural checks and characterization.
     std::string seq_lib;
     for (auto &l : libs) if (l.find("SEQ") != std::string::npos) seq_lib = l;
     if (!seq_lib.empty()) {
-        oss << "dfflibmap -liberty " << seq_lib << "\n";
+        oss << "dfflibmap -dont_use DFFHQx4_ASAP7_75t_R"
+            << " -dont_use DFFHQNx2_ASAP7_75t_R"
+            << " -dont_use DFFHQNx3_ASAP7_75t_R"
+            << " -liberty " << seq_lib << "\n";
     }
     oss << "opt\n";
     // ABC's constraint file uses femtofarads and picoseconds.  It captures the

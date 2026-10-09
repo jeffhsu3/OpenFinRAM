@@ -18,7 +18,7 @@ synth -top ctrl_decode -flatten
 opt
 
 # Technology mapping
-dfflibmap -liberty @REPO_ROOT@/tech/lib/asap7sc7p5t_SEQ_RVT_TT.lib
+dfflibmap -dont_use DFFHQx4_ASAP7_75t_R -dont_use DFFHQNx2_ASAP7_75t_R -dont_use DFFHQNx3_ASAP7_75t_R -liberty @REPO_ROOT@/tech/lib/asap7sc7p5t_SEQ_RVT_TT.lib
 opt
 abc -liberty @REPO_ROOT@/tech/lib/asap7sc7p5t_AO_RVT_TT.lib -liberty @REPO_ROOT@/tech/lib/asap7sc7p5t_INVBUF_RVT_TT.lib -liberty @REPO_ROOT@/tech/lib/asap7sc7p5t_OA_RVT_TT.lib -liberty @REPO_ROOT@/tech/lib/asap7sc7p5t_SEQ_RVT_TT.lib -liberty @REPO_ROOT@/tech/lib/asap7sc7p5t_SIMPLE_RVT_TT.lib -constr tmp/syn_fixed/abc.constr -D 2500.000
 opt

@@ -279,7 +279,7 @@ LEF export is native GDSTK and no longer needs Cadence Abstract or `tcsh`.
 **Open-source flow (`--openroad`):**
 | Tool | Tested with | Purpose |
 |---|---|---|
-| [Yosys](https://github.com/YosysHQ/yosys) | 0.55+ | RTL synthesis of `ctrl_decode` |
+| [Yosys](https://github.com/YosysHQ/yosys) | 0.69 (SiliconCompiler's pin) | RTL synthesis of `ctrl_decode` |
 | [OpenROAD](https://github.com/The-OpenROAD-Project/OpenROAD) | v2.0-15391+ (git master) | P&R, CTS, STA; pin `--openroad-path` |
 | ASAP7 platform | OpenROAD `platform/asap7` | LEF/lib/GDS/RC; pin `--platform-path` |
 | KLayout Python bindings (`pip install klayout`) | 0.29+ | DEF -> merged GDS streaming (`scripts/def_to_gds.py`) |
@@ -288,7 +288,7 @@ LEF export is native GDSTK and no longer needs Cadence Abstract or `tcsh`.
 | Tool | Tested with | Used by |
 |---|---|---|
 | Icarus Verilog (`iverilog`/`vvp`) | 13.x | `decode_check` (RTL decode sweep) |
-| Yosys | 0.55+ | `equiv_check` (post-synthesis equivalence) |
+| Yosys | 0.69 | `equiv_check` (post-synthesis equivalence) |
 | googletest | submodule | `unit_tests` (TCL generator goldens) |
 
 ## TODO / Future Work
