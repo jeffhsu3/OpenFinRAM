@@ -226,9 +226,12 @@ class PhysicalMacroTests(unittest.TestCase):
                 self.assertEqual(tcl.count(f"findMaster dp_wl_strips_{master}]"), 1)
             # The upper pairs hang from the band's top edge, the lower stand on its bottom.
             self.assertEqual(tcl.count("$die_height + ("), 2)
-            # Every slice's SEL and B<j> of each port goes to the controller's
-            # select ports: 1 slice x (1 + 4) pins x 2 ports x 4 pairs.
-            self.assertEqual(tcl.count("] connect [[$block findBTerm {sel_"), 40)
+            # Every slice's SEL and B<j> of each port joins the controller's
+            # select net, its dont-touch released for the connect:
+            # 1 slice x (1 + 4) pins x 2 ports x 4 pairs.
+            self.assertEqual(tcl.count("set net [[$block findBTerm {sel_"), 40)
+            self.assertEqual(tcl.count("] connect $net"), 40)
+            self.assertEqual(tcl.count("$net setDoNotTouch $kept"), 40)
             self.assertIn("{sel_hi_B[1]}", tcl)  # bank 1's slice
             self.assertNotIn("findBTerm {wl_", tcl)  # wordlines stay abutted
             self.assertIn("odb::dbInst_destroy", tcl)
@@ -357,7 +360,8 @@ class PhysicalMacroTests(unittest.TestCase):
         pins = {m[0]: m[1] for m in re.findall(r"PIN (P\d+).*?POLYGON ([^;]*);", lef, re.S)}
         xs = lambda text: sorted({float(v) for v in text.split()[0::2]})  # noqa: E731
         self.assertEqual(xs(pins["P0"]), [0.1, 0.118])  # on the grid: as drawn
-        self.assertEqual(xs(pins["P1"]), [0.201, 0.218])  # off it: only the metal that is there
+        # off it, 18 nm wide: inward would leave 17 nm, under M2's minimum width, so out
+        self.assertEqual(xs(pins["P1"]), [0.2, 0.219])
         obs = lef.split("OBS")[1]
         # an obstruction half a nanometre off: out to cover all of it
         self.assertEqual(sorted({float(v) for v in re.findall(r"POLYGON ([^;]*)", obs)[0].split()[0::2]}), [0.3, 0.319])
