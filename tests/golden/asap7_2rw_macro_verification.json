@@ -1,0 +1,9 @@
+{
+ "lvs_matched": true,
+ "series_order_cells": [
+  "AO21x1_ASAP7_75t_R"
+ ],
+ "supply_shorts": [],
+ "supply_shorts_without_double_implant_taps": [],
+ "drc_rules": {}
+}

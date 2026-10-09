@@ -116,7 +116,18 @@ endif()
 #   tests/run_equiv_check.sh  : post-synthesis RTL<->netlist equivalence (Yosys)
 # ---------------------------------------------------------------------------
 include(CTest)
+add_custom_target(install_gdscheck
+    COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/install_gdscheck.sh
+    COMMENT "Install the pinned gdscheck DRC executable under build/tools/gdscheck"
+    USES_TERMINAL
+)
 if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME gdscheck_adapter_check
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s ${CMAKE_SOURCE_DIR}/tests -p test_drc.py
+    )
+    set_tests_properties(gdscheck_adapter_check PROPERTIES TIMEOUT 120 LABELS unit)
     add_subdirectory(third_party/googletest EXCLUDE_FROM_ALL)
     add_subdirectory(tests)
 
@@ -125,6 +136,30 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_decode_check.sh
     )
     set_tests_properties(decode_check PROPERTIES TIMEOUT 600)
+
+    add_test(
+        NAME decode_dp_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_decode_dp_check.sh
+    )
+    set_tests_properties(decode_dp_check PROPERTIES TIMEOUT 600)
+
+    add_test(
+        NAME decode_1p_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_decode_1p_check.sh
+    )
+    set_tests_properties(decode_1p_check PROPERTIES TIMEOUT 600)
+
+    add_test(
+        NAME asap7_8t_decoder_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_decoder_check.sh
+    )
+    set_tests_properties(asap7_8t_decoder_check PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+
+    add_test(
+        NAME asap7_8t_decoder_physical_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_decoder_physical_check.sh
+    )
+    set_tests_properties(asap7_8t_decoder_physical_check PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
 
     add_test(
         NAME equiv_check
@@ -139,12 +174,62 @@ if(BUILD_TESTING)
     )
     set_tests_properties(def2gds_check PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
 
+    # ASAP7 8T bitcell/edge family: regenerate the GDS, extract
+    # devices/connectivity, check cap abutment, and compare recorded digests.
+    add_test(
+        NAME asap7_8t_bitcell_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_bitcell_check.sh
+    )
+    set_tests_properties(asap7_8t_bitcell_check PROPERTIES
+        TIMEOUT 300
+        SKIP_RETURN_CODE 77
+    )
+
     # The built cell libraries in tech/gds against their recorded digests.
     add_test(
         NAME asap7_tech_gds_check
         COMMAND ${OPENFINRAM_PYTHON} ${CMAKE_SOURCE_DIR}/scripts/tech_gds.py --check ${TECH_GDS_FILES}
     )
     set_tests_properties(asap7_tech_gds_check PROPERTIES TIMEOUT 120 SKIP_RETURN_CODE 77)
+
+    # Device-level regression at the ASAP7 TT corner.  Exercises both port
+    # interfaces through precharge, opposite-polarity reads/writes, concurrent
+    # different-address access, and same-address read/read through shared 8T
+    # cells.  Skips when Xyce is unavailable.
+    add_test(
+        NAME asap7_8t_ioprech_spice_check
+        COMMAND ${CMAKE_COMMAND} -E env
+            IOPRECH_SPICE_DUMPER=$<TARGET_FILE:dump_8t_ioprech_spice>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_8t_ioprech_spice_check.sh
+    )
+    set_tests_properties(asap7_8t_ioprech_spice_check PROPERTIES
+        TIMEOUT 600
+        SKIP_RETURN_CODE 77
+    )
+
+    # Geometry/parser checks run even on machines without a SPICE simulator.
+    add_test(
+        NAME asap7_8t_snm_analysis_check
+        COMMAND python3 ${CMAKE_SOURCE_DIR}/tests/tools/test_snm_from_sweep.py
+    )
+    set_tests_properties(asap7_8t_snm_analysis_check PROPERTIES TIMEOUT 30)
+
+    # Cell-level stability for the true-dual-port 8T: write trip per port,
+    # hold/read-A/read-B/read-both SNM and DC sweep convergence at SS/TT/FF.
+    # The macro contract declares concurrent same-address read/read legal and
+    # the cell's strength ratios are inherited from the single-port 6T, so
+    # this guards nominal cell margins, not mismatch yield. Bitcell only, no
+    # periphery, so a failure points at the cell. Skips without Xyce.
+    add_test(
+        NAME asap7_8t_stability_check
+        COMMAND ${CMAKE_COMMAND} -E env
+            IOPRECH_SPICE_DUMPER=$<TARGET_FILE:dump_8t_ioprech_spice>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_8t_stability_check.sh
+    )
+    set_tests_properties(asap7_8t_stability_check PROPERTIES
+        TIMEOUT 1200
+        SKIP_RETURN_CODE 77
+    )
 
     # Academic-style sramcol_xN / array_xNxM hierarchy for parameterized 8T
     # wordlines, with the same builder covering non-standard 6T sizes.
@@ -176,6 +261,51 @@ if(BUILD_TESTING)
     set_tests_properties(asap7_8t_wl_slices_check PROPERTIES
         TIMEOUT 600
         SKIP_RETURN_CODE 77
+    )
+
+    # Device-level DRC over the handcrafted cell libraries.  OpenROAD's
+    # detailed_route DRC only covers what the router drew; nothing checked the
+    # cell interiors or their abutment until this gate.  It is a ratchet
+    # against tests/golden/asap7_8t_drc_gdscheck.json, not a clean-DRC claim.
+    add_test(
+        NAME asap7_8t_device_drc_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_device_drc_check.sh
+    )
+    set_tests_properties(asap7_8t_device_drc_check PROPERTIES
+        TIMEOUT 900
+        SKIP_RETURN_CODE 77
+        LABELS "drc;integration"
+    )
+
+    add_test(
+        NAME asap7_2rw_physical_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_2rw_physical_check.sh
+    )
+    set_tests_properties(asap7_2rw_physical_check PROPERTIES
+        TIMEOUT 300 SKIP_RETURN_CODE 77
+    )
+    add_test(
+        NAME asap7_2rw_macro_check
+        COMMAND ${CMAKE_COMMAND} -E env OPENFINRAM_BIN=$<TARGET_FILE:OpenFinRAM>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_2rw_macro_check.sh
+    )
+    set_tests_properties(asap7_2rw_macro_check PROPERTIES
+        TIMEOUT 1200 SKIP_RETURN_CODE 77 LABELS integration RUN_SERIAL TRUE
+    )
+    add_test(
+        NAME asap7_6t_physical_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_6t_physical_check.sh
+    )
+    set_tests_properties(asap7_6t_physical_check PROPERTIES
+        TIMEOUT 600 SKIP_RETURN_CODE 77
+    )
+    add_test(
+        NAME asap7_6t_macro_check
+        COMMAND ${CMAKE_COMMAND} -E env OPENFINRAM_BIN=$<TARGET_FILE:OpenFinRAM>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_6t_macro_check.sh
+    )
+    set_tests_properties(asap7_6t_macro_check PROPERTIES
+        TIMEOUT 1800 SKIP_RETURN_CODE 77 LABELS integration RUN_SERIAL TRUE
     )
 
     # P0 characterization-JSON gate: a JSON carrying the estimated constants
