@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # The wordline driver slice ladder the 2RW macro's strips are built from:
-# the committed GDS and SPICE must be what the generator writes today.
+# the GDS must match its recorded digest and the SPICE the committed netlist.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 generator="$repo_root/scripts/generate_asap7_8t_wl_slices.py"
-committed="$repo_root/tech/gds/sram_8t_wl_slices.gds"
 committed_spice="$repo_root/tech/spice/sram_8t_wl_slices.sp"
 
 if [[ -x "$repo_root/.venv/bin/python" ]]; then
@@ -22,10 +21,12 @@ fi
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-"$python_bin" "$generator" --output "$scratch/slices.gds" --spice-output "$scratch/slices.sp"
-"$python_bin" "$generator" --verify
-if ! cmp -s "$scratch/slices.gds" "$committed" || ! cmp -s "$scratch/slices.sp" "$committed_spice"; then
-    echo "FAIL: committed 8T wordline slice ladder GDS or SPICE is stale; regenerate both with:" >&2
+generated="$scratch/sram_8t_wl_slices.gds"
+"$python_bin" "$generator" --output "$generated" --spice-output "$scratch/slices.sp"
+"$python_bin" "$generator" --verify --output "$generated" --spice-output "$scratch/slices.sp"
+"$python_bin" "$repo_root/scripts/tech_gds.py" --check "$generated"
+if ! cmp -s "$scratch/slices.sp" "$committed_spice"; then
+    echo "FAIL: committed 8T wordline slice ladder SPICE is stale; regenerate it with:" >&2
     echo "  $python_bin scripts/generate_asap7_8t_wl_slices.py" >&2
     exit 1
 fi

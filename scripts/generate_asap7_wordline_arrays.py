@@ -711,8 +711,9 @@ def cell_digest(cell: gdstk.Cell) -> str:
 
 
 def verify_gds(path: Path, wordline_counts: list[int], mux_rows: int,
-               io_gds: Path, tap_pitch: int = 0,
+               io_gds: Path | None, tap_pitch: int = 0,
                strap_pitch: int = 0) -> dict[str, str]:
+    """Check the library; ``io_gds`` None skips the IO pitch (no IO columns yet)."""
     library = gdstk.read_gds(str(path))
     cells = {cell.name: cell for cell in library.cells}
     expected = {contract.bitcell_name for contract in CONTRACTS}
@@ -738,7 +739,7 @@ def verify_gds(path: Path, wordline_counts: list[int], mux_rows: int,
         straps = strap_pitch if contract.key == "8t" else 0
         for count in wordline_counts:
             verify_contract(cells, contract, count, mux_rows, pitch, straps)
-            if contract.key == "8t":
+            if contract.key == "8t" and io_gds is not None:
                 verify_io_pitch(cells, io_gds, count, mux_rows, pitch, straps)
     return {name: cell_digest(cells[name]) for name in sorted(cells)
             if name.startswith(("sramcol_", "array_"))}
@@ -833,8 +834,14 @@ def main(argv: list[str]) -> int:
             )
             args.output.parent.mkdir(parents=True, exist_ok=True)
             library.write_gds(str(args.output), timestamp=FIXED_GDS_TIMESTAMP)
+            # The IO columns are built from these arrays: on a first build
+            # there are none to check the pitch against yet (scripts/tech_gds.py
+            # verifies again once they exist).
+            io_gds = args.io_gds if args.io_gds.is_file() else None
+            if io_gds is None:
+                print(f"note: {args.io_gds} not found; IO pitch not checked")
             digests = verify_gds(
-                args.output, args.word_lines, args.mux_rows, args.io_gds,
+                args.output, args.word_lines, args.mux_rows, io_gds,
                 args.tap_pitch, args.strap_pitch,
             )
             print(f"wrote {args.output}: {len(digests)} parameterized cells")

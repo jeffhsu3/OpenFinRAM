@@ -3,7 +3,6 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 generator="$repo_root/scripts/generate_asap7_wordline_arrays.py"
-committed="$repo_root/tech/gds/sram_wordline_arrays.gds"
 
 if [[ -x "$repo_root/.venv/bin/python" ]]; then
     python_bin="$repo_root/.venv/bin/python"
@@ -23,12 +22,8 @@ trap 'rm -rf "$scratch"' EXIT
 # compiler's two-wordline smoke geometry.
 generated="$scratch/sram_wordline_arrays.gds"
 "$python_bin" "$generator" --output "$generated"
-"$python_bin" "$generator" --verify "$committed"
-if ! cmp -s "$generated" "$committed"; then
-    echo "FAIL: committed parameterized wordline GDS is stale; regenerate it with:" >&2
-    echo "  $python_bin scripts/generate_asap7_wordline_arrays.py" >&2
-    exit 1
-fi
+"$python_bin" "$generator" --verify "$generated"
+"$python_bin" "$repo_root/scripts/tech_gds.py" --check "$generated"
 
 # Exercise a genuinely non-academic wordline count and a non-default mux
 # height for both the 8T and back-ported 6T builders.

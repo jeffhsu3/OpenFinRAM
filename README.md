@@ -199,7 +199,14 @@ Results (`scripts/verify_macro.py`, `scripts/simulate_macro.py`):
 
 ### 8T cell libraries
 
-The flow builds on generated native ASAP7 cells (schematics in `tech/spice/`):
+The flow builds on generated native ASAP7 cells (schematics in `tech/spice/`).
+The GDS libraries are build output: the `tech_gds` target (part of the default
+build when `.venv/bin/python`, or `python3`, can import `gdstk` and
+`chipforge_asap7`) runs `scripts/tech_gds.py`, which writes them into
+`tech/gds/` in about 15 s, and `OpenFinRAM` writes any that are missing before
+a 2RW or 6T run. Git tracks only their geometry digests
+(`tech/gds/digests.json`); after an intended generator change, run
+`scripts/tech_gds.py --update`.
 
 - `tech/gds/sram_cell_8t.gds`: the 8T bitcell and its mirrored-slot variants,
   built from the published ASAP7 6T core with ASAP7-native port-B geometry and
@@ -215,8 +222,8 @@ The flow builds on generated native ASAP7 cells (schematics in `tech/spice/`):
   blocks (`iocol_sram_8t_a/b/b2`) and the `colgrp_x{N}x4_sram_8t` column
   groups that join them to an array, written with their SPICE by
   `scripts/generate_asap7_8t_iocolumn.py`.
-- `tech/gds/sram_8t_ioprech.gds`: standalone port-A and port-B IO/precharge
-  wrappers.
+- `tech/gds/sram_8t_wl_slices.gds` and `tech/gds/sram_6t_iocolumn.gds`: the
+  wordline driver slices and the 6T IO block (both chipforge_asap7 devices).
 
 ## Tests
 
@@ -239,10 +246,10 @@ cmake -S . -B build && ctest --test-dir build --output-on-failure
   `equiv_*`) between the `ctrl_decode` RTL and the mapped ASAP7 netlist,
   including the production structural signoff assertions. This catches
   synthesis-introduced decode bugs that RTL simulation cannot see.
-- `tests/run_8t_bitcell_check.sh`: deterministic ASAP7 8T bitcell/edge GDS
-  regeneration, focused rules, extracted connectivity, and abutment checks.
-- `tests/run_8t_ioprech_check.sh`: deterministic port-A/port-B IO/precharge
-  wrapper regeneration, pin/layer contracts, and pitch-adapter checks.
+- `asap7_tech_gds_check`: the built `tech/gds` libraries against their
+  recorded geometry digests.
+- `tests/run_8t_bitcell_check.sh`: ASAP7 8T bitcell/edge GDS regeneration
+  against its digests, focused rules, extracted connectivity, and abutment checks.
 - `tests/run_wordline_array_check.sh`: deterministic parameterized 8T/6T
   wordline-row and array hierarchy, including a non-standard x18/mux-2 case.
 - `tests/run_8t_iocolumn_check.sh`: deterministic dual-port IO-column routing,

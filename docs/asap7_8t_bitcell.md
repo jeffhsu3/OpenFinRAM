@@ -4,10 +4,9 @@ OpenFinRAM includes a generated ASAP7 bitcell at `tech/gds/sram_cell_8t.gds`
 and its array-edge family at `tech/gds/sram_cell_8t_edges.gds`. Their source is
 `scripts/generate_asap7_8t_bitcell.py`; do not hand-edit the GDS.
 
-The matching port-specific IO/precharge wrappers are generated in
-`tech/gds/sram_8t_ioprech.gds` by
-`scripts/generate_asap7_8t_ioprech.py`. Their reference schematics are in
-`tech/spice/sram_8t_ioprech.sp`.
+These libraries are build output, not tracked files: the `tech_gds` target
+(`scripts/tech_gds.py`) writes them into `tech/gds`, and git keeps only their
+geometry digests in `tech/gds/digests.json`.
 
 Parameterized wordline rows and mux-height arrays are generated in
 `tech/gds/sram_wordline_arrays.gds` by
@@ -156,6 +155,10 @@ derived from the bitcell.
 
 ## Port-specific IO/precharge wrappers
 
+These wrappers' layout generator was removed when the macro moved to the
+routed IO columns; their schematics remain as `SpiceGenerator` templates
+for the device-level SPICE gates below.
+
 `ioprech_sram_8t_a` and `ioprech_sram_8t_b` reuse the published ASAP7
 `iocolgrp_sram_6t122_v2` differential IO core. Each wrapper retains separate
 write-enable, sense-enable, sense-precharge, bitline-precharge, column-select,
@@ -229,8 +232,8 @@ the block's netlist beside the GDS (`tech/spice/sram_8t_iocolumn.sp`, one flat
 subcircuit per port and an `iocol_sram_8t_{a,b}` wrapper in the pin order
 `SpiceGenerator` instantiates). The amplifier's `SAE` and `SAPRECHN` are one
 net (`one_sense_phase`), as the earlier composite drove them. The reused 6T
-wrappers (`sram_8t_ioprech.gds`, the `ioprech_sram_8t_*` templates) are no
-longer in the macro; their generator and device-level SPICE gates remain.
+wrappers (the `ioprech_sram_8t_*` templates) are no longer in the macro;
+their device-level SPICE gates remain, their layout generator does not.
 
 Against the wrappers, on `sram_x4x2x1`: the port IO is 1.76 um wide instead
 of 3.89, the macro reads 15 to 29 ps sooner at Q, the spaced program's energy
@@ -570,22 +573,18 @@ does not raise those limits.
 From the repository root:
 
 ```sh
-.venv/bin/python scripts/generate_asap7_8t_bitcell.py
+.venv/bin/python scripts/tech_gds.py            # every library, in dependency order
 .venv/bin/python scripts/generate_asap7_8t_bitcell.py \
   --verify tech/gds/sram_cell_8t.gds
 .venv/bin/python scripts/generate_asap7_8t_bitcell.py \
   --verify-edges tech/gds/sram_cell_8t_edges.gds
-.venv/bin/python scripts/generate_asap7_8t_ioprech.py
-.venv/bin/python scripts/generate_asap7_8t_ioprech.py \
-  --verify tech/gds/sram_8t_ioprech.gds
-.venv/bin/python scripts/generate_asap7_wordline_arrays.py
 .venv/bin/python scripts/generate_asap7_wordline_arrays.py \
   --verify tech/gds/sram_wordline_arrays.gds
-.venv/bin/python scripts/generate_asap7_8t_iocolumn.py
 .venv/bin/python scripts/generate_asap7_8t_iocolumn.py \
   --verify tech/gds/sram_8t_iocolumn.gds
+.venv/bin/python scripts/tech_gds.py --update   # only when a change is intended
+ctest --test-dir build -R asap7_tech_gds_check --output-on-failure
 ctest --test-dir build -R asap7_8t_bitcell_check --output-on-failure
-ctest --test-dir build -R asap7_8t_ioprech_check --output-on-failure
 ctest --test-dir build -R asap7_8t_ioprech_spice_check --output-on-failure
 ctest --test-dir build -R asap7_wordline_array_check --output-on-failure
 ctest --test-dir build -R asap7_8t_iocolumn_check --output-on-failure
@@ -600,8 +599,8 @@ by the added geometry. Array verification probes the actual flattened metal at
 every east/west and north/south seam, requires WELL/FIN/ACTIVE/select overlap
 at every mirrored cell boundary, checks complete bitline and wordline
 continuity, and requires one isolated wordline component per address. The test
-regenerates the GDS and requires a byte-for-byte match with both checked-in
-artifacts. For the edge library it additionally
+regenerates the GDS and requires its geometry to match the recorded digests
+(`tech/gds/digests.json`). For the edge library it additionally
 checks the forced dummy state, zero transistor channels in every cap cell,
 independent pass-through pins, identical process-frame fingerprints, and
 compatible boundary/grid geometry for mirrored abutment. Edge-frame regressions

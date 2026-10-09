@@ -31,6 +31,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdlib>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -53,6 +54,20 @@ int main(int argc, char **argv) {
 
     // Parse CLI options
     MainCliOptions cli_options = parseMainCliOptions(argc, argv);
+
+    // The 2RW and generated 6T macros are built from generated cell libraries
+    // (tech/gds, scripts/tech_gds.py), which the build writes; write any that
+    // are missing, as a run straight from a checkout has none.
+    if (!cli_options.single_port || cli_options.bitcell_6t) {
+        const std::string root = get_current_dir_name();
+        const std::string venv = join_path(root, ".venv/bin/python");
+        const std::string command = (file_exists(venv) ? "'" + venv + "'" : std::string("python3"))
+            + " '" + join_path(root, "scripts/tech_gds.py") + "' --if-missing";
+        if (std::system(command.c_str()) != 0) {
+            LOGE << "Cannot generate the cell libraries in tech/gds: " << command;
+            return 1;
+        }
+    }
 
     // Generate SPICE netlist
     LOGI << "=== Generating SPICE Netlist ===";

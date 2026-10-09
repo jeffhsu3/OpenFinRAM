@@ -14,8 +14,7 @@ import sys
 
 from drc import REPO, find_gdscheck, provenance, run_device_drc
 
-LIBRARIES = ("sram_cell_8t", "sram_cell_8t_tap", "sram_cell_8t_edges",
-             "sram_8t_ioprech", "sram_8t_iocolumn")
+LIBRARIES = ("sram_cell_8t", "sram_cell_8t_tap", "sram_cell_8t_edges", "sram_8t_iocolumn")
 CALIBRATION_CELLS = ("sram_cell_6t_122", "tapcell_sram_6t122", "dummy_sram_6t122",
                      "senseamp_sram_6t122", "iocolgrp_sram_6t122_v2")
 
