@@ -43,6 +43,9 @@ m4 = layout.layer(40, 0)
 m5 = layout.layer(50, 0)
 assert not top.begin_shapes_rec(m4).at_end(), "no M4 geometry in output"
 assert not top.begin_shapes_rec(m5).at_end(), "no M5 geometry in output"
+for layer in (40, 50):
+    pins = layout.layer(layer, 251)
+    assert not top.begin_shapes_rec(pins).at_end(), f"no pin geometry on layer {layer}"
 print(f"PASS: cells={layout.cells()} instances={instances} bbox={top.dbbox()}")
 EOF
 

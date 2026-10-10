@@ -456,92 +456,34 @@ bool OpenRoadTclGenerator::run_v2lvs(const std::string& work_dir,
                    const std::string& verilog_file,
                    const std::string& spice_file,
                    const std::string& cdl_file) const {
-    std::string cdl = cdl_file;
-    if (cdl.empty()) {
-        std::string tech_cdl = join_path(get_executable_directory(), "tech/cdl/asap7sc7p5t_28_R.cdl");
-        if (file_exists(tech_cdl)) cdl = tech_cdl;
-        else cdl = "/home/s1111534/asap7/asap7sc7p5t_28/CDL/LVS/asap7sc7p5t_28_R.cdl";
+    const std::string cdl = cdl_file.empty()
+        ? join_path(get_executable_directory(), "tech/cdl/asap7sc7p5t_28_R.cdl")
+        : cdl_file;
+    if (!directory_exists(work_dir) || !file_exists(cdl)) {
+        LOGE << "SPICE conversion requires an existing work directory and CDL library";
+        return false;
     }
-    struct stat st; if (stat(work_dir.c_str(), &st)!=0) { LOGE << "work_dir missing"; return false; }
-    // Check if v2lvs binary exists before attempting
-    int has_v2lvs = system("which v2lvs > /dev/null 2>&1");
-    if (has_v2lvs != 0) {
-        LOGW << "v2lvs not found in PATH, generating minimal SPICE stub for bring-up";
-        std::string v_path = join_path(work_dir, verilog_file);
-        std::string sp_path = join_path(work_dir, spice_file);
-        // Minimal stub: parse Verilog module header for port list
-        std::ifstream vin(v_path);
-        std::string line, module_line;
-        bool in_module = false;
-        std::string ports_raw;
-        while (std::getline(vin, line)) {
-            if (line.find("module ctrl_decode") != std::string::npos) { in_module = true; module_line = line; }
-            if (in_module) {
-                ports_raw += line + " ";
-                if (line.find(");") != std::string::npos) break;
-            }
-        }
-        vin.close();
-        // Extract ports between ( and );
-        std::string port_str;
-        size_t lp = ports_raw.find('(');
-        size_t rp = ports_raw.rfind(')');
-        if (lp != std::string::npos && rp != std::string::npos && rp > lp) port_str = ports_raw.substr(lp+1, rp-lp-1);
-        // Clean newlines, split by comma
-        std::vector<std::string> ports;
-        std::string cur;
-        for (char c : port_str) {
-            if (c == ',') { if (!cur.empty()) { // trim
-                    size_t s = cur.find_first_not_of(" \t\n\r"); size_t e = cur.find_last_not_of(" \t\n\r");
-                    if (s != std::string::npos) ports.push_back(cur.substr(s, e-s+1));
-                    cur.clear(); } }
-            else cur += c;
-        }
-        if (!cur.empty()) { size_t s = cur.find_first_not_of(" \t\n\r"); size_t e = cur.find_last_not_of(" \t\n\r"); if (s!=std::string::npos) ports.push_back(cur.substr(s, e-s+1)); }
-        // Ensure VDD VSS present
-        bool has_vdd=false, has_vss=false;
-        for (auto &p:ports) { if (p=="VDD") has_vdd=true; if (p=="VSS") has_vss=true; }
-        if (!has_vdd) ports.push_back("VDD");
-        if (!has_vss) ports.push_back("VSS");
-        std::ofstream fout(sp_path);
-        fout << "* Minimal SPICE stub generated from " << verilog_file << " (v2lvs not available)\n";
-        fout << ".SUBCKT ctrl_decode";
-        for (auto &p:ports) fout << " " << p;
-        fout << "\n";
-        // Add placeholder instances to avoid empty subckt (WLOG)
-        fout << "* placeholder for LVS bring-up - real transistors in GDS\n";
-        fout << ".ENDS\n";
-        fout.close();
-        LOGI << "Generated stub SPICE: " << sp_path << " ports=" << ports.size();
-        return true;
+    if (std::system("which v2lvs > /dev/null 2>&1") != 0) {
+        LOGE << "v2lvs not found in PATH; refusing to generate a placeholder SPICE netlist";
+        return false;
     }
     std::ostringstream cmd;
-    cmd << "bash -c 'cd \"" << work_dir << "\" && v2lvs -v " << verilog_file << " -o " << spice_file << " -s \"" << cdl << "\"' > v2lvs.log 2>&1";
+    cmd << "cd " << shell_quote(work_dir)
+        << " && v2lvs -v " << shell_quote(verilog_file)
+        << " -o " << shell_quote(spice_file)
+        << " -s " << shell_quote(cdl)
+        << " > " << shell_quote(join_path(work_dir, "v2lvs.log")) << " 2>&1";
     LOGI << "Running v2lvs (OpenROAD path): " << cmd.str();
-    int rc = system(cmd.str().c_str());
+    const int rc = std::system(cmd.str().c_str());
     if (rc != 0) {
-        LOGW << "v2lvs failed rc=" << rc << ", falling back to stub SPICE";
-        // Fallback same as above if v2lvs failed at runtime
-        std::string v_path = join_path(work_dir, verilog_file);
-        std::string sp_path = join_path(work_dir, spice_file);
-        if (file_exists(sp_path) && read_file(sp_path).size()>2) return true;
-        // generate minimal stub
-        std::ifstream vin(v_path);
-        std::string line, ports_raw; bool in_module=false;
-        while (std::getline(vin, line)) {
-            if (line.find("module ctrl_decode") != std::string::npos) in_module=true;
-            if (in_module) { ports_raw+=line+" "; if(line.find(");")!=std::string::npos) break; }
-        }
-        vin.close();
-        std::string port_str; size_t lp=ports_raw.find('('); size_t rp=ports_raw.rfind(')');
-        if(lp!=std::string::npos && rp!=std::string::npos) port_str=ports_raw.substr(lp+1,rp-lp-1);
-        std::vector<std::string> ports; std::string cur;
-        for(char c:port_str){ if(c==','){ if(!cur.empty()){ size_t s=cur.find_first_not_of(" \t\n\r"); size_t e=cur.find_last_not_of(" \t\n\r"); if(s!=std::string::npos) ports.push_back(cur.substr(s,e-s+1)); cur.clear();}} else cur+=c; }
-        if(!cur.empty()){ size_t s=cur.find_first_not_of(" \t\n\r"); size_t e=cur.find_last_not_of(" \t\n\r"); if(s!=std::string::npos) ports.push_back(cur.substr(s,e-s+1));}
-        bool has_vdd=false,has_vss=false; for(auto&p:ports){ if(p=="VDD") has_vdd=true; if(p=="VSS") has_vss=true; }
-        if(!has_vdd) ports.push_back("VDD"); if(!has_vss) ports.push_back("VSS");
-        std::ofstream fout(sp_path); fout<<"* Fallback SPICE stub (v2lvs failed)\n.SUBCKT ctrl_decode"; for(auto&p:ports) fout<<" "<<p; fout<<"\n.ENDS\n"; fout.close();
-        return true;
+        LOGE << "v2lvs failed rc=" << rc << "; refusing partial or placeholder SPICE";
+        return false;
+    }
+    struct stat output_stat;
+    const std::string output = join_path(work_dir, spice_file);
+    if (stat(output.c_str(), &output_stat) != 0 || output_stat.st_size == 0) {
+        LOGE << "v2lvs completed without a nonempty SPICE netlist";
+        return false;
     }
     return true;
 }

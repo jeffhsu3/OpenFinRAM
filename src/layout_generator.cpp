@@ -2371,6 +2371,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         double x;
                         double y;
                         bool found;
+                        gdstk::Tag tag = 0;
                     };
                     
                     CtrlPinInfo ctrl_pins[] = {
@@ -2393,6 +2394,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                             if (!ctrl_pins[j].found && strcasecmp(label->text, ctrl_pins[j].search_name) == 0) {
                                 ctrl_pins[j].x = label->origin.x;
                                 ctrl_pins[j].y = label->origin.y;
+                                ctrl_pins[j].tag = label->tag;
                                 ctrl_pins[j].found = true;
                                 LOGI << "  Found " << ctrl_pins[j].search_name << " at (" 
                                         << label->origin.x << ", " << label->origin.y << ")";
@@ -2418,7 +2420,7 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                             LOGW << "  " << ctrl_pins[j].search_name << " not found, using default position";
                         }
                         
-                        ctrl_pin->tag = pin_tag_m3;
+                        ctrl_pin->tag = ctrl_pins[j].found ? ctrl_pins[j].tag : pin_tag_m3;
                         ctrl_pin->magnification = 0.02;
                         sram_cell->label_array.append(ctrl_pin);
                         LOGI << "  Added " << ctrl_pins[j].pin_name << " pin at (" 
@@ -2441,12 +2443,14 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         bool found = false;
                         double ax = addr_pin_x_base;
                         double ay = addr_pin_y_base - a * addr_pin_spacing;
+                        gdstk::Tag addr_pin_tag = pin_tag_m3;
                         
                         for (uint64_t i = 0; i < temp_sram->label_array.count; ++i) {
                             gdstk::Label* label = temp_sram->label_array[i];
                             if (label->text != nullptr && strcmp(label->text, addr_name) == 0) {
                                 ax = label->origin.x;
                                 ay = label->origin.y;
+                                addr_pin_tag = label->tag;
                                 found = true;
                                 break;
                             }
@@ -2455,10 +2459,8 @@ bool LayoutGenerator::run_sram_gds_integration_and_writeback() {
                         gdstk::Label* addr_pin = (gdstk::Label*)gdstk::allocate_clear(sizeof(gdstk::Label));
                         addr_pin->init(addr_name);
                         addr_pin->origin = {ax, ay};
-                        // M3 pin layer matches the Innovus-era pin map of the
-                        // golden srambank_32b reference (all top-level
-                        // signal pins on M3, datatype 251).
-                        addr_pin->tag = pin_tag_m3;
+                        // Preserve the routed pin layer, including OpenROAD M4/M5.
+                        addr_pin->tag = addr_pin_tag;
                         addr_pin->magnification = 0.02;
                         sram_cell->label_array.append(addr_pin);
                         

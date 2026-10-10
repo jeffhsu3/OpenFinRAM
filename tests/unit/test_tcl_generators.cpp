@@ -135,6 +135,31 @@ TEST(OpenRoadTclGeneratorUnitTest, ParseQorReportCellArea) {
     EXPECT_NEAR(gen.get_qor_report().cell_area, 123.45, 1e-9);
 }
 
+TEST(OpenRoadTclGeneratorUnitTest, RejectsFailedOrMissingSpiceOutput) {
+    char temporary[] = "/tmp/openfinram-v2lvs-XXXXXX";
+    ASSERT_NE(mkdtemp(temporary), nullptr);
+    const std::filesystem::path dir(temporary);
+    write_file((dir / "cells.cdl").string(), ".SUBCKT cell A Y\n.ENDS\n");
+    const char* path = std::getenv("PATH");
+    const std::string original_path = path ? path : "";
+    const std::string test_path = dir.string() + ":" + original_path;
+    setenv("PATH", test_path.c_str(), 1);
+    OpenRoadTclGenerator gen;
+    for (const char* script : {
+            "#!/bin/sh\nprintf 'partial netlist' > output.sp\nexit 7\n",
+            "#!/bin/sh\nexit 0\n"}) {
+        std::filesystem::remove(dir / "output.sp");
+        write_file((dir / "v2lvs").string(), script);
+        std::filesystem::permissions(dir / "v2lvs",
+            std::filesystem::perms::owner_all);
+        EXPECT_FALSE(gen.run_v2lvs(dir.string(), "input.v", "output.sp",
+                                  (dir / "cells.cdl").string()));
+    }
+    if (path) setenv("PATH", original_path.c_str(), 1);
+    else unsetenv("PATH");
+    std::filesystem::remove_all(dir);
+}
+
 TEST(OpenRoadTclGeneratorUnitTest, AlignToSiteHeightSnapsToEvenRows) {
     OpenRoadTclGenerator gen;
     gen.set_site_height(0.27);
