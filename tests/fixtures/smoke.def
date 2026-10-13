@@ -17,7 +17,9 @@ PINS 2 ;
       + LAYER M5 ( 21120 10800 ) ( 21600 11280 ) ;
 END PINS
 NETS 2 ;
-    - clk ( PIN clk ) ( u_inv_0 A ) ;
-    - wlt0 ( PIN wlt0 ) ( u_inv_0 Y ) ;
+    - clk ( PIN clk ) ( u_inv_0 A )
+      + ROUTED M4 ( 240 11040 ) ( 2160 * ) ;
+    - wlt0 ( PIN wlt0 ) ( u_inv_0 Y )
+      + ROUTED M5 ( 3240 11040 ) ( 21360 * ) ;
 END NETS
 END DESIGN
