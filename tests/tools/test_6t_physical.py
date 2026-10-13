@@ -9,7 +9,7 @@ import gdstk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from chipforge_asap7.verification.connectivity import MetalGraph
-from compile_asap7_2rw import abstract, build_leaf_6t, build_wordline_strips, leaf_net, strip_net, supply, wordline_tracks
+from compile_asap7_2rw import abstract, build_leaf_6t, build_wordline_strips, io_block_grids, leaf_net, strip_net, supply, wordline_tracks
 import generate_asap7_6t_iocolumn as columns6
 
 ROWS = 8  # wordlines of the array (NUM_WL 4)
@@ -169,6 +169,28 @@ class SixTTileTests(unittest.TestCase):
         self.assertEqual(spec.bitline_entry, (186.5, 83.5))
         self.assertEqual(spec.row_pitch, 270)
         self.assertEqual(spec.height, 4 * 270)
+
+
+class PhasedSixTTileTests(unittest.TestCase):
+    """A tile drawn for its place on the DRM's M4 grid (`m4_grid`), as the assembler asks."""
+
+    def test_every_wordline_count_accepts_the_blocks_grid(self):
+        # 32 and 256 wordlines put the block's x a hair under a multiple of
+        # 24 nm; a bare float modulo read that as 24, not 0, and refused the
+        # block `io_block_grids` had drawn for phase 0.
+        for wordlines in (16, 32, 256):
+            for grid in ((0.0, 12.0), (12.0, 36.0)):
+                plain = build_leaf_6t(wordlines, bottom=True, top=True)
+                tile = build_leaf_6t(wordlines, bottom=True, top=True, m4_grid=grid,
+                                     m4_grids=io_block_grids(plain, grid))  # fmt: skip
+                pads = [p for p in tile.polygons if p.layer == columns6.M4]
+                self.assertTrue(pads, f"{wordlines} wordlines: no M4 joining pads")
+                for pad in pads:
+                    (x0, _), (x1, _) = pad.bounding_box()
+                    for x in (x0, x1):
+                        off = (1000 * x - grid[0]) % 24
+                        self.assertLess(min(off, 24 - off), 1e-3,
+                                        f"{wordlines} wordlines: pad edge {x} off the grid")
 
 
 if __name__ == "__main__":

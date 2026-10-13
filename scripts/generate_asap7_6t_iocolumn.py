@@ -408,7 +408,10 @@ def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: 
     array_x = (fx1 - fx0) + cap_width
     io_x = array_x + array_width
     if m4_grid is not None:
-        wanted = ((m4_grid[0] - 1000 * io_x) % 24, m4_grid[1] % 48)
+        # The block's x is a float sum of cell widths: reduce it as `io_block_grids`
+        # does, to 0.1 nm and then into the period, or a hair under a multiple of
+        # 24 nm reads as 24 rather than 0 (it did at 32 and 256 wordlines).
+        wanted = (round((m4_grid[0] - 1000 * io_x) % 24, 1) % 24, round(m4_grid[1] % 48, 1) % 48)
         if spec.m4_grid is None or any(abs(a - b) > 1e-6 for a, b in zip(spec.m4_grid, wanted)):
             raise RuntimeError(f"the block is drawn for M4 grid {spec.m4_grid}; the tile places it on {wanted}")
     tile = library.new_cell(f"colgrp_x{wordlines}x{mux}_6t{ends_tag(bottom, top)}")
