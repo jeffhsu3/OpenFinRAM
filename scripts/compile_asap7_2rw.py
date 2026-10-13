@@ -27,7 +27,8 @@ arrays.  The second bank's strips are the first's mirrored the same way.
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
+import dataclasses
+from collections import Counter, defaultdict
 import functools
 import itertools
 import json
@@ -49,6 +50,8 @@ LAYER_NAMES = dict(zip(METALS, (f"M{i}" for i in range(1, 10))))
 MIN_WIDTH_UM = dict(zip(METALS, (0.018, 0.018, 0.018, 0.024, 0.024, 0.032, 0.032, 0.040, 0.040)))
 #: A driver slice: four wordlines at the array's pitch, its outputs 54 nm in.
 SLICE_WIDTH, WORDLINE_PITCH = 0.432, 0.108
+#: M3 past a V3, along the column (chipforge's V3_M3_CAP), um.
+V3_M3_CAP_UM = 0.017
 #: The array centres a fin on its edge, the slices a fin space on theirs: this
 #: far apart both fin grids are on pitch.
 FIN_HALF_PITCH = 0.0135
@@ -227,15 +230,17 @@ def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_
                 # its 18 nm landings to 17 would leave no access; let the
                 # reader round them whole instead.
                 exact = bool(on_grid)
-                if snap_half_nm:
-                    # The 6T tile's half-nanometre rails leave only stubs in
-                    # its IO block's M1 on the grid, and a route there never
-                    # converged (6T band, x64x8x1).  Its vertical straps (M3,
-                    # M5) are whole across: only their ends move, inward.
-                    straps = [p for p in polys if p.layer in (METALS[2], METALS[4]) and all(
-                        abs((x - ox) * 1000 - round((x - ox) * 1000)) < 1e-3 for x, _ in p.points)]  # fmt: skip
-                    if straps:
-                        access, exact = straps, True
+                # Vertical straps (M3, M5) are whole across: only their ends
+                # move, inward.  The 6T tile's half-nanometre rails leave only
+                # stubs in its IO block's M1 on the grid, and a route there
+                # never converged (6T band, x64x8x1); an 8T dummy row's tied
+                # stubs meet only on their M5 strap, and offered M1-M3 alone
+                # the router joined their pieces to each other and to nothing
+                # else (x4x2x1: vss in two).
+                straps = [p for p in polys if p.layer in (METALS[2], METALS[4]) and all(
+                    abs((x - ox) * 1000 - round((x - ox) * 1000)) < 1e-3 for x, _ in p.points)]  # fmt: skip
+                if straps and (snap_half_nm or any(p.layer == METALS[4] for p in straps)):
+                    access, exact = straps, True
             elif snap_half_nm:
                 # The 6T end row's M1 comb is half-nanometre metal with
                 # 4 nm steps; a router wire landed on it leaves a notch
@@ -612,6 +617,131 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
     return pairs, load
 
 
+#: Port B's via stacks in a strip pair (`build_wordline_strips`): the cells,
+#: and the M3 spacings that bound how far a stack's M3 stub may grow to reach
+#: an M4 track: tip to tip (M3.S.4), corner to corner (M3.S.6).
+STRIP_VIAS = ("wl_via34", "wl_via45")
+M3_TIP_SPACE, M3_CORNER_SPACE = 0.031, 0.020
+
+
+def strip_via_window(pair):
+    """Where port B's via row may go in `pair`: ``(y, lo, hi, stacks)``, um.
+
+    `y` is the row's centre as drawn; ``[lo, hi]`` the centres every stack's
+    V3 can take, its M3 stub grown to cover it (`V3_M3_CAP` past it) and kept
+    clear of the strip's other M3 (`M3_TIP_SPACE`, `M3_CORNER_SPACE`) and
+    inside the pair; `stacks` each stack's ``(x of its V3, x of its V4)``.
+    None for a pair without them (the single-port strip).
+    """
+    refs = [r for r in pair.references if r.cell.name in STRIP_VIAS]
+    if not refs:
+        inner = _mirrored_pair(pair)
+        if inner is None or (window := strip_via_window(inner.cell)) is None:
+            return None
+        # `mirrored`'s pair: x -> its origin - x, y as drawn.
+        y, lo, hi, stacks = window
+        x = float(inner.origin[0])
+        return y, lo, hi, [(x - a, x - b) for a, b in stacks]
+    y = round(float(refs[0].origin[1]), 6)
+    xs3 = sorted(float(r.origin[0]) for r in refs if r.cell.name == "wl_via34")
+    xs4 = sorted(float(r.origin[0]) for r in refs if r.cell.name == "wl_via45")
+    m3 = [tuple(float(v) for corner in q.bounding_box() for v in corner)
+          for q in pair.get_polygons(layer=30, datatype=0)]  # fmt: skip
+    _, bottom, _, top = columns.boundary_box(pair)
+    lo, hi = bottom + V3_M3_CAP_UM, top - V3_M3_CAP_UM
+    for x in xs3:
+        stub = [b for b in m3 if b[0] <= x <= b[2] and b[1] <= y <= b[3]]
+        s0, s1 = min(b[0] for b in stub), max(b[2] for b in stub)
+        t0, t1 = min(b[1] for b in stub), max(b[3] for b in stub)
+        for a0, b0, a1, b1 in m3:
+            gap = max(a0 - s1, s0 - a1)
+            if gap >= M3_CORNER_SPACE or (b1 > t0 and b0 < t1):
+                continue  # far enough across, or beside the stub already
+            reach = M3_TIP_SPACE if gap < 0 else math.sqrt(M3_CORNER_SPACE**2 - gap**2)
+            if b0 >= t1:
+                hi = min(hi, b0 - reach - V3_M3_CAP_UM)
+            elif b1 <= t0:
+                lo = max(lo, b1 + reach + V3_M3_CAP_UM)
+    return y, math.ceil(lo * 2000) / 2000, math.floor(hi * 2000) / 2000, list(zip(xs3, xs4))
+
+
+def _mirrored_pair(pair):
+    """The one reference of a `mirrored` pair (to the pair as drawn), else None."""
+    refs = pair.references
+    if len(refs) == 1 and refs[0].x_reflection and abs(refs[0].rotation - math.pi) < 1e-9:
+        return refs[0]
+    return None
+
+
+def strip_via_row(window, track):
+    """The M4 track (`track` nm past a multiple of 48) in `window` (`strip_via_window`)
+    nearest its drawn row, um; None if there is none."""
+    y, lo, hi, _ = window
+    k_lo, k_hi = math.ceil((lo * 1000 - track) / 48 - 1e-9), math.floor((hi * 1000 - track) / 48 + 1e-9)
+    if k_lo > k_hi:
+        return None
+    return min(((track + 48 * k) / 1000 for k in range(k_lo, k_hi + 1)), key=lambda v: abs(v - y))
+
+
+def retrack_strip_vias(pair, track, name):
+    """A copy of `pair` named `name` with port B's via row on the M4 track nearest its
+    drawn row, the tracks `track` nm past a multiple of 48 in its frame; None when no
+    track is in reach (`strip_via_window`) or the pair has no via row."""
+    window = strip_via_window(pair)
+    if window is None:
+        return None
+    if (inner := _mirrored_pair(pair)) is not None:
+        moved = retrack_strip_vias(inner.cell, track, inner.cell.name + name.removeprefix(pair.name))
+        if moved is None:
+            return None
+        out = gdstk.Cell(name)
+        out.add(gdstk.Reference(moved, inner.origin, inner.rotation, x_reflection=inner.x_reflection))
+        out.add(*[q.copy() for q in pair.polygons], *[label.copy() for label in pair.labels])
+        return out
+    y, _, _, stacks = window
+    new = strip_via_row(window, track)
+    if new is None:
+        return None
+    out = pair.copy(name)
+    for ref in out.references:
+        if ref.cell.name in STRIP_VIAS:
+            ref.origin = (ref.origin[0], new)
+    for x3, x4 in stacks:
+        # The M5 strap from the stack to the pair's far edge; the M3 stub to the V3.
+        strap = next(q for q in out.polygons if q.layer == 50
+                     and abs((q.bounding_box()[0][0] + q.bounding_box()[1][0]) / 2 - x4) < 1e-6
+                     and q.bounding_box()[0][1] - 1e-6 <= y <= q.bounding_box()[1][1] + 1e-6)  # fmt: skip
+        (a, b), (c, d) = strap.bounding_box()
+        out.remove(strap)
+        far_up = d - y > y - b
+        out.add(gdstk.rectangle((a, new - 0.023 if far_up else b), (c, d if far_up else new + 0.023), layer=50))
+        out.add(gdstk.rectangle((x3 - 0.009, new - V3_M3_CAP_UM), (x3 + 0.009, new + V3_M3_CAP_UM), layer=30))
+    return out
+
+
+def block_strip_via_window(lef, pair, shift):
+    """`lef` (`pair`'s abstract) with its via row's reach obstructed on M3 and M4.
+
+    The band's controller is routed around the strips before the macro knows
+    which track their via rows land on (`retrack_strip_vias`).
+    """
+    window = strip_via_window(pair)
+    if window is None:
+        return lef
+    _, lo, hi, stacks = window
+    low, _ = pair.bounding_box()
+    ox, oy = (math.floor(float(v) * 1000) / 1000 - d for v, d in zip(low, shift))
+    rects = ["    LAYER M4 ;"]
+    x0 = min(x for stack in stacks for x in stack) - 0.024
+    x1 = max(x for stack in stacks for x in stack) + 0.024
+    rects.append(f"    RECT {x0 - ox:.4f} {lo - 0.012 - oy:.4f} {x1 - ox:.4f} {hi + 0.012 - oy:.4f} ;")
+    rects.append("    LAYER M3 ;")
+    for x3, _ in stacks:
+        rects.append(f"    RECT {x3 - 0.009 - ox:.4f} {lo - V3_M3_CAP_UM - oy:.4f} "
+                     f"{x3 + 0.009 - ox:.4f} {hi + V3_M3_CAP_UM - oy:.4f} ;")  # fmt: skip
+    return lef.replace("  OBS\n", "  OBS\n" + "\n".join(rects) + "\n", 1)
+
+
 #: Each predecode input's join to its M4 rail, in the slice: (x of the
 #: V2/V3 stack, the rail's offset from the pin's M2 row).  B0 and B1 stack
 #: straight up (B1 left of the M3 line crossing its row); B2 and B3, which
@@ -711,7 +841,57 @@ def mirrored(lib, cell, name, width):
     return out
 
 
-def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, strap_pitch=0):
+#: A chipforge IO block's cell (`IoColumnSpec`, `SidewaysIoColumnSpec`), and one
+#: drawn for its place on the DRM's M4 grid (``m4_grid``: ``_g<x>x<y>``).
+IO_BLOCK = re.compile(r"iocol(270)?_x\d+_.*")
+PLACED_BLOCK = re.compile(r".*_g[\dp]+x[\dp]+")
+
+
+def io_block_grids(tile, grid):
+    """``block name -> (x, y)``: the DRM's M4 grid point `grid` (nm in `tile`) in each IO block's frame.
+
+    The grid repeats every 24 nm in x and 48 in y, so any point of it will
+    do; references may mirror but not turn (M4 runs in x).
+    """
+    found = {}
+
+    def walk(cell, point):
+        for ref in cell.references:
+            if ref.rotation % math.pi > 1e-9 or ref.repetition.size > 1:
+                if any(IO_BLOCK.fullmatch(c.name) for c in (ref.cell, *ref.cell.dependencies(True))):
+                    raise RuntimeError(f"{ref.cell.name}: an IO block under a turned or repeated reference")
+                continue
+            x, y = point[0] - 1000 * ref.origin[0], point[1] - 1000 * ref.origin[1]
+            if abs(ref.rotation) > 1e-9:  # a half turn
+                x, y = -x, -y
+            if ref.x_reflection:
+                y = -y
+            local = (round(x % 24, 1) % 24, round(y % 48, 1) % 48)
+            if IO_BLOCK.fullmatch(ref.cell.name):
+                if found.setdefault(ref.cell.name, local) != local:
+                    raise RuntimeError(f"{ref.cell.name} is placed on two M4 phases in one tile")
+            else:
+                walk(ref.cell, (x, y))
+
+    walk(tile, grid)
+    return found
+
+
+def tag_hierarchy(cell, tag):
+    """Append `tag` to the name of `cell` and of every cell under it holding a block drawn
+    for its place: those differ from the same tile's elsewhere in the macro."""
+    holds = {}
+
+    def holding(c):
+        if id(c) not in holds:
+            holds[id(c)] = any(PLACED_BLOCK.fullmatch(r.cell.name) or holding(r.cell) for r in c.references)
+        return holds[id(c)]
+
+    for c in [c for c in (cell, *cell.dependencies(True)) if holding(c)]:
+        c.name += tag
+
+
+def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, strap_pitch=0, m4_grids=None):
     """``iocol A | cap | array of `wordlines` | iocol B``, with a dummy row below and/or above.
 
     In a stack of abutted tiles only the stack's two ends need a dummy row
@@ -723,6 +903,9 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, stra
 
     With `strap_pitch` every that many taps is a strap cell, whose M5 supply
     spines run down the tap column through every row and abutted tile.
+
+    `m4_grids` maps an IO block's name to the DRM's M4 grid in it
+    (`IoColumnSpec.m4_grid`): where the tile lands (`io_block_grids`).
     """
     gds = REPO / "tech/gds"
     lib = arrays.build_library(
@@ -740,6 +923,9 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, stra
     }
     # Each port's IO is the parametric column block, built to this bitcell.
     specs = columns.io_block_specs(cells["sram_cell_8t"])
+    if m4_grids:
+        specs = {port: dataclasses.replace(spec, m4_grid=m4_grids.get(spec.cell_name))
+                 for port, spec in specs.items()}  # fmt: skip
     blocks, _ = columns.build_io_blocks(specs)
     for block in blocks.values():
         for dep in (block, *block.dependencies(True)):
@@ -840,9 +1026,9 @@ def build_leaf(wordlines, tap_pitch, bottom=True, top=True, shared_b=False, stra
     return capped
 
 
-@functools.cache
-def _library_6t(wordlines, mux=4):
-    """The single-port 6T tiles' library: the released 6T cells, the single-column IO block, every end variant."""
+def _io_6t(mux, m4_grids=None):
+    """A library of the released 6T cells and the single-column IO block (`build_leaf`'s
+    `m4_grids`); the block's tile wrapper, its spec, the cells."""
     import generate_asap7_6t_iocolumn as columns6
 
     cells = columns6.load_source()
@@ -850,24 +1036,41 @@ def _library_6t(wordlines, mux=4):
     for name in sorted(columns6.SOURCE_CELLS):
         columns6.add_with_dependencies(lib, cells[name])
     spec = columns6.io_spec(cells[columns6.BITCELL], mux)
+    if m4_grids:
+        spec = dataclasses.replace(spec, m4_grid=m4_grids.get(spec.cell_name))
     block, deps, _ = columns6.build_io_block(spec)
     for dep in (block, *deps):
         if dep.name not in {c.name for c in lib.cells}:
             lib.add(dep)
-    io = columns6.build_io(lib, block, spec)
+    return lib, columns6.build_io(lib, block, spec), spec, cells
+
+
+@functools.cache
+def _library_6t(wordlines, mux=4):
+    """The single-port 6T tiles' library: the released 6T cells, the single-column IO block, every end variant."""
+    import generate_asap7_6t_iocolumn as columns6
+
+    lib, io, spec, cells = _io_6t(mux)
     tiles = {(bottom, top): columns6.build_tile(lib, cells, wordlines, io, spec, bottom=bottom, top=top)
              for bottom, top in itertools.product((True, False), repeat=2)}  # fmt: skip
     return lib, tiles
 
 
-def build_leaf_6t(wordlines, bottom=True, top=True, mux=4):
+def build_leaf_6t(wordlines, bottom=True, top=True, mux=4, m4_grid=None, m4_grids=None):
     """``edge filler | cap | array of `wordlines` | dummy | tap | IO``: the single-port 6T tile.
 
     The released 6T cells with chipforge's single-column IO block
     (`generate_asap7_6t_iocolumn`); a dummy row below and/or above, as the
-    8T tile has.  Its pins are the 8T tile's port A's.
+    8T tile has.  Its pins are the 8T tile's port A's.  With `m4_grid` (nm
+    in the tile) its M4 is drawn for a place on the DRM's grid, the block's
+    as `m4_grids` says (`build_leaf`).
     """
-    return _library_6t(wordlines, mux)[1][(bottom, top)]
+    if m4_grid is None:
+        return _library_6t(wordlines, mux)[1][(bottom, top)]
+    import generate_asap7_6t_iocolumn as columns6
+
+    lib, io, spec, cells = _io_6t(mux, m4_grids)
+    return columns6.build_tile(lib, cells, wordlines, io, spec, bottom=bottom, top=top, m4_grid=m4_grid)
 
 
 def tie_end_row_stubs(cell):
@@ -1147,25 +1350,51 @@ def run(args):
 
     banding = args.band is not None or args.plan_band is not None
     variants = {}
-    for index in range(half_bits):
-        bottom, top = ends_of(index)
-        if (bottom, top) in variants:
-            continue
+    # The tiles' left boundary edge in the macro: the bank's margin, or just
+    # past it where the tiles' gates meet the gate grid.
+    margin_x = None
+    grids = {}
+    shifts = {}
+
+    def make_variant(bottom, top, m4_grid=None, tag=""):
+        """A tile and its master: with `m4_grid` (nm in the tile), its M4 drawn for a place
+        on the DRM's grid in the macro, and every cell holding its blocks renamed with `tag`."""
+        nonlocal margin_x
+        m4_grids = None if m4_grid is None else io_block_grids(variants[(bottom, top)][0], m4_grid)
         if single:
-            cell = build_leaf_6t(array_wordlines, bottom=bottom, top=top, mux=args.mux)
+            cell = build_leaf_6t(array_wordlines, bottom=bottom, top=top, mux=args.mux,
+                                 m4_grid=m4_grid, m4_grids=m4_grids)  # fmt: skip
         else:
             cell = build_leaf(array_wordlines, tap_pitch, bottom=bottom, top=top, shared_b=shared_b,
-                              strap_pitch=args.strap_pitch)
+                              strap_pitch=args.strap_pitch, m4_grids=m4_grids)
         if banding:
             # Over the IO columns an end tile stops at its IO blocks: the
             # controller's band takes the rest.
             notch_band_edges(cell, end_row_spans(cell, shared_b), single)
         labels = [label for label in cell.labels if not supply(label.text)]
-        if single and args.band is not None:
-            # The tile lands at the bank's margin, its boundary's left edge there.
+        # The tile's fins are on the array's grid, half a fin pitch off the
+        # standard cells': it sits half a nanometre up in its master.
+        phase = grid_phase(cell)
+        shift = grid_shift(phase)
+        bx0 = columns.boundary_box(cell)[0]
+        # The tile's origin lies its boundary's left edge less its corner's x.
+        # Its frame is on M5's track lattice too: the 6T tile draws its
+        # supply stripes on the tracks there (generate_asap7_6t_iocolumn).
+        x_rules = offset_rules(grid_rules(cell, phase, shift, tracks=(5,))[0], bbox_origin(cell)[0] - bx0)
+        if args.band is not None:
+            # The band's controller has its frame's origin at the tiles' left edge.
+            x_rules.append((TRACK_LATTICE, 0))
+        left = snap(args.margin, x_rules)
+        if margin_x is not None and abs(left - margin_x) > 1e-6:
+            raise RuntimeError(f"the tiles' gates are on different grids ({left} um, {margin_x} um)")
+        margin_x = left
+        if single and any(shift):
             add_m5_landings(cell, [label for label in labels if not is_wordline(label.text)],
-                            args.margin - columns.boundary_box(cell)[0])  # fmt: skip
-        master = ("dp_colpair" if shared_b else "dp_column") + ends_tag(bottom, top)
+                            margin_x - bx0 + shift[0])  # fmt: skip
+        master = ("dp_colpair" if shared_b else "dp_column") + ends_tag(bottom, top) + tag
+        if tag:
+            tag_hierarchy(cell, tag)
+        grids[master] = grid_rules(cell, phase, shift, tracks=(5,))
         # A tile between a stack's ends meets tiles above and below: its IO
         # blocks' supply straps (and the top rail past the block, the next
         # tile's bottom one) join theirs end to end, so only the end tiles'
@@ -1186,23 +1415,27 @@ def run(args):
             return (min(p.bounding_box()[0][1] for p in polys) <= y_lo + 0.001
                     or max(p.bounding_box()[1][1] for p in polys) >= y_hi - 0.001)  # fmt: skip
 
-        variants[(bottom, top)] = (cell, *abstract(
+        shifts[master] = shift
+        return (cell, *abstract(
             cell, master, labels, abutted=is_wordline,
-            shift=(0.0, HALF_NM) if args.band is not None else (0.0, 0.0),
+            shift=shift,
             abutted_supply=None if bottom or top else through,
             snap_half_nm=single,
             supply_span=(span_lo, span_hi),
         ))  # fmt: skip
+
+    for index in range(half_bits):
+        if ends_of(index) not in variants:
+            variants[ends_of(index)] = make_variant(*ends_of(index))
     leaf = next(iter(variants.values()))[0]
     size = next(iter(variants.values()))[4]
-    lef = "\n".join(v[3] for v in variants.values())
     strip_lib = gdstk.Library(unit=1e-6, precision=1e-10)
     # The strips are drawn on the first bank's half: a pair tile's first reference.
     strip_pairs, slice_load = build_wordline_strips(
         strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits,
         ports=ports,
         segment_bits=segment if segments > 1 else None, mux=args.mux,
-        rail_on_grid=0.0 if banding else None,
+        rail_on_grid=0.0,
     )
     if shared_b:
         tile_width = columns.boundary_box(leaf)[2]
@@ -1218,22 +1451,39 @@ def run(args):
     def is_strip_select(net):
         return re.fullmatch(r"(SEL|B)_[AB]\[\d+\]", net) is not None
 
-    pair_masters = {}
-    for half, pair in strip_pairs.items():
-        pair_labels = [label for label in pair.labels if not supply(label.text)]
-        pair_masters[half] = abstract(
-            pair, f"dp_wl_strips_{half}", pair_labels,
+    pair_masters, pair_shifts = {}, {}
+
+    def strip_master(half, pair, name):
+        return abstract(
+            pair, name, [label for label in pair.labels if not supply(label.text)],
             abutted=lambda net: is_wordline(net) or (in_band and is_strip_select(net)),
-            # In the controller's frame (the band's edge, on the chipforge
-            # half-nanometre phase) the slices are on its grid.
-            shift=(0.0, HALF_NM) if banding else (0.0, 0.0),
+            shift=pair_shifts[half],
         )
 
+    for half, pair in strip_pairs.items():
+        # On the array's fin grid like the tiles, half a nanometre up in its
+        # master: in the controller's frame (the band's edge, on the
+        # chipforge half-nanometre phase) the slices are on its grid.
+        phase = grid_phase(pair)
+        pair_shifts[half] = grid_shift(phase)
+        grids[f"dp_wl_strips_{half}"] = grid_rules(pair, phase, pair_shifts[half])
+        pair_masters[half] = strip_master(half, pair, f"dp_wl_strips_{half}")
+
+    def via_track(half, y_pair):
+        """The M4 tracks' offset, nm, in the frame of a `half` pair placed at `y_pair`."""
+        return (12 - round(2000 * (y_pair + pair_shifts[half][1])) / 2) % 48
+
+    def strip_on_track(side, y_pair):
+        """Whether every `side` pair placed at `y_pair` has a track its via row reaches."""
+        windows = [strip_via_window(strip_pairs[d]) for d in strip_pairs if d.split("_")[0] == side]
+        return all(w is None or strip_via_row(w, via_track(side, y_pair)) is not None for w in windows)
+
     bank_gap = args.bank_gap
-    # Preserve the validated pin-access phase in each bank. 2.88 um is the
-    # least common multiple of all M1-M9 routing pitches; an arbitrary bank
-    # stride can strand the small cap/tap ground terminals between tracks.
-    bank_stride = math.ceil((size[0] + bank_gap) / 2.88) * 2.88
+    # Preserve the validated pin-access phase in each bank, and its gates on
+    # the gate grid: 1.728 um is the least common multiple of the gate pitch
+    # and the M1-M7 routing pitches; an arbitrary bank stride can strand the
+    # small cap/tap ground terminals between tracks.
+    bank_stride = math.ceil(round((size[0] + bank_gap) / 1.728, 6)) * 1.728
     pair_height = columns.boundary_box(strip_pairs["hi"])[3]
     tile_width = columns.boundary_box(leaf)[2]
     band_width = (units - 1) * bank_stride + tile_width
@@ -1278,6 +1528,9 @@ def run(args):
 
     if args.plan_band is not None:
         keepouts = [(x0, x1, half) for x0, x1 in dummy_spans for half in ("lo", "hi")]
+        # Which track a pair's via row lands on is known only once the band is.
+        pair_masters = {half: (m[0], m[1], block_strip_via_window(m[2], strip_pairs[half], pair_shifts[half]), m[3])
+                        for half, m in pair_masters.items()}  # fmt: skip
         plan_band(args, pair_masters, strip_placements, band_width, pair_height,
                   keepouts, (seam_lo, seam_hi))  # fmt: skip
         return
@@ -1317,29 +1570,11 @@ def run(args):
         # mid pairs take the same nets outside it, from its pins.
         abutted=(lambda net: net.startswith("sel_")) if in_band and segments == 1 else None,
     )
-    masters = {v[1].name: (v[1], v[2]) for v in variants.values()}
-    masters["dp_controller"] = (controller, ctrl_pins)
-    masters.update({name: (cell, cell_pins) for name, (cell, cell_pins, _, _) in
-                    ((m[0].name, m) for m in pair_masters.values())})  # fmt: skip
-    (work / "blocks.lef").write_text(
-        'VERSION 5.8 ;\nBUSBITCHARS "[]" ;\nDIVIDERCHAR "/" ;\n'
-        + lef
-        + "\n"
-        + ctrl_lef
-        + "\n"
-        + "\n".join(m[2] for m in pair_masters.values())
-        + "\nEND LIBRARY\n"
-    )
-    library = gdstk.Library(unit=1e-6, precision=1e-10)
-    for c in (
-        *(v[1] for v in variants.values()),
-        controller,
-        *(m[0] for m in pair_masters.values()),
-    ):
-        for dep in [c, *c.dependencies(True)]:
-            if dep.name not in {p.name for p in library.cells}:
-                library.add(dep)
-    library.write_gds(str(work / "blocks.gds"), timestamp=columns.FIXED_GDS_TIMESTAMP)
+    ctrl_phase = grid_phase(ctrl)
+    if any(grid_shift(ctrl_phase)):
+        raise RuntimeError("the controller's gates or fins are off the standard cells' grids")
+    # It was routed on the DRM's M4/M5 tracks in its own frame.
+    grids["dp_controller"] = grid_rules(ctrl, ctrl_phase, tracks=(4, 5))
 
     top_name = f"sram_x{args.wordlines * 2}x{args.bits}x{args.banks}"
     # Three kinds of empty space, each its own option: the margin between the
@@ -1357,16 +1592,28 @@ def run(args):
     ):
         if value < 0.2:
             raise RuntimeError(f"the {name} must be at least 0.2 um, got {value}")
-    width = max(
-        (units - 1) * bank_stride + size[0] + 2 * margin, ctrl_size[0] + 2 * margin
-    )
+    ctrl_x = snap(margin, grids["dp_controller"][0])
+    width = max(margin_x + (units - 1) * bank_stride + size[0], ctrl_x + ctrl_size[0]) + margin
 
     # Bottom to top: the lower stack of tiles, abutted at the tile's boundary
     # pitch; its strip pair facing down into it; a channel; the controller; a
     # channel; the upper stack's pair facing up; the upper stack.  A tile's
     # IO columns are shorter than its array, so the stacks keep a channel per
     # tile on each IO side for the controls and data.
-    y_lo_tiles = margin_y
+    # Each stack's tiles and strips are abutted; the margin under the lower
+    # stack and each channel beside the controller grow to put the lower
+    # stack, the controller and the upper stack on the grids.
+    first = variants[ends_of(0)][1].name
+    _, by0, _, _ = columns.boundary_box(variants[ends_of(0)][0])
+    toy = by0 - bbox_origin(variants[ends_of(0)][0])[1]  # the tile's boundary in its master
+    y_rules = offset_rules(grids[first][1], -toy)
+    if in_band:
+        # The controller's frame starts at the band's edge (`y_band`).
+        y_rules.append((TRACK_LATTICE, round(-(stack + HALF_NM - seam_lo) * 1000) % TRACK_LATTICE))
+    y_lo_tiles = snap(margin_y, y_rules)
+    # A few places leave port B's via row no M4 track in reach: the next does.
+    while not in_band and not strip_on_track("lo", y_lo_tiles + stack):
+        y_lo_tiles = snap(y_lo_tiles + 0.001, y_rules)
     if in_band:
         # The controller's die is the whole band between the stacks, the
         # strips in the holes its placement left against each stack.
@@ -1384,18 +1631,21 @@ def run(args):
         y_hi_strips = y_band + die_height - seam_hi - pair_height - HALF_NM
         y_hi_tiles = y_band + die_height - seam_hi - HALF_NM
         cox, coy = bbox_origin(ctrl)
-        ctrl_origin = (margin + cox, y_band + coy)
+        ctrl_origin = (margin_x + cox, y_band + coy)
     else:
         y_lo_strips = y_lo_tiles + stack
-        y_ctrl = y_lo_strips + pair_height + channel
-        y_hi_strips = y_ctrl + ctrl_size[1] + channel
+        y_ctrl = snap(y_lo_strips + pair_height + channel, grids["dp_controller"][1])
+        hi_oy = bbox_origin(strip_pairs["hi"])[1]
+        y_hi_strips = snap(y_ctrl + ctrl_size[1] + channel + hi_oy, grids["dp_wl_strips_hi"][1]) - hi_oy
+        while not strip_on_track("hi", y_hi_strips):
+            y_hi_strips = snap(y_hi_strips + hi_oy + 0.001, grids["dp_wl_strips_hi"][1]) - hi_oy
         y_hi_tiles = y_hi_strips + pair_height
-        ctrl_origin = (margin, y_ctrl)
+        ctrl_origin = (ctrl_x, y_ctrl)
     height = y_hi_tiles + stack + margin_y
     if in_band:
         # The band is the tiles' width; only the controller's side pins stand
         # out of it, into the margin.
-        width = max(margin + band_width, ctrl_origin[0] + ctrl_size[0]) + margin
+        width = max(margin_x + band_width, ctrl_origin[0] + ctrl_size[0]) + margin
     # (instance, master, origin, pin net -> macro net)
     instances = [("CTRL", "dp_controller", ctrl_origin, lambda net: net)]
     nets = defaultdict(list)
@@ -1405,7 +1655,7 @@ def run(args):
             continue
         nets[info["net"]].append(("CTRL", pin))
     for unit in range(units):
-        x_bank = margin + unit * bank_stride
+        x_bank = margin_x + unit * bank_stride
         bank = unit * banks_per_unit  # a pair tile's first bank
         for bit in range(args.bits):
             inst = f"COL_{bank}_{bit}"
@@ -1457,6 +1707,75 @@ def run(args):
                 if info.get("private") or info.get("abutted"):
                     continue
                 nets[resolve(info["net"])].append((inst, pin))
+
+    # The IO blocks route on M4, which the DRM holds to absolute tracks
+    # (M4.AUX.1-2), and where a tile lands is known only now: a stack's
+    # tiles land on different ones (a middle 8T tile is 2376 nm, half a
+    # track pitch past a multiple).  Each tile takes blocks drawn for its
+    # place, a variant per place.
+    phased = {}
+    for k, (inst, master, origin, resolve) in enumerate(instances):
+        ends = next((e for e, v in variants.items() if v[1].name == master), None)
+        if ends is None:
+            continue
+        tile = variants[ends][0]
+        # A point of the tile lands at its master's origin, plus its shift,
+        # less its bounding box's corner.
+        land = [round(2000 * (o + d - b)) / 2 for o, d, b in zip(origin, shifts[master], bbox_origin(tile))]
+        grid = ((-land[0]) % 24, (12 - land[1]) % 48)
+        if (ends, grid) not in phased:
+            tag = "_g" + "x".join(f"{v:g}".replace(".", "p") for v in grid)
+            phased[(ends, grid)] = make_variant(*ends, m4_grid=grid, tag=tag)
+            if bbox_origin(phased[(ends, grid)][0]) != bbox_origin(tile):
+                raise RuntimeError(f"{master}{tag}: its M4 moved the tile's bounding box")
+        instances[k] = (inst, phased[(ends, grid)][1].name, origin, resolve)
+    # Likewise port B's via row in each strip pair: onto the M4 track it lands
+    # nearest, its stubs grown to reach (in the band the controller was
+    # routed around all of that reach: `block_strip_via_window`).
+    retracked = {}
+    for k, (inst, master, origin, resolve) in enumerate(instances):
+        drawn = master.removeprefix("dp_wl_strips_")
+        if drawn not in strip_pairs:
+            continue
+        pair = strip_pairs[drawn]
+        track = via_track(drawn, origin[1] - bbox_origin(pair)[1])
+        if (drawn, track) not in retracked:
+            tag = "_g" + f"{track:g}".replace(".", "p")
+            moved = retrack_strip_vias(pair, track, pair.name + tag)
+            if moved is None and strip_via_window(pair) is not None:
+                print(f"WARNING: {inst}: no M4 track in reach of its via row; left where drawn", flush=True)
+            retracked[(drawn, track)] = moved and strip_master(drawn, moved, master + tag)
+            if moved is not None:
+                grids[master + tag] = grids[master]
+        if retracked[(drawn, track)]:
+            instances[k] = (inst, retracked[(drawn, track)][0].name, origin, resolve)
+    tiles = {v[1].name: v for v in (*variants.values(), *phased.values())
+             if any(master == v[1].name for _, master, _, _ in instances)}  # fmt: skip
+    masters = {name: (v[1], v[2]) for name, v in tiles.items()}
+    masters["dp_controller"] = (controller, ctrl_pins)
+    strip_masters = [m for m in (*pair_masters.values(), *filter(None, retracked.values()))
+                     if any(master == m[0].name for _, master, _, _ in instances)]  # fmt: skip
+    masters.update({m[0].name: (m[0], m[1]) for m in strip_masters})
+    (work / "blocks.lef").write_text(
+        'VERSION 5.8 ;\nBUSBITCHARS "[]" ;\nDIVIDERCHAR "/" ;\n'
+        + "\n".join(v[3] for v in tiles.values())
+        + "\n"
+        + ctrl_lef
+        + "\n"
+        + "\n".join(m[2] for m in strip_masters)
+        + "\nEND LIBRARY\n"
+    )
+    library = gdstk.Library(unit=1e-6, precision=1e-10)
+    for c in (
+        *(v[1] for v in tiles.values()),
+        controller,
+        *(m[0] for m in strip_masters),
+    ):
+        for dep in [c, *c.dependencies(True)]:
+            if dep.name not in {p.name for p in library.cells}:
+                library.add(dep)
+    library.write_gds(str(work / "blocks.gds"), timestamp=columns.FIXED_GDS_TIMESTAMP)
+    check_grid(instances, grids)
 
     external = {"clk", "rst_n", "vdd", "vss"}
     external.update(f"{p}_n_{port}" for p in ("ce", "we", "oe") for port in ports)
@@ -1556,8 +1875,9 @@ def run(args):
     for i, pitch in enumerate(
         (0.036, 0.036, 0.036, 0.048, 0.048, 0.064, 0.064, 0.080, 0.080), 1
     ):
+        offset = DRM_TRACKS.get(i, (0, 0))[1] / 1000
         tcl.append(
-            f"make_tracks M{i} -x_offset 0 -y_offset 0 -x_pitch {pitch} -y_pitch {pitch}"
+            f"make_tracks M{i} -x_offset {offset} -y_offset {offset} -x_pitch {pitch} -y_pitch {pitch}"
         )
     tcl += side_pin_placements(external, probes, width, height, args.top_layer - 1, ports=ports,
                                dq_side="right" if single else None)
@@ -1715,6 +2035,95 @@ def run(args):
 #: row, on the DEF's grid; the bitcell's own metal takes the half instead.
 HALF_NM = 0.0005
 
+#: The ASAP7 DRM's absolute grids, which are the macro's frame (nm): every fin
+#: centred 13.5 past a multiple of 27 (FIN.S.1), every gate 27 past a multiple
+#: of 54 (GATE.S.1), and M4-M7's tracks (AUX.2) 12 past a multiple of 48 (M4,
+#: M5) and 16 past one of 64 (M6, M7), a minimum-width wire's edges then on its
+#: layer's grid (AUX.1).  A chip places the macro on a multiple of them all.
+FIN_GRID, GATE_GRID = (27, 13.5), (54, 27)
+DRM_TRACKS = {4: (48, 12), 5: (48, 12), 6: (64, 16), 7: (64, 16)}
+FIN_LAYER, GATE_LAYER = 2, 7
+
+
+def grid_phase(cell):
+    """Where `cell`'s gates and fins fall in its own frame, nm: the commonest
+    gate centre x mod 54 and fin centre y mod 27, to the half nanometre, None
+    for a cell without them."""
+
+    def commonest(layer, axis, pitch):
+        counts = Counter()
+        for poly in cell.get_polygons(layer=layer, datatype=0):
+            low, high = poly.bounding_box()
+            counts[round(1000 * (low[axis] + high[axis])) / 2 % pitch] += 1
+        return counts.most_common(1)[0][0] if counts else None
+
+    return commonest(GATE_LAYER, 0, GATE_GRID[0]), commonest(FIN_LAYER, 1, FIN_GRID[0])
+
+
+def grid_shift(phase):
+    """How far (um, per axis) a cell of `phase` moves in its master (`abstract`'s
+    `shift`) for a whole-nanometre origin to put its gates and fins on the grids:
+    half a nanometre where it has them on the other half."""
+    return tuple(HALF_NM if p is not None and (want - p) % 1 else 0.0
+                 for p, want in zip(phase, (GATE_GRID[1], FIN_GRID[1])))  # fmt: skip
+
+
+def grid_rules(cell, phase, shift=(0.0, 0.0), tracks=()):
+    """What the origin of a master `abstract` made of `cell` (moved `shift` in it)
+    must meet for the cell's gates and fins, and the M`tracks` it was routed on
+    in its own frame (the DRM's), to land on the macro's grids:
+    ``(x_rules, y_rules)``, each ``[(pitch, residue)]`` in nm."""
+    # The cell's origin in its master's frame.
+    fx, fy = (round(1000 * (s - o), 1) for s, o in zip(shift, bbox_origin(cell)))
+    gate, fin = phase
+    x_rules = [] if gate is None else [(GATE_GRID[0], (GATE_GRID[1] - gate - fx) % GATE_GRID[0])]
+    y_rules = [] if fin is None else [(FIN_GRID[0], (FIN_GRID[1] - fin - fy) % FIN_GRID[0])]
+    for layer in tracks:
+        pitch, _ = DRM_TRACKS[layer]
+        # M5 and M7 run vertically: their tracks are x positions.
+        (x_rules if layer % 2 else y_rules).append((pitch, -(fx if layer % 2 else fy) % pitch))
+    for pitch, residue in x_rules + y_rules:
+        if residue != int(residue):
+            raise RuntimeError(f"{cell.name}: its grids need a half-nanometre shift in its master")
+    return x_rules, y_rules
+
+
+def snap(nominal, rules):
+    """The least whole-nanometre position, um, at or past `nominal` (um) that
+    meets every ``(pitch, residue)`` of `rules` (nm)."""
+    start = math.ceil(round(nominal * 1000, 3))
+    period = math.lcm(*(int(pitch) for pitch, _ in rules)) if rules else 1
+    for v in range(start, start + period):
+        if all((v - residue) % pitch == 0 for pitch, residue in rules):
+            return v / 1000
+    raise RuntimeError(f"no position meets {rules}")
+
+
+def offset_rules(rules, offset):
+    """`rules` on an origin `offset` um past a position, as rules on the position."""
+    nm = round(offset * 1000, 3)
+    return [(pitch, (residue - nm) % pitch) for pitch, residue in rules]
+
+
+#: The lattice a block routed on the DRM's M4/M5 tracks in its own frame (the
+#: controller) needs its frame's origin on, nm: the gate and fin pitches' and
+#: the tracks' least common multiple, in x and in y.
+TRACK_LATTICE = math.lcm(GATE_GRID[0], DRM_TRACKS[5][0])
+
+
+def check_grid(instances, rules):
+    """Raise unless every instance's origin meets its master's `grid_rules`."""
+    off = []
+    for inst, master, (x, y), _ in instances:
+        x_rules, y_rules = rules[master]
+        for value, axis_rules in ((x, x_rules), (y, y_rules)):
+            nm = round(value * 1000, 3)
+            if any((nm - residue) % pitch for pitch, residue in axis_rules):
+                off.append(f"{inst} ({master}) at ({x:.4f}, {y:.4f})")
+                break
+    if off:
+        raise RuntimeError("blocks off the DRM's fin, gate or track grids: " + ", ".join(off))
+
 #: Keep-out around a strip in the controller's band: std-cell wells and
 #: implants clear of the slices', and room for the strips' supply pins.
 BAND_HALO_X, BAND_HALO_Y = 0.216, 0.27
@@ -1800,7 +2209,7 @@ def add_m5_landings(cell, labels, x_macro):
     half-nanometre step (M4.AUX.3; a half-nanometre via is off the
     manufacturing grid).  An M5 landing on the macro's M5 tracks is whole
     across: the router's via on it leaves a rectangle.  `x_macro` is where
-    the cell's x = 0 lands in the macro.
+    the cell's x = 0 lands in the macro; the landings are on its M5 tracks.
     """
     graph = MetalGraph(cell)
     m5 = [p.bounding_box() for p in cell.get_polygons(layer=METALS[4], datatype=0)]
@@ -1817,8 +2226,9 @@ def add_m5_landings(cell, labels, x_macro):
         (x0, y0), (x1, y1) = max((p for p in polys if p.layer == METALS[3]), key=lambda p: p.area()).bounding_box()
         y = (y0 + y1) / 2
         lo, hi = y - M5_LANDING / 2, y + M5_LANDING / 2
-        k = math.ceil((x0 + x_macro + V4_M4_END + V4_SIDE / 2) / M5_PITCH)
-        while (c := k * M5_PITCH - x_macro) + V4_SIDE / 2 + V4_M4_END <= x1 + 1e-9:
+        track = DRM_TRACKS[5][1] / 1000
+        k = math.ceil((x0 + x_macro + V4_M4_END + V4_SIDE / 2 - track) / M5_PITCH)
+        while (c := k * M5_PITCH + track - x_macro) + V4_SIDE / 2 + V4_M4_END <= x1 + 1e-9:
             a, b = c - V4_SIDE / 2, c + V4_SIDE / 2
             clear = all(b + M5_SPACE <= p0[0] or p1[0] + M5_SPACE <= a or hi + M5_SPACE <= p0[1]
                         or p1[1] + M5_SPACE <= lo for p0, p1 in m5) and all(
@@ -2251,11 +2661,12 @@ def power_stripes(width, height, layer, pitch):
     the router joins every block's supply pins to them.
     """
     track, wire = STRIPE_LAYERS[layer]
+    offset = DRM_TRACKS.get(layer, (track, 0))[1]
     count = 2 * max(1, round(width / pitch))
     top = int(1000 * height) // wire * wire
     stripes = []
     for k in range(count):
-        x = round(1000 * width * (k + 0.5) / count / track) * track
+        x = round((1000 * width * (k + 0.5) / count - offset) / track) * track + offset
         stripes.append(("vdd" if k % 2 == 0 else "vss", x, top))
     if len({x for _, x, _ in stripes}) < count:
         raise RuntimeError(f"{count} supply stripes do not fit in {width} um")
@@ -2282,6 +2693,7 @@ def side_pin_placements(external, probes, width, height, layer, ports=("A", "B")
     order bottom to top and stand at least two tracks apart.
     """
     pitch, wire = SIDE_PIN_LAYERS[layer]
+    offset = DRM_TRACKS[layer][1]
 
     def index(net):
         match = re.search(r"\[(\d+)\]$", net)
@@ -2307,10 +2719,10 @@ def side_pin_placements(external, probes, width, height, layer, ports=("A", "B")
     for side, groups in edges.items():
         groups.sort(key=lambda group: sum(map(target, group)) / len(group))
         sep = SIDE_PIN_PITCH
-        y_next = SIDE_PIN_PITCH
+        y_next = SIDE_PIN_PITCH + offset
         for group in groups:
             centre = sum(map(target, group)) / len(group)
-            start = max(round((centre - (len(group) - 1) * sep / 2) / pitch) * pitch, y_next)
+            start = max(round((centre - (len(group) - 1) * sep / 2 - offset) / pitch) * pitch + offset, y_next)
             for k, net in enumerate(group):
                 y = start + k * sep
                 x = SIDE_PIN_DEPTH / 2 if side == "left" else round(1000 * width) - SIDE_PIN_DEPTH / 2

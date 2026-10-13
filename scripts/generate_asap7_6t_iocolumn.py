@@ -43,6 +43,8 @@ from chipforge_asap7.devices import (
 REPO = Path(__file__).resolve().parents[1]
 SOURCE = REPO / "tech/gds/srambank_32b_boundary_2.gds"
 BOUNDARY, M1, M2, M3, M4, M5 = 100, 19, 20, 30, 40, 50
+#: The SRAM array's marker: the design rules for SRAM apply under it.
+SRAMDRC = 99
 V3, V4 = 35, 45
 GCUT = 10
 PIN_TEXTTYPE = 251
@@ -285,6 +287,9 @@ def build_end_row(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordline
     blank = cells["FILLER_BLANK_6t122"]
     for col in range(2):
         row.add(gdstk.Reference(blank, origin=(0.054 * col, dy)))
+    # The blank fillers are the array's edge, like the dummies beside them, but
+    # carry no marker of their own (their fins are on the array's grid).
+    rect(row, (0.0, dy, 0.108, 0.0), SRAMDRC)
     # The row's gate cut at its outer edge and a strip's at its own stand
     # 10 nm apart across the margin (GCUT.S.3 wants 35): one bar across the
     # margin, over the strip's extent (cap column to dummy column), joins them.
@@ -304,6 +309,10 @@ def build_end_row(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordline
 #: 25 nm wide).  An M4 pad per strap and tile joins strap and stripe.
 STRIPE_WIDTH = 0.120
 STRIPE_FROM_STRAP = {"left": (-0.138, -0.018), "right": (0.030, 0.150)}  # stripe x0, x1 from the strap's centre
+#: M5's tracks in the tile's frame: the macro puts a tile's frame on a multiple
+#: of 48 nm in x (compile_asap7_2rw's TRACK_LATTICE), and the DRM's tracks are
+#: centred 12 nm past one (M5.AUX.2); a stripe is centred on one (M5.W.4).
+M5_TRACK_PITCH, M5_TRACK_OFFSET = 0.048, 0.012
 #: A pad is clear of other M4 40 nm along its track, or two tracks (96 nm) off
 #: it: M4's tip-to-tip rule grows every M4 48 nm up and down (M4.S.3/S.4).
 M4_TIP, M4_TRACKS = 0.040, 0.096
@@ -324,12 +333,15 @@ def io_supply_straps(io: gdstk.Cell) -> list[tuple[str, float]]:
     return sorted(set(straps), key=lambda s: s[1])
 
 
-def add_supply_stripes(tile: gdstk.Cell, io: gdstk.Cell, io_x: float, y_low: float, y_high: float) -> None:
+def add_supply_stripes(tile: gdstk.Cell, io: gdstk.Cell, io_x: float, y_low: float, y_high: float,
+                       m4_grid: tuple[float, float] | None = None) -> None:
     """M5 stripes the tile's height beside the IO block's supply straps, joined to them.
 
     A middle tile took its supply only through its neighbours' two
     minimum-width M3 straps a net (~135 ohm a 4:1 tile); abutted, the
-    stripes run the stack's length at about a tenth of that.
+    stripes run the stack's length at about a tenth of that.  With
+    `m4_grid` (`build_tile`) the joining M4 pads lie on the DRM's M4 tracks
+    and end on its vertex grid.
     """
     straps = io_supply_straps(io)
     if len(straps) % 2:
@@ -341,14 +353,27 @@ def add_supply_stripes(tile: gdstk.Cell, io: gdstk.Cell, io_x: float, y_low: flo
     for k, (net, x) in enumerate(straps):
         side = "left" if k % 2 == 0 else "right"
         s0, s1 = (round(x + d, 3) for d in STRIPE_FROM_STRAP[side])
+        # Onto the nearest M5 track, away from the strap on a tie.
+        centre = io_x + (s0 + s1) / 2 - M5_TRACK_OFFSET
+        below = math.floor(round(centre / M5_TRACK_PITCH, 6)) * M5_TRACK_PITCH
+        offsets = sorted((below - centre, below + M5_TRACK_PITCH - centre),
+                         key=lambda d: (round(abs(d), 6), d > 0 if side == "left" else d < 0))  # fmt: skip
+        s0, s1 = round(s0 + offsets[0], 4), round(s1 + offsets[0], 4)
         pad0, pad1 = (round(min(s0, x - 0.009) - 0.011, 3), round(max(s1, x + 0.009) + 0.011, 3))
-        y = 0.040
+        y, step = 0.040, 0.001
+        if m4_grid is not None:
+            # Out to the vertex grid; up to the first track 40 nm in, a track at a time.
+            gx, gy = m4_grid
+            pad0 = (math.floor(round((1000 * (io_x + pad0) - gx) / 24, 6)) * 24 + gx) / 1000 - io_x
+            pad1 = (math.ceil(round((1000 * (io_x + pad1) - gx) / 24, 6)) * 24 + gx) / 1000 - io_x
+            pad0, pad1 = round(pad0, 4), round(pad1, 4)
+            y, step = round((gy + math.ceil((40 - gy) / 48) * 48) / 1000, 4), 0.048
         while y < io_top - 0.040:
             box = (pad0, y - 0.012, pad1, y + 0.012)
             if all(b[0][0] >= box[2] + M4_TIP or b[1][0] <= box[0] - M4_TIP
                    or b[0][1] >= box[3] + M4_TRACKS or b[1][1] <= box[1] - M4_TRACKS for b in blocked):
                 break
-            y = round(y + 0.001, 3)
+            y = round(y + step, 4)
         else:
             raise RuntimeError(f"{io.name}: no M4 row free to join the {net} strap at {x}")
         blocked.append(((box[0], box[1]), (box[2], box[3])))
@@ -361,11 +386,14 @@ def add_supply_stripes(tile: gdstk.Cell, io: gdstk.Cell, io_x: float, y_low: flo
 
 def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: int,
                io: gdstk.Cell, spec: SidewaysIoColumnSpec,
-               bottom: bool = False, top: bool = False) -> gdstk.Cell:
+               bottom: bool = False, top: bool = False,
+               m4_grid: tuple[float, float] | None = None) -> gdstk.Cell:
     """``edge filler | cap | array | IO``, the array's row 0 at y = 0; a dummy row below and/or above.
 
     In a stack of abutted tiles only the stack's two ends carry a dummy row;
-    the tile's boundary is then `END_ROW_MARGIN` past it.
+    the tile's boundary is then `END_ROW_MARGIN` past it.  `m4_grid`: a point
+    of the DRM's M4 grid, nm in the tile, where the tile is placed; the
+    block's `spec` has to have been drawn for it.
     """
     mux = spec.selects
     array = build_array(library, cells, wordlines, mux)
@@ -379,9 +407,15 @@ def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: 
         raise RuntimeError(f"{EDGE_FILLER} is {fy1 - fy0} um, the array {height}")
     array_x = (fx1 - fx0) + cap_width
     io_x = array_x + array_width
+    if m4_grid is not None:
+        wanted = ((m4_grid[0] - 1000 * io_x) % 24, m4_grid[1] % 48)
+        if spec.m4_grid is None or any(abs(a - b) > 1e-6 for a, b in zip(spec.m4_grid, wanted)):
+            raise RuntimeError(f"the block is drawn for M4 grid {spec.m4_grid}; the tile places it on {wanted}")
     tile = library.new_cell(f"colgrp_x{wordlines}x{mux}_6t{ends_tag(bottom, top)}")
     for k in range(copies):
         tile.add(gdstk.Reference(filler, origin=(-fx0, k * (fy1 - fy0) - fy0)))
+    # The edge filler column is the array's edge too, with no marker of its own.
+    rect(tile, (0.0, 0.0, fx1 - fx0, height), SRAMDRC)
     tile.add(gdstk.Reference(array, origin=(array_x, 0.0)))
     tile.add(gdstk.Reference(io, origin=(io_x, 0.0)))
 
@@ -417,7 +451,7 @@ def build_tile(library: gdstk.Library, cells: dict[str, gdstk.Cell], wordlines: 
         # mirrored corner's (where the v1 cap's meets it): close the gap.
         rect(tile, (array_x - 0.108, height - 0.0045, array_x - 0.067, height + 0.0045), M1)
     reach = END_ROW_HEIGHT + END_ROW_MARGIN
-    add_supply_stripes(tile, io, io_x, -reach if bottom else 0.0, height + (reach if top else 0.0))
+    add_supply_stripes(tile, io, io_x, -reach if bottom else 0.0, height + (reach if top else 0.0), m4_grid)
     rect(tile, (0.0, -reach if bottom else 0.0, io_x + boundary_box(io)[2], height + (reach if top else 0.0)),
          BOUNDARY)
     return tile

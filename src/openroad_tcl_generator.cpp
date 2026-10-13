@@ -272,8 +272,10 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
     file << "make_tracks M1 -x_offset 0 -y_offset 0 -x_pitch 0.036 -y_pitch 0.036\n";
     file << "make_tracks M2 -x_offset 0 -y_offset 0 -x_pitch 0.036 -y_pitch 0.036\n";
     file << "make_tracks M3 -x_offset 0 -y_offset 0 -x_pitch 0.036 -y_pitch 0.036\n";
-    file << "make_tracks M4 -x_offset 0 -y_offset 0 -x_pitch 0.048 -y_pitch 0.048\n";
-    file << "make_tracks M5 -x_offset 0 -y_offset 0 -x_pitch 0.048 -y_pitch 0.048\n";
+    // M4/M5 on the DRM's tracks (M4.AUX.2, M5.AUX.2): centred 12 nm past a
+    // multiple of 48, so a minimum-width wire's edges are on the 24 nm grid.
+    file << "make_tracks M4 -x_offset 0.012 -y_offset 0.012 -x_pitch 0.048 -y_pitch 0.048\n";
+    file << "make_tracks M5 -x_offset 0.012 -y_offset 0.012 -x_pitch 0.048 -y_pitch 0.048\n";
     if (!single_port) {
         // Port A's inputs on the left edge and port B's on the right, each
         // port's address bus then its enables together and in index order,

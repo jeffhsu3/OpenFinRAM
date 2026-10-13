@@ -10,3 +10,4 @@ if ! "$python_bin" -c 'import gdstk' >/dev/null 2>&1; then
     exit 77
 fi
 "$python_bin" "$repo_root/tests/tools/test_2rw_physical.py"
+"$python_bin" "$repo_root/tests/tools/test_drm_grid.py"

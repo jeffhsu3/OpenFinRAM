@@ -29,8 +29,8 @@ catch {source "@REPO_ROOT@/tech/make_tracks.tcl"} ; puts "tech tracks sourced or
 make_tracks M1 -x_offset 0 -y_offset 0 -x_pitch 0.036 -y_pitch 0.036
 make_tracks M2 -x_offset 0 -y_offset 0 -x_pitch 0.036 -y_pitch 0.036
 make_tracks M3 -x_offset 0 -y_offset 0 -x_pitch 0.036 -y_pitch 0.036
-make_tracks M4 -x_offset 0 -y_offset 0 -x_pitch 0.048 -y_pitch 0.048
-make_tracks M5 -x_offset 0 -y_offset 0 -x_pitch 0.048 -y_pitch 0.048
+make_tracks M4 -x_offset 0.012 -y_offset 0.012 -x_pitch 0.048 -y_pitch 0.048
+make_tracks M5 -x_offset 0.012 -y_offset 0.012 -x_pitch 0.048 -y_pitch 0.048
 place_pins -hor_layers M4 -ver_layers M5
 
 add_global_connection -net VDD -pin_pattern {^VDD$} -power

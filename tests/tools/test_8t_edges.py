@@ -166,11 +166,22 @@ class EdgeFrameTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as scratch:
             scratch = Path(scratch)
 
+            OFF_GRID = {"M4.AUX.1", "M4.AUX.2"}
+
             def markers(cell, tag):
                 library = gdstk.Library(unit=1e-6, precision=1e-10)
                 library.add(cell, *cell.dependencies(True))
                 gds, report = scratch / f"{tag}.gds", scratch / f"{tag}.lyrdb"
                 library.write_gds(str(gds))
+                # gdscheck's ASAP7 deck exempts every shape overlapping the
+                # SRAMDRC marker, and the bitcell carries one, so a written
+                # copy without it is what puts the cells' M4 under the rules.
+                # The marker legitimately waives the M4 grid and track rules
+                # (M4.AUX.1/2) inside an array, so those are not counted.
+                copy = gdstk.read_gds(str(gds))
+                for each in copy.cells:
+                    each.filter([(edges.SRAMDRC, 0)], remove=True)
+                copy.write_gds(str(gds))
                 result = subprocess.run(
                     [str(binary), "run", "--input", str(gds), "--process", "asap7",
                      "--suite", "main", "--topcell", cell.name, "--threads", "1",
@@ -180,7 +191,7 @@ class EdgeFrameTests(unittest.TestCase):
                 self.assertIn(result.returncode, (0, 2), result.stdout + result.stderr)
                 items = ET.parse(report).getroot().findall("./items/item")
                 self.assertTrue(all(not i.findtext("tags", "").strip() for i in items))
-                return {i.findtext("category", "").strip("'\"") for i in items}
+                return {i.findtext("category", "").strip("'\"") for i in items} - OFF_GRID
 
             lib = arrays.build_library(
                 REPO / "tech/gds/sram_cell_8t.gds",

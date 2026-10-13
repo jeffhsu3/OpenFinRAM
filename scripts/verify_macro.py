@@ -121,11 +121,15 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Pat
         view.mkdir(parents=True, exist_ok=True)
         library = gdstk.read_gds(str(gds))
         view_top = next(c for c in library.cells if c.name == cell)
-        def other_bank(ref, xs_bank=xs_bank):
+        def other_bank(ref, bank=bank, xs_bank=xs_bank):
             x = round(float(ref.origin[0]), 3)
             if ref.cell.name.startswith("dp_col"):
                 return x not in xs_bank
-            return ref.cell.name.startswith("dp_wl_strips") and all(abs(x - xb) >= 1.0 for xb in xs_bank)
+            # A strip pair is drawn in its bank's tile's x, anywhere across
+            # it (the 8T pair under the array, 1.7 um in): its bank is the
+            # last one starting at or before it.
+            owner = max((k for k, xs in enumerate(groups) if min(xs) <= x + 1e-6), default=0)
+            return ref.cell.name.startswith("dp_wl_strips") and owner != bank
 
         view_top.remove(*[r for r in view_top.references if other_bank(r)])
         library.write_gds(str(view / gds.name))

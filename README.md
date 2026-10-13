@@ -181,9 +181,43 @@ The flow has three steps:
 3. The assembler (`--band`) abuts the two tile stacks on the band's edges.
 
 The tiles and strips sit half a nanometre off the whole-nm grid in their
-masters, to land on the band's grid. For the 6T tile, the shift puts its M4 pins
-off the LEF's 1 nm grid. Each pin therefore also gets a V4 and a short M5
-landing on the macro's 48 nm M5 track, so the router can reach it.
+masters, with or without the band (see the DRM grid note below). For the 6T
+tile, the shift puts its M4 pins off the LEF's 1 nm grid. Each pin therefore
+also gets a V4 and a short M5 landing on an M5 track, so the router can reach
+it.
+
+**DRM grid.** The macro's frame is the ASAP7 DRM's absolute grid, so a chip
+must place the macro's origin on a multiple of 1.728 um (the least common
+multiple of the gate pitch and the M1-M7 track pitches):
+- **Rules:**
+  - fins centred 13.5 nm past a multiple of 27 (FIN.S.1);
+  - gates 27 nm past a multiple of 54 (GATE.S.1);
+  - M4/M5 tracks 12 nm past a multiple of 48, and M6/M7 tracks 16 nm past a
+    multiple of 64 (AUX.2).
+- **How the assembler meets them:**
+  - The controller is routed on those tracks.
+  - Each block's origin snaps onto the grids. The bitcell's fins sit half a
+    fin pitch off the standard cells', so the tiles and strips also take the
+    half-nanometre shift.
+  - The margins and channels grow by up to 0.43 um to make room.
+  - The supply stripes and side pins sit on the tracks.
+  - The IO blocks route on M4, so their lines go on the tracks too. Where a
+    tile lands is known only once the floorplan is laid out, and a stack's
+    tiles land on different tracks: a middle 8T tile is 2376 nm, half a
+    track pitch past a multiple of 48. Each tile is therefore rebuilt for
+    its place, its blocks drawn for that grid (chipforge's `m4_grid`), and
+    the masters are named for it (`dp_column_g0x19p5`).
+- **Array edge:** the array's edge cells all carry the SRAMDRC marker, the 6T
+  tile's blank and edge fillers included.
+  - The 8T strip pairs climb to port B's M5 wordlines on via stacks, one
+    row of them per pair, on M4 too. After the floorplan each pair's row
+    moves onto the track it lands nearest, the M3 stubs under it grown to
+    reach (`retrack_strip_vias`). The stubs reach 17-62 nm from the pair's
+    edge, so 4 of the 96 half-nanometre placements have no track in reach;
+    outside the band the assembler moves the pair to the next fin-grid
+    place, and in the band it warns and leaves the row as drawn. The band's
+    controller is routed before the row moves, so the band plan obstructs
+    the row's whole reach on M3 and M4.
 
 Results (`scripts/verify_macro.py`, `scripts/simulate_macro.py`):
 
