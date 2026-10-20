@@ -29,5 +29,15 @@ target_compile_definitions(unit_tests PRIVATE REPO_ROOT="${CMAKE_SOURCE_DIR}")
 
 target_link_libraries(unit_tests gtest_main gdstk argparse)
 
+# Emits the exact IO/precharge template hierarchy consumed by the Xyce
+# regression without running the rest of the SRAM construction flow.
+add_executable(dump_8t_ioprech_spice
+    tools/dump_8t_ioprech_spice.cpp
+    ${CMAKE_SOURCE_DIR}/src/spice_templates.cpp
+)
+target_include_directories(dump_8t_ioprech_spice PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+
 include(GoogleTest)
 gtest_discover_tests(unit_tests)
