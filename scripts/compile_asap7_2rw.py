@@ -38,7 +38,7 @@ import re
 import subprocess
 
 import gdstk
-from asap7_connectivity import MetalGraph, METALS
+from chipforge_asap7.verification.connectivity import MetalGraph, METALS
 import generate_asap7_wordline_arrays as arrays
 import generate_asap7_8t_iocolumn as columns
 import generate_asap7_8t_bitcell as edge_cells

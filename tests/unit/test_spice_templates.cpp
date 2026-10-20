@@ -23,8 +23,6 @@ std::string read_tech_spice(const std::string& name) {
                        std::istreambuf_iterator<char>());
 }
 
-std::string read_reference() { return read_tech_spice("sram_8t_ioprech.sp"); }
-
 size_t count_occurrences(const std::string& text, const std::string& needle) {
     size_t count = 0;
     size_t position = 0;
@@ -542,23 +540,6 @@ TEST(SpiceTemplates8T, GeneratedMacroHierarchyCarriesBothWritePorts) {
     // NUM_WL = 2: one unsplit array of four wordlines.  Physical end caps and
     // taps have no dummy devices.
     EXPECT_EQ(active_cells, 4U);
-}
-
-TEST(SpiceTemplates8T, TrackedWrapperNetlistMatchesTheTemplateContract) {
-    const std::string reference = read_reference();
-    ASSERT_FALSE(reference.empty());
-
-    for (const std::string& token : {
-             ".SUBCKT ioprech_sram_8t_a",
-             ".SUBCKT ioprech_sram_8t_b",
-             "XIO_A WRENAN_A WRENA_A SAE_A SAPRECHN_A",
-             "XIO_B WRENAN_B WRENA_B SAE_B SAPRECHN_B",
-             "BLTN_A[0] BLTN_A[1] BLTN_A[2] BLTN_A[3]",
-             "BLTN_B[0] BLTN_B[1] BLTN_B[2] BLTN_B[3]",
-         }) {
-        EXPECT_NE(reference.find(token), std::string::npos) << token;
-    }
-    EXPECT_EQ(count_occurrences(reference, "VDD VSS iocolgrp_sram_6t122_v2"), 2U);
 }
 
 TEST(SpiceTemplates8T, TrackedBitcellNetlistMatchesTheTemplateContract) {

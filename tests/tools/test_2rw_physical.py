@@ -11,9 +11,8 @@ import unittest
 import gdstk
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from asap7_connectivity import MetalGraph
+from chipforge_asap7.verification.connectivity import MetalGraph, METALS
 from compile_asap7_2rw import abstract, build_leaf, check_route_drc, leaf_net, strip_net, supply, verify
-from asap7_connectivity import METALS
 from mapped_verilog_to_spice import convert
 
 
@@ -299,7 +298,7 @@ class PhysicalMacroTests(unittest.TestCase):
 
     def test_tiles_between_a_stacks_ends_carry_no_dummy_rows(self):
         import generate_asap7_8t_iocolumn as columns
-        from asap7_connectivity import MetalGraph
+        from chipforge_asap7.verification.connectivity import MetalGraph
 
         heights = {}
         for bottom in (False, True):

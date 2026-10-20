@@ -22,6 +22,7 @@ edge masters, parameterized dummy rows, and blank fillers at the 8T pitch.
 
 Shared geometric transformations, in-memory connectivity extraction,
 and verification routines are delegated to ``chipforge_asap7``.
+
 """
 
 from __future__ import annotations

@@ -22,9 +22,11 @@ import sys
 
 import gdstk
 
-from asap7_connectivity import MetalGraph, METALS
+from chipforge_asap7.verification.connectivity import MetalGraph, METALS
+from chipforge_asap7.layout.transform import placed_def_instances
+from chipforge_asap7.verification.sram import verify_decoder_physical
 from generate_asap7_wordline_arrays import boundary_box, direct_label, slot_layout
-from mapped_verilog_to_spice import convert, port_nodes
+from mapped_verilog_to_spice import convert
 
 REPO = Path(__file__).resolve().parents[1]
 TOP = "sram_decoder_2rw"
@@ -304,133 +306,14 @@ def routed_netlist(work: Path, yosys: str) -> dict:
 
 
 def placed_instances(def_path: Path, cells: dict) -> dict:
-    text = def_path.read_text()
-    dbu = int(re.search(r"UNITS DISTANCE MICRONS (\d+)", text)[1])
-    section = text.split("COMPONENTS ", 1)[1].split("END COMPONENTS", 1)[0]
-    result = {}
-    sizes = master_sizes()
-    for match in re.finditer(
-        r"-\s+(\S+)\s+(\S+).*?\+\s+(?:PLACED|FIXED)\s+\(\s*(-?\d+)\s+(-?\d+)\s*\)\s+(\w+)\s*;",
-        section,
-        re.S,
-    ):
-        name, master, x, y, orient = match.groups()
-        name = re.sub(r"\\(.)", r"\1", name)
-        x, y = int(x) / dbu, int(y) / dbu
-        width, height = sizes[master]
-        transforms = {
-            "N": ((x, y), 0, False),
-            "FS": ((x, y + height), 0, True),
-            "FN": ((x + width, y), math.pi, True),
-            "S": ((x + width, y + height), math.pi, False),
-        }
-        if orient not in transforms:
-            raise RuntimeError(f"unsupported standard-cell orientation {orient}")
-        origin, rotation, reflection = transforms[orient]
-        result[name] = gdstk.Reference(
-            cells[master], origin=origin, rotation=rotation, x_reflection=reflection
-        )
-    if not result:
-        raise RuntimeError("routed DEF has no placed instances")
-    return result
+    return placed_def_instances(def_path, cells, master_sizes())
 
 
 def verify_physical(path: Path, plan: dict, design: dict | None = None) -> dict:
-    lib = gdstk.read_gds(str(path))
-    cell = next(c for c in lib.cells if c.name == TOP)
-    # DEF pin shapes are streamed as datatype 251. Include them as conductors
-    # for connectivity, exactly as the macro compiler's controller import.
-    for poly in list(cell.polygons):
-        if poly.datatype == 251 and poly.layer in METALS:
-            copy = poly.copy()
-            copy.datatype = 0
-            cell.add(copy)
-    graph = MetalGraph(cell)
-    roots = set()
-    for output in plan["outputs"]:
-        labels = [label for label in cell.labels if label.text == output["name"]]
-        if len(labels) != 1:
-            raise RuntimeError(f"missing/ambiguous output {output['name']}")
-        label = labels[0]
-        if label.layer != output["layer"] or abs(label.origin[0] - output["x"]) > 1e-7:
-            raise RuntimeError(f"{label.text} is not aligned with its bitcell pin")
-        root = graph.label_root(label)
-        if root in roots:
-            raise RuntimeError("decoder wordlines are shorted")
-        roots.add(root)
-        # Every output route must reach standard-cell M1, not just a pin stub.
-        if not any(
-            p.layer == 19 and graph.root(i) == root
-            for i, p in enumerate(graph.polygons)
-        ):
-            raise RuntimeError(f"{label.text} is an isolated output stub")
-    net_roots = {}
-    aliases = {}
+    return verify_decoder_physical(
+        path, plan, design=design, master_sizes=master_sizes, top_name=TOP
+    )
 
-    def connect(net, label):
-        net = aliases.get(net, net)
-        net_roots.setdefault(net, set()).add(graph.label_root(label))
-
-    if design is not None:
-        module = design["modules"][TOP]
-        aliases = {
-            port["bits"][0]: name
-            for name, port in module["ports"].items()
-            if name in ("VDD", "VSS")
-        }
-        placements = placed_instances(
-            path.with_suffix(".def"), {c.name: c for c in lib.cells}
-        )
-        top_labels = {label.text: label for label in cell.labels}
-        for pin, bit in port_nodes(module):
-            if pin not in top_labels:
-                raise RuntimeError(f"missing physical port {pin}")
-            connect(bit, top_labels[pin])
-        for name, instance in module["cells"].items():
-            if name not in placements:
-                raise RuntimeError(f"missing physical instance {name}")
-            reference = placements[name]
-            if reference.cell_name != instance["type"]:
-                raise RuntimeError(f"wrong physical master at {name}")
-            labels = reference.get_labels()
-            for pin, bits in instance["connections"].items():
-                if len(bits) != 1:
-                    raise RuntimeError(f"non-scalar standard-cell pin {name}/{pin}")
-                hits = [
-                    label
-                    for label in labels
-                    if label.text.upper() == pin.upper() and label.layer in METALS
-                ]
-                if not hits:
-                    raise RuntimeError(f"missing GDS label {name}/{pin}")
-                for label in hits:
-                    connect(bits[0], label)
-        # Trace all supply pins, including filler/tap instances, back to the
-        # PDN. The metal graph excludes transistor channels.
-        for label in cell.get_labels():
-            if (
-                label.text.upper().rstrip("!") in ("VDD", "VSS")
-                and label.layer in METALS
-            ):
-                connect(label.text.upper().rstrip("!"), label)
-        if not {"VDD", "VSS"} <= net_roots.keys():
-            raise RuntimeError("decoder is missing supply pins")
-        owner = {}
-        for net, components in net_roots.items():
-            if len(components) != 1:
-                raise RuntimeError(
-                    f"decoder net {net} is disconnected ({len(components)} components)"
-                )
-            root = next(iter(components))
-            if root in owner and owner[root] != net:
-                raise RuntimeError(f"decoder short between {owner[root]} and {net}")
-            owner[root] = net
-    return {
-        "wordline_pins": len(roots),
-        "aligned": True,
-        "isolated": True,
-        "connected_nets": len(net_roots),
-    }
 
 
 def finalize_gds(path: Path, plan: dict):
