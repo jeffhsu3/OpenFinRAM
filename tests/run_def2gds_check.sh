@@ -40,15 +40,11 @@ assert top is not None, "top cell missing from streamed GDS"
 instances = sum(1 for _ in top.each_inst())
 assert layout.cells() > 1, "standard-cell GDS substitution failed"
 assert instances >= 2, f"expected >=2 placed instances, found {instances}"
-# This fixture has DEF pin rectangles, not routed wires. Streamout retains
-# their pin purpose (251); real standard-cell conductors are drawing (0).
-m4 = layout.layer(40, 251)
-m5 = layout.layer(50, 251)
-assert not top.begin_shapes_rec(m4).at_end(), "no M4 geometry in output"
-assert not top.begin_shapes_rec(m5).at_end(), "no M5 geometry in output"
+# Routed wires stream as drawing (0); DEF pin rectangles keep their pin
+# purpose (251).
 for layer in (40, 50):
-    pins = layout.layer(layer, 251)
-    assert not top.begin_shapes_rec(pins).at_end(), f"no pin geometry on layer {layer}"
+    assert not top.begin_shapes_rec(layout.layer(layer, 0)).at_end(), f"no routed M{layer // 10} wire in output"
+    assert not top.begin_shapes_rec(layout.layer(layer, 251)).at_end(), f"no M{layer // 10} pin geometry in output"
 print(f"PASS: cells={layout.cells()} instances={instances} bbox={top.dbbox()}")
 EOF
 

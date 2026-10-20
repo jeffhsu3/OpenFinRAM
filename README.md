@@ -296,10 +296,10 @@ cmake -S . -B build && ctest --test-dir build --output-on-failure
   assembler's tiles, abstracts and abutments without running the router.
 - `asap7_2rw_macro_check`: builds and routes a small 2RW macro end to end and
   checks its GDS, LEF, Liberty and SPICE agree (slow; needs OpenROAD).
-- `python3 tests/check_macro_pins.py path/to/macro.gds path/to/macro.lef`:
-  checks that generated macro pins match the LEF interface and have metal on
-  their labeled layers, including routed OpenROAD M4/M5 control/address pins.
-  This geometry check does not replace connectivity LVS.
+- `python3 tests/check_macro_pins.py macro.gds macro.lef`: checks that a
+  macro's GDS pin labels match its LEF pins and sit on metal of their own
+  layer, including routed M4/M5 control pins and the M7 power stripes. The
+  macro check runs it; it is a geometry check, not connectivity LVS.
 
 ## Commercial Flow (Cadence / Synopsys, default)
 

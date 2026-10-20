@@ -704,6 +704,11 @@ bool OpenRoadTclGenerator::run_v2lvs(const std::string& work_dir,
         LOGE << "Mapped controller SPICE conversion failed; see " << work_dir << "/verilog_to_spice.log";
         return false;
     }
+    struct stat output;
+    if (stat(join_path(work_dir, spice_file).c_str(), &output) != 0 || output.st_size == 0) {
+        LOGE << "Mapped controller SPICE conversion wrote no netlist: " << join_path(work_dir, spice_file);
+        return false;
+    }
     LOGI << "Converted routed controller to structural SPICE with CDL pin ordering";
     return true;
 }

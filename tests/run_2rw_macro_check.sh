@@ -39,3 +39,5 @@ assert ".INCLUDE" not in (folder / "sram_x4x2x1.sp").read_text().upper(), "deck 
 check(folder)
 print(f"Artifacts: {folder}")
 PY
+folder="$(grep -o 'results/sram_x4x2x1_[0-9]\{8\}_[0-9]\{6\}' "$scratch/compiler.log" | head -n 1)"
+python3 tests/check_macro_pins.py "$folder/sram_x4x2x1.gds" "$folder/sram_x4x2x1.lef"
