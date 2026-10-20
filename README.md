@@ -65,6 +65,13 @@ a 2RW or 6T run. Git tracks only their geometry digests
 
 ## Tests
 
+Device DRC uses a pinned [gdscheck](https://github.com/aesc-silicon/gdscheck)
+dependency and a local ASAP7 width/spacing deck. Install with
+`bash scripts/install_gdscheck.sh`, then run
+`bash tests/run_8t_device_drc_check.sh`. See [gdscheck DRC](docs/gdscheck.md)
+for coverage, calibration, reference cross-checks, and macro usage. The full
+public ASAP7 runset and LVS continue to use KLayout.
+
 Run via CTest (requires `iverilog` and `yosys` in `PATH`):
 
 ```
