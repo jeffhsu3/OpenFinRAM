@@ -27,7 +27,7 @@ then assembles the macro. Requires `yosys`, `openroad` (or `--openroad-path`),
 and KLayout's Python bindings — see External Dependencies.
 
 Notes:
-- The commercial flow remains the default when `--openroad` is omitted; dual-port falls back to it.
+- The commercial flow remains the default when `--openroad` is omitted.
 - The build hard-fails on missing timing paths, setup/hold, or slew/capacitance/fanout violations.
 - The routed controller's SPICE comes from `scripts/mapped_verilog_to_spice.py`, which
   reads the mapped Verilog with Yosys and orders each cell's pins from the CDL, so no

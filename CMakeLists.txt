@@ -132,6 +132,30 @@ if(BUILD_TESTING)
     set_tests_properties(decode_check PROPERTIES TIMEOUT 600)
 
     add_test(
+        NAME decode_dp_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_decode_dp_check.sh
+    )
+    set_tests_properties(decode_dp_check PROPERTIES TIMEOUT 600)
+
+    add_test(
+        NAME decode_1p_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_decode_1p_check.sh
+    )
+    set_tests_properties(decode_1p_check PROPERTIES TIMEOUT 600)
+
+    add_test(
+        NAME asap7_8t_decoder_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_decoder_check.sh
+    )
+    set_tests_properties(asap7_8t_decoder_check PROPERTIES TIMEOUT 300 SKIP_RETURN_CODE 77)
+
+    add_test(
+        NAME asap7_8t_decoder_physical_check
+        COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_8t_decoder_physical_check.sh
+    )
+    set_tests_properties(asap7_8t_decoder_physical_check PROPERTIES TIMEOUT 600 SKIP_RETURN_CODE 77)
+
+    add_test(
         NAME equiv_check
         COMMAND ${CMAKE_COMMAND} -E env bash ${CMAKE_SOURCE_DIR}/tests/run_equiv_check.sh
     )
