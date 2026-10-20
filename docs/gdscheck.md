@@ -1,10 +1,11 @@
 # gdscheck DRC
 
-OpenFinRAM uses [gdscheck](https://github.com/aesc-silicon/gdscheck) for the
+OpenFinRAM uses [gdscheck](https://github.com/aesc-silicon/gdscheck) for macro
+DRC (its ASAP7 main suite, the default in `scripts/verify_macro.py`) and for the
 calibrated device DRC regression. It runs as an external executable. The
-dependency is pinned to revision `24a836ab27277574f8a5d7b6a096850f53843132`
-of [jeffhsu3/gdscheck](https://github.com/jeffhsu3/gdscheck)
-(reports version `0.1.2`) in `scripts/install_gdscheck.sh`.
+dependency is pinned to revision `592c8a79e236575039496c3b9897a6b374603d20`
+of [jeffhsu3/gdscheck](https://github.com/jeffhsu3/gdscheck), branch `asap7`
+(reports version `0.2.0`), in `scripts/install_gdscheck.sh`.
 
 ## Install and run
 
@@ -27,9 +28,8 @@ then `PATH`. `GDSCHECK` is an executable path, not a shell command. Set
 when present. A missing binary or Python `gdstk` skips the CTest gate with
 exit 77; an execution error or incomplete check fails it.
 
-The adapter requires the native ASAP7 directional-rule support in this revision.
-An older executable can still report version `0.1.2`; it is rejected if its
-native `gcut` deck lacks `facing: y`. To use the sibling checkout without installing:
+The adapter requires the native ASAP7 directional-rule support in this revision;
+an executable whose native `gcut` deck lacks `facing: y` is rejected. To use the sibling checkout without installing:
 
 ```bash
 GDSCHECK=../gdscheck/target/release/gdscheck bash tests/run_8t_device_drc_check.sh
@@ -70,21 +70,26 @@ the native `--process asap7 --deck gcut` checks those too.
 
 This is a calibrated subset, **not the full ASAP7 runset or a signoff claim**.
 It does not add enclosure, implant, density, antenna or upper-metal rules.
-The public KLayout runset remains the default in macro verification and in
-the SAE/OpenEvolve checks, which rely on its broader coverage. KLayout also
-remains the LVS engine. To explicitly select the subset for a macro:
+Macro verification instead runs gdscheck's full ASAP7 main suite by default;
+`--drc-engine klayout` selects the public KLayout runset and
+`--drc-engine gdscheck-device` this subset. KLayout remains the LVS engine.
 
 ```bash
 .venv/bin/python scripts/verify_macro.py results/<macro> \
-  --drc-engine gdscheck --out tmp/macro_gdscheck
+  --drc-engine gdscheck-device --out tmp/macro_device_drc
 ```
+
+The main suite exempts every shape that overlaps the `SRAMDRC` marker, which
+the bitcells carry, so it does not check inside the arrays. The device
+subset and the bitcell tests (`tests/tools/test_8t_edges.py` removes the
+marker from its copy) cover them.
 
 Macro baselines from the two profiles are deliberately incompatible.
 
 ## Regression and reference checks
 
 The gate checks every cell, including recursively instantiated geometry, in
-five handcrafted libraries, and requires five published ASAP7 SRAM calibration
+four generated libraries, and requires five published ASAP7 SRAM calibration
 cells to be clean. Reports stay under `tmp/device_drc`. The gdscheck baseline
 is `tests/golden/asap7_8t_drc_gdscheck.json`; the original KLayout baseline is
 preserved separately. The gate rejects new cell/rule findings, larger counts,
@@ -131,10 +136,11 @@ not locked by the install command.
 
 - CTest `asap7_8t_device_drc_check` calls `tests/run_8t_device_drc_check.sh`,
   then `scripts/check_device_drc.py`, then this adapter for every cell in the
-  five handcrafted libraries. It rejects regressions against the saved baseline;
+  four generated libraries. It rejects regressions against the saved baseline;
   passing does not mean zero violations.
 - `scripts/drc.py <gds> --cell <name> --out <directory>` checks one layout.
-- `scripts/verify_macro.py ... --drc-engine gdscheck` explicitly selects this
-  subset for macro DRC. Its default remains the full public KLayout runset.
+- `scripts/verify_macro.py` runs the ASAP7 main suite by default;
+  `--drc-engine gdscheck-device` selects this subset and `--drc-engine klayout`
+  the public KLayout runset.
 - Macro compilation checks connectivity and OpenROAD routing DRC. It does not
   run this device check automatically; the physical report records that fact.
