@@ -50,6 +50,9 @@ struct MainCliOptions {
     // Characterization JSON feeding measured values into the Liberty emitter
     // (--liberty-from). Empty keeps the pure estimated-constant model.
     std::string liberty_from_json = "";
+    // Export against an existing LEF without regenerating the macro.
+    std::string liberty_only_lef;
+    std::string liberty_output;
     
     // Custom Push-Rule Bitcell configuration
     double bitcell_width = 0.108;

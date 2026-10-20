@@ -94,7 +94,92 @@ std::string emit_lib(const std::string& tag, const std::string& json) {
 
 constexpr const char* kSchema = R"j("schema": "openfinram-characterization-1")j";
 
+std::string port_json(const std::string& axis = "0.01, 0.04") {
+    const std::string a = R"({"index_1":[)" + axis + R"(], "index_2":[0.0005,0.002],
+        "cell_rise":[[0.21,0.22],[0.23,0.24]], "cell_fall":[[0.31,0.32],[0.33,0.34]],
+        "rise_transition":[[0.011,0.012],[0.013,0.014]],
+        "fall_transition":[[0.021,0.022],[0.023,0.024]]})";
+    std::string b = a;
+    b.replace(b.find("0.21,0.22"), 9, "0.41,0.42");
+    return R"({"schema":"openfinram-characterization-2", "cell":"sram_x4x4x1",
+        "timing":{"port_delays":{"A":)" + a + ",\"B\":" + b + "}}}";
+}
+
 }  // namespace
+
+TEST(CharacterizationJson, PortTablesRequireOrderedPositiveAxesAndBothPorts) {
+    OpenFinRAM::CharacterizationData data;
+    std::string err;
+    for (const auto& axis : {"0.04, 0.01", "0.01, 0.01", "0, 0.04", "-0.01, 0.04"}) {
+        EXPECT_FALSE(load("bad_axis.json", port_json(axis), data, err));
+        EXPECT_NE(err.find("strictly increasing"), std::string::npos) << err;
+    }
+    std::string missing = port_json();
+    missing.replace(missing.find("\"B\":"), 4, "\"C\":");
+    EXPECT_FALSE(load("missing_port.json", missing, data, err));
+    EXPECT_NE(err.find("exactly A and B"), std::string::npos);
+    EXPECT_TRUE(load("valid_ports.json", port_json(), data, err)) << err;
+}
+
+TEST(CharacterizationJson, RejectsMixedTransitionDimensionsAndNegativeDelay) {
+    OpenFinRAM::CharacterizationData data;
+    std::string err;
+    std::string mixed = port_json();
+    const std::string matrix = "[[0.011,0.012],[0.013,0.014]]";
+    mixed.replace(mixed.find(matrix), matrix.size(), "[0.011,0.012]");
+    EXPECT_FALSE(load("mixed_slew.json", mixed, data, err));
+    std::string negative = port_json();
+    negative.replace(negative.find("0.21,0.22"), 9, "-0.21,0.22");
+    EXPECT_FALSE(load("negative_delay.json", negative, data, err));
+}
+
+TEST(CharacterizationLiberty, UsesDistinctPortTablesAndTwoDimensionalSlews) {
+    OpenFinRAM::CharacterizationData data;
+    std::string err;
+    ASSERT_TRUE(load("ports.json", port_json(), data, err)) << err;
+    MainCliOptions opts;
+    opts.num_data_bits = 4;
+    const auto lef = write_file("ports.lef", mock_lef(false));
+    const auto lib = scratch_dir() / "ports.lib";
+    ASSERT_TRUE(OpenFinRAM::export_estimated_liberty(opts, lef.string(), lib.string(), &err, &data)) << err;
+    const auto text = read_file(lib);
+    const auto a = text.substr(text.find("bus (Q_A)"), text.find("bus (Q_B)") - text.find("bus (Q_A)"));
+    const auto b = text.substr(text.find("bus (Q_B)"));
+    EXPECT_NE(a.find("values (\"0.21, 0.22\", \"0.23, 0.24\")"), std::string::npos);
+    EXPECT_EQ(a.find("0.41, 0.42"), std::string::npos);
+    EXPECT_NE(b.find("values (\"0.41, 0.42\", \"0.23, 0.24\")"), std::string::npos);
+    EXPECT_NE(a.find("rise_transition (sram_x4x4x1_estimated_delay)"), std::string::npos);
+    EXPECT_NE(a.find("values (\"0.011, 0.012\", \"0.013, 0.014\")"), std::string::npos);
+    EXPECT_NE(text.find("max_transition : 0.04;"), std::string::npos);
+    data.cell = "sram_x8x4x1";
+    EXPECT_FALSE(OpenFinRAM::export_estimated_liberty(opts, lef.string(), lib.string(), &err, &data));
+    EXPECT_NE(err.find("does not match"), std::string::npos);
+    data.cell = "sram_x4x4x1";
+    std::string wrong_name = mock_lef(false);
+    wrong_name.replace(wrong_name.find("sram_x4x4x1"), std::string("sram_x4x4x1").size(), "sram_x8x4x1");
+    const auto wrong_lef = write_file("wrong_macro.lef", wrong_name);
+    EXPECT_FALSE(OpenFinRAM::export_estimated_liberty(opts, wrong_lef.string(), lib.string(), &err, &data));
+    EXPECT_NE(err.find("requested macro"), std::string::npos);
+    opts.single_port = true;
+    const auto single = write_file("ports_single.lef", mock_lef(true));
+    EXPECT_FALSE(OpenFinRAM::export_estimated_liberty(opts, single.string(), lib.string(), &err, &data));
+    EXPECT_NE(err.find("requires an 8T"), std::string::npos);
+}
+
+TEST(CharacterizationLiberty, LegacyPassthroughRemainsByteIdentical) {
+    OpenFinRAM::CharacterizationData data;
+    std::string err;
+    ASSERT_TRUE(OpenFinRAM::load_characterization_json(
+        std::string(REPO_ROOT) + "/tests/golden/characterization_estimated_passthrough.json", data, &err)) << err;
+    MainCliOptions opts;
+    opts.single_port = true;
+    opts.num_data_bits = 4;
+    const auto lef = write_file("passthrough.lef", mock_lef(true));
+    const auto a = scratch_dir() / "estimated.lib", b = scratch_dir() / "passthrough.lib";
+    ASSERT_TRUE(OpenFinRAM::export_estimated_liberty(opts, lef.string(), a.string(), &err)) << err;
+    ASSERT_TRUE(OpenFinRAM::export_estimated_liberty(opts, lef.string(), b.string(), &err, &data)) << err;
+    EXPECT_EQ(read_file(a), read_file(b));
+}
 
 // --- JSON parser robustness -------------------------------------------------
 

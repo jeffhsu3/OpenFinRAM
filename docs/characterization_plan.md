@@ -1,5 +1,11 @@
 # Timing characterization plan (open-source, no SiliconSmart)
 
+The first whole-macro 8T read-characterization path is implemented in
+[`scripts/characterize_8t.py`](../scripts/characterize_8t.py). See
+[8T Liberty characterization](liberty_8t.md) for commands, measured coverage
+and remaining estimates. The phases below retain the broader timing,
+power and extracted-parasitic goals.
+
 ## Goal
 
 Replace the estimated Liberty that `--skip-characterization` writes today —
