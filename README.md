@@ -100,6 +100,12 @@ It starts at a 0.3 um pin margin and doubles it up to `--max-margin` if
 routing fails. Python needs `gdstk`, KLayout's bindings and `chipforge_asap7`
 (the driver strips); `.venv/bin/python` is used when present.
 
+Verify a result with transistor-level LVS and gdscheck DRC (the default):
+
+```
+.venv/bin/python scripts/verify_macro.py results/sram_x16x16x1_<timestamp>
+```
+
 Known limits: the public DRC is not clean (remaining findings are mostly the
 dummy end rows' gate pitch and router-level M1/V1/M4 spacing); the band
 controller fails max-fanout on larger macros such as x32x8x2 and x16x32x2;

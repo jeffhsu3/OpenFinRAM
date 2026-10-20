@@ -122,6 +122,12 @@ add_custom_target(install_gdscheck
     USES_TERMINAL
 )
 if(BUILD_TESTING)
+    find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME gdscheck_adapter_check
+        COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s ${CMAKE_SOURCE_DIR}/tests -p test_drc.py
+    )
+    set_tests_properties(gdscheck_adapter_check PROPERTIES TIMEOUT 120 LABELS unit)
     add_subdirectory(third_party/googletest EXCLUDE_FROM_ALL)
     add_subdirectory(tests)
 
@@ -293,6 +299,15 @@ if(BUILD_TESTING)
     set_tests_properties(asap7_6t_physical_check PROPERTIES
         TIMEOUT 600 SKIP_RETURN_CODE 77
     )
+    add_test(
+        NAME asap7_6t_macro_check
+        COMMAND ${CMAKE_COMMAND} -E env OPENFINRAM_BIN=$<TARGET_FILE:OpenFinRAM>
+            bash ${CMAKE_SOURCE_DIR}/tests/run_6t_macro_check.sh
+    )
+    set_tests_properties(asap7_6t_macro_check PROPERTIES
+        TIMEOUT 1800 SKIP_RETURN_CODE 77 LABELS integration RUN_SERIAL TRUE
+    )
+
     # P0 characterization-JSON gate: a JSON carrying the estimated constants
     # regenerates the estimated .lib byte-for-byte; measured values and
     # per-sdel variants override as documented.
