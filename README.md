@@ -78,6 +78,7 @@ LEF export is native GDSTK and no longer needs Cadence Abstract or `tcsh`.
 | [OpenROAD](https://github.com/The-OpenROAD-Project/OpenROAD) | `755f5778c4` (SiliconCompiler's pin) | P&R, CTS, STA; pin `--openroad-path` |
 | ASAP7 platform | OpenROAD `platform/asap7` | LEF/lib/GDS/RC; pin `--platform-path` |
 | KLayout Python bindings (`pip install klayout`) | 0.29+ | DEF -> merged GDS streaming (`scripts/def_to_gds.py`) |
+| `chipforge_asap7` (`pip install -r requirements-asap7.txt`) | pinned | ASAP7 device generators for the 8T/6T cell libraries, IO blocks and wordline strips |
 
 **Tests (`ctest`):**
 | Tool | Tested with | Used by |
