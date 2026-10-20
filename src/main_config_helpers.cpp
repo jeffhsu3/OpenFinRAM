@@ -117,6 +117,13 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
               "estimated Liberty constants (timing tables, leakage, caps).")
         .default_value(std::string(""));
 
+    program.add_argument("--liberty-only")
+        .help("Existing macro LEF: export Liberty only, using the supplied geometry and --liberty-from JSON.")
+        .default_value(std::string(""));
+    program.add_argument("--liberty-output")
+        .help("Output .lib path; required with --liberty-only.")
+        .default_value(std::string(""));
+
     program.add_argument("--bitcell-width")
         .help("Custom push-rule bitcell width (um). Default: 0.108 for logic-rule ASAP7.")
         .default_value(double{0.108})
@@ -167,6 +174,12 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.openroad_path         = program.get<std::string>("--openroad-path");
     options.platform_path         = program.get<std::string>("--platform-path");
     options.liberty_from_json     = program.get<std::string>("--liberty-from");
+    options.liberty_only_lef      = program.get<std::string>("--liberty-only");
+    options.liberty_output        = program.get<std::string>("--liberty-output");
+    if (options.liberty_only_lef.empty() != options.liberty_output.empty()) {
+        LOGE << "--liberty-only and --liberty-output must be supplied together";
+        std::exit(1);
+    }
     options.bitcell_width         = program.get<double>("--bitcell-width");
     options.bitcell_height        = program.get<double>("--bitcell-height");
     options.num_rows_per_mux      = program.get<unsigned>("--num-rows-per-mux");

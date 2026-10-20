@@ -474,11 +474,18 @@ def supply_network(source: str, ohms: float) -> tuple[str, dict[str, tuple[int, 
 
 def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cells: list[dict], g: Geometry,
                program: list[tuple[Op, Op]], *, period: float, vdd: float, load: float,
-               probes: tuple[str, ...] = ()) -> tuple[str, dict]:  # fmt: skip
+               probes: tuple[str, ...] = (), clock_slew: float | None = None,
+               temperature: float = 25.0, sample_interval: float | None = None) -> tuple[str, dict]:  # fmt: skip
     edge, first = (
         min(20e-12, period / 50),
         period,
     )  # first rising edge after one period of reset
+    clock_edge = edge if clock_slew is None else clock_slew / 0.6  # Liberty's 20-80% slew
+    if not 0 < clock_edge < period / 2:
+        raise ValueError("clock slew must be positive and shorter than 0.3 * period")
+    interval = period / 400 if sample_interval is None else sample_interval
+    if not 0 < interval <= period / 400:
+        raise ValueError("sample interval must be positive and at most period / 400")
     cycles = len(program) + 2  # an idle cycle either side
     # The single-port macro names its pins without the port (ce_n, A[], D[],
     # Q[]); the bench drives and reads them as port A's, by position.
@@ -514,7 +521,8 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         f".include {netlist}",
         f"VVDD vdd 0 {vdd}",
         "VVSS vss 0 0",
-        f"Vclk clk 0 PULSE(0 {vdd} {first - edge / 2:.6g} {edge:.6g} {edge:.6g} {period / 2 - edge:.6g} {period:.6g})",
+        f".temp {temperature:g}",
+        f"Vclk clk 0 PULSE(0 {vdd} {first - clock_edge / 2:.9g} {clock_edge:.9g} {clock_edge:.9g} {period / 2 - clock_edge:.9g} {period:.9g})",
         f"Vrst rst_n 0 {pwl([(0, 0), (period / 4, 0), (period / 4 + edge, vdd)])}",
     ]
     lines += [
@@ -546,7 +554,7 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         # everything else at zero, and let reset settle it before the first edge.
         f".tran {period / 2000:.4g} {stop:.6g} NOOP",
         ".options timeint reltol=1e-3 abstol=1e-9",
-        ".options output initial_interval=" + f"{period / 400:.4g}",
+        ".options output initial_interval=" + f"{interval:.9g}",
         ".print tran format=csv "
         + " ".join(f"V({node})" for node in watched)
         + " I(VVDD)",
@@ -557,6 +565,7 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         "period": period,
         "stop": stop,
         "edge": edge,
+        "clock_slew": clock_edge * 0.6,
         "outputs": outputs,
     }
     return "\n".join(lines) + "\n", plan
@@ -700,6 +709,10 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             # Proven: Q moved after sense enable, to the right value.  Before it, Q is the latch's memory.
             flipped = [bit for bit, when in enumerate(arrivals)
                        if when is not None and sensed is not None and when > sensed]  # fmt: skip
+            directional = {
+                direction: ps(max((arrivals[bit] for bit in flipped if expected[bit] == value), default=None))
+                for direction, value in (("rise", 1), ("fall", 0))
+            }
             arrivals = [x for x in arrivals if x is not None]
             if clean and got == expected:
                 for bit in flipped:
@@ -709,6 +722,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
                           "volts": [round(v, 4) for v in volts], "bits_sensed": len(flipped),
                           "clk_to_wl_ps": ps(fired), "clk_to_sae_ps": ps(sensed),
                           "clk_to_q_ps": ps(max(arrivals)) if arrivals else None,
+                          "clk_to_q_rise_ps": directional["rise"], "clk_to_q_fall_ps": directional["fall"],
                           # Q's 20-80 % edges, rising and falling, over the bits that moved after SAE.
                           "q_rise_ps": max((x for x in (slew_ps(f"V(Q_{port}[{bit}])", True, rise)
                                                          for bit in flipped if expected[bit]) if x), default=None),
@@ -762,7 +776,8 @@ def find_xyce() -> Path:
 def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 0.7, corner: str = "TT",
              load: float = 1e-15, netlist: Path | None = None, timeout: float = 7200,
              program: list[tuple[Op, Op]] | None = None, probes: tuple[str, ...] = (),
-             spaced: bool = False, strap_ohms: float = 0.0) -> dict:  # fmt: skip
+             spaced: bool = False, strap_ohms: float = 0.0, clock_slew: float | None = None,
+             temperature: float = 25.0, sample_interval: float | None = None) -> dict:  # fmt: skip
     result_dir = result_dir.resolve()
     described = json.loads(next(result_dir.glob("*.physical.json")).read_text())
     top = described["cell"]
@@ -817,7 +832,8 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     model.write_text(re.sub(r"level\s*=\s*72", "level = 107", card))
     program = program or default_program(g, spaced=spaced)
     deck_text, plan = build_deck(dut, model, top, pins, cells, g, program, period=period, vdd=vdd, load=load,
-                                 probes=probes)  # fmt: skip
+                                 probes=probes, clock_slew=clock_slew, temperature=temperature,
+                                 sample_interval=sample_interval)  # fmt: skip
     deck = out / "macro_rw.cir"
     deck.write_text(deck_text)
 
@@ -844,6 +860,7 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
             worst[vdd_node.rsplit(":", 1)[0]] = round(min(hi[i] - lo[i] for i in settled), 4)
         verdict["supply"] = {"strap_ohms": strap_ohms, "min_rail_V": worst}
     verdict.update(cell=top, result_dir=str(result_dir), period_ns=period * 1e9, vdd=vdd, corner=corner, spaced=spaced,
+                   clock_slew_ns=plan["clock_slew"] * 1e9, load_pf=load * 1e12, temperature=temperature,
                    program=[[f"{op.kind}{op.address}" + (f"={op.data:0{g.bits}b}" if op.kind == "W" else "")
                              for op in ops] for ops in program],
                    xyce_seconds=round(time.time() - started, 1), deck=str(deck))  # fmt: skip

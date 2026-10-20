@@ -55,6 +55,22 @@ int main(int argc, char **argv) {
     // Parse CLI options
     MainCliOptions cli_options = parseMainCliOptions(argc, argv);
 
+    if (!cli_options.liberty_only_lef.empty()) {
+        OpenFinRAM::CharacterizationData data;
+        std::string error;
+        const bool supplied = !cli_options.liberty_from_json.empty();
+        if (supplied && !OpenFinRAM::load_characterization_json(cli_options.liberty_from_json, data, &error)) {
+            LOGE << error;
+            return 1;
+        }
+        if (!OpenFinRAM::export_estimated_liberty(cli_options, cli_options.liberty_only_lef,
+                cli_options.liberty_output, &error, supplied ? &data : nullptr)) {
+            LOGE << error;
+            return 1;
+        }
+        return 0;
+    }
+
     // The 2RW and generated 6T macros are built from generated cell libraries
     // (tech/gds, scripts/tech_gds.py), which the build writes; write any that
     // are missing, as a run straight from a checkout has none.
@@ -196,6 +212,10 @@ int main(int argc, char **argv) {
                     liberty_from, char_data, &liberty_error)) {
                 char_ptr = &char_data;
             } else {
+                if (!cli_options.liberty_from_json.empty()) {
+                    LOGE << "Requested characterization JSON is invalid: " << liberty_error;
+                    return 1;
+                }
                 LOGW << "Characterization JSON load failed, falling back to "
                         "estimated constants: " << liberty_error;
             }

@@ -37,6 +37,11 @@ Notes:
 
 ## Dual-port 8T flow (2RW, ASAP7)
 
+For measured schematic read timing and Liberty generation from an existing
+8T result, see [8T Liberty characterization](docs/liberty_8t.md). The flow
+sweeps clock slew and output load separately for both ports and identifies
+the timing and power fields that remain estimated or uncharacterized.
+
 Dual-port is the default mode (omit `--single-port`): two independent
 read/write ports on an 8T bitcell. Run it from the repository root, since the
 binary finds `scripts/`, `tech/` and `.venv/` there and writes `results/`
