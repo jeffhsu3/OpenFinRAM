@@ -378,11 +378,12 @@ TEST(OpenRoadTclGeneratorTest, BandTakesTheStripsInAndHandsTheirPinsTheSelects) 
     std::filesystem::create_directories(dir);
     {
         std::ofstream plan(dir / "plan.txt");
-        plan << "width 7.3440\nreserved 7.3551\ninset 0.108\nhalo_x 0.216\nhalo_y 0.27\n";
+        plan << "width 7.3440\nreserved 7.3551\ninset 0.108\nhalo_x 0.216\nhalo_y 0.27\nmin_height 4.824\n";
     }
     BandPlan band;
     ASSERT_TRUE(read_band_plan(dir.string(), band));
     EXPECT_NEAR(band.reserved, 7.3551, 1e-9);
+    EXPECT_NEAR(band.min_height, 4.824, 1e-9);
 
     OpenRoadTclGenerator gen;
     gen.set_design_name("ctrl_decode");
@@ -393,6 +394,10 @@ TEST(OpenRoadTclGeneratorTest, BandTakesTheStripsInAndHandsTheirPinsTheSelects) 
     gen.set_band(band);
     // Rows for the cells at 50 % and the strips' keep-outs, then both insets.
     const double h = gen.band_die_height(band.width);
+    // A wide multi-bank band must not collapse until opposing strips overlap.
+    EXPECT_GE(gen.band_die_height(100.0), band.min_height);
+    gen.set_min_height(9.0);  // side-pin capacity can dominate a wide band
+    EXPECT_GE(gen.band_die_height(100.0), 9.0);
     EXPECT_GE(h - 2 * 0.108, (123.45 / 0.5 + 7.3551) / 7.344 - 1e-9);
     EXPECT_NEAR((h - 2 * 0.108) / 0.54, std::nearbyint((h - 2 * 0.108) / 0.54), 1e-9);
 

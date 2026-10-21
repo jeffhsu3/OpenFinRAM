@@ -1512,10 +1512,8 @@ def run(args):
                            (unit * bank_stride + pox, y + poy)))  # fmt: skip
         return placed
 
-    if in_band or args.plan_band is not None:
-        if units > 1:
-            raise RuntimeError("the controller band abuts one tile column (a bank or a pair) so far: "
-                               "a second one would put its gates off the band's 54 nm grid")  # fmt: skip
+    if banding and single and units > 1:
+        raise RuntimeError("the generated 6T controller band currently supports one bank")
     def tile_height(index):
         _, y0, _, y1 = columns.boundary_box(variants[ends_of(index)][0])
         return y1 - y0
@@ -1527,7 +1525,8 @@ def run(args):
     stack = offsets[-1] + tile_height(half_bits - 1)
 
     if args.plan_band is not None:
-        keepouts = [(x0, x1, half) for x0, x1 in dummy_spans for half in ("lo", "hi")]
+        keepouts = [(unit * bank_stride + x0, unit * bank_stride + x1, half)
+                    for unit in range(units) for x0, x1 in dummy_spans for half in ("lo", "hi")]
         # Which track a pair's via row lands on is known only once the band is.
         pair_masters = {half: (m[0], m[1], block_strip_via_window(m[2], strip_pairs[half], pair_shifts[half]), m[3])
                         for half, m in pair_masters.items()}  # fmt: skip
@@ -1995,6 +1994,10 @@ def run(args):
         "bits": args.bits,
         "margin_um": args.margin,
         "bitcell": args.bitcell,
+        "wordline_driver_placement": "controller_band" if in_band else "separate",
+        "bank_columns": units,
+        "bank_column_stride_um": bank_stride,
+        "controller_band_size_um": list(band_die(args.band)) if in_band else None,
         "floorplan": "controller band between two stacks of abutted column tiles "
         + ("(cap | 6T array | dummy | tap | IO)" if single
            else "(port A IO | array | shared port B IO | mirrored array | port A IO)" if shared_b
@@ -2326,6 +2329,13 @@ def plan_band(args, pair_masters, strip_placements, band_width, pair_height, kee
         + "\n".join([*(m[2] for m in pair_masters.values()), *keepout_lef]) + "\nEND LIBRARY\n"
     )
     placed = strip_placements(0.0)
+    # A wide band can meet its area target while its opposing strips still
+    # overlap. Keep both strips and their placement halos disjoint vertically.
+    lower_top = max(y - HALF_NM + pair_masters[drawn][3][1] + BAND_HALO_Y
+                    for _, drawn, _, half, (_, y) in placed if half == "lo")
+    upper_depth = max(-y + HALF_NM + BAND_HALO_Y
+                      for _, _, _, half, (_, y) in placed if half == "hi")
+    min_height = lower_top + upper_depth
     reserved = sum((pair_masters[drawn][3][0] + 2 * BAND_HALO_X) * (pair_height + BAND_HALO_Y)
                    for _, drawn, _, _, _ in placed)  # fmt: skip
     reserved += sum((x1 - x0 + 2 * BAND_HALO_X) * (seam_lo if side == "lo" else seam_hi)
@@ -2333,6 +2343,7 @@ def plan_band(args, pair_masters, strip_placements, band_width, pair_height, kee
     (out / "plan.txt").write_text(
         f"width {band_width:.4f}\nreserved {reserved:.4f}\ninset 0\n"
         f"halo_x {BAND_HALO_X}\nhalo_y {BAND_HALO_Y}\n"
+        f"min_height {min_height:.4f}\n"
         f"seam_lo {seam_lo:.4f}\nseam_hi {seam_hi:.4f}\n"
     )
     tcl = [

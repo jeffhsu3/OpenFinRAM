@@ -242,6 +242,79 @@ class PhysicalMacroTests(unittest.TestCase):
             # The lower strips stand on the dummy row, on the nanometre grid.
             self.assertIn("round((0.5710) * $dbu)", tcl)
 
+    def test_multiple_bank_columns_repeat_strips_and_dummy_keepouts_on_the_same_grid(self):
+        import subprocess
+
+        for banks, shared in ((2, False), (4, False), (4, True)):
+            with self.subTest(banks=banks, shared=shared), tempfile.TemporaryDirectory() as scratch:
+                band = Path(scratch)
+                command = [sys.executable, str(Path(__file__).resolve().parents[2] / "scripts/compile_asap7_2rw.py"),
+                           "--wordlines", "2", "--bits", "2", "--banks", str(banks), "--plan-band", str(band)]
+                if shared:
+                    command.append("--share-port-b")
+                subprocess.run(command, check=True, capture_output=True)
+                plan = dict(line.split() for line in (band / "plan.txt").read_text().splitlines())
+                tcl = (band / "band.tcl").read_text()
+                placements = re.findall(
+                    r"findMaster (\w+)\] (WL_\w+|KEEPOUT_\d+)\]\n"
+                    r"  \$inst setLocation \[expr \{round\(([\d.]+) \* \$dbu\)\}\]", tcl)
+                x_by_instance = {inst: float(x) for _, inst, x in placements}
+                self.assertEqual(len([i for i in x_by_instance if i.startswith("WL_")]), banks * 2)
+                self.assertEqual(len([i for i in x_by_instance if i.startswith("KEEPOUT_")]), banks * 2)
+                per_column = 2 if shared else 1
+                stride = x_by_instance[f"WL_LO_{per_column}"] - x_by_instance["WL_LO_0"]
+                self.assertAlmostEqual(stride / 1.728, round(stride / 1.728), places=6)
+                for column in range(banks // per_column):
+                    for second in range(per_column):
+                        bank = column * per_column + second
+                        for half in ("LO", "HI"):
+                            self.assertAlmostEqual(x_by_instance[f"WL_{half}_{bank}"] -
+                                                   x_by_instance[f"WL_{half}_{second}"], column * stride)
+                    for k in range(2 * per_column):
+                        self.assertAlmostEqual(x_by_instance[f"KEEPOUT_{column * 2 * per_column + k}"] -
+                                               x_by_instance[f"KEEPOUT_{k}"], column * stride)
+                self.assertEqual(tcl.count("] connect $net"), 20 * banks)
+                for bank in range(banks):
+                    for port in "AB":
+                        self.assertIn(f"{{sel_hi_{port}[{bank}]}}", tcl)
+                self.assertGreater(float(plan["min_height"]), 4.0)
+
+    def test_lvs_views_keep_both_banks_of_each_shared_column(self):
+        from verify_macro import bank_views
+
+        for per_column in (1, 2):
+            with self.subTest(banks_per_column=per_column), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                lib = gdstk.Library()
+                tile = lib.new_cell("dp_colpair" if per_column == 2 else "dp_column")
+                tile.add(gdstk.rectangle((0, 0), (8, 1), layer=19))
+                strip = lib.new_cell("dp_wl_strips_test")
+                strip.add(gdstk.rectangle((0, 0), (1, 1), layer=19))
+                top = lib.new_cell("macro")
+                lines = [".SUBCKT stacked_colgrp vdd vss", "X0_0 vdd vss tile", "X1_0 vdd vss tile", ".ENDS",
+                         ".SUBCKT macro vdd vss"]
+                for column in range(2):
+                    top.add(gdstk.Reference(tile, (10 * column, 0)))
+                    for bank in range(column * per_column, (column + 1) * per_column):
+                        for half, y in (("lo", 2), ("hi", 4)):
+                            top.add(gdstk.Reference(strip, (10 * column + 1 + 2 * (bank % per_column), y)))
+                            lines += [f"Xwl_{half}_{bank} select_{bank}", "+ vdd vss strip"]
+                lines.append(".ENDS")
+                gds, spice = root / "macro.gds", root / "macro.sp"
+                lib.write_gds(str(gds))
+                spice.write_text("\n".join(lines) + "\n")
+                views = bank_views(gds, spice, "macro", root / "views", banks_per_column=per_column)
+                self.assertEqual(len(views), 2)
+                for column, (view_gds, view_spice) in enumerate(views):
+                    text = view_spice.read_text()
+                    self.assertIn(f"X{column}_0 ", text)
+                    self.assertNotIn(f"X{1 - column}_0 ", text)
+                    kept = {int(bank) for bank in re.findall(r"Xwl_(?:lo|hi)_(\d+) ", text)}
+                    self.assertEqual(kept, set(range(column * per_column, (column + 1) * per_column)))
+                    self.assertEqual(text.count("+ vdd vss strip"), 2 * per_column)
+                    view = next(c for c in gdstk.read_gds(str(view_gds)).cells if c.name == "macro")
+                    self.assertEqual(len(view.references), 1 + 2 * per_column)
+
     def test_an_end_tile_stops_at_its_io_blocks_over_the_io_columns(self):
         import generate_asap7_8t_iocolumn as columns
         from compile_asap7_2rw import end_row_spans, notch_band_edges

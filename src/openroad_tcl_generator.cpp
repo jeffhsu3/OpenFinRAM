@@ -50,12 +50,15 @@ bool read_band_plan(const std::string& dir, BandPlan& plan) {
     plan.inset = values["inset"];
     plan.halo_x = values["halo_x"];
     plan.halo_y = values["halo_y"];
+    plan.min_height = values.count("min_height") ? values["min_height"] : 0.0;
     return plan.width > 0.0;
 }
 
 double OpenRoadTclGenerator::band_die_height(double width) const {
     const double core = align_to_site_height(
-        (qor_.cell_area / max_utilization_ + band_.reserved) / width);
+        std::max({(qor_.cell_area / max_utilization_ + band_.reserved) / width,
+                  band_.min_height - 2 * band_.inset,
+                  min_height_ - 2 * band_.inset}));
     return core + 2 * band_.inset;
 }
 
