@@ -3,6 +3,7 @@ add_executable(unit_tests
     unit/test_tcl_generators.cpp
     unit/test_lef_extractor.cpp
     unit/test_characterization.cpp
+    unit/test_main_config.cpp
     unit/test_spice_templates.cpp
     unit/test_layout_generator.cpp
     ${CMAKE_SOURCE_DIR}/src/characterization_data.cpp

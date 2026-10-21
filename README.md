@@ -64,9 +64,6 @@ rows.
 Options:
 - `--share-port-b`: banks in pairs, mirrored about one two-sided port-B IO
   block (needs an even bank count).
-- `--strips-in-controller`: put the wordline driver strips in the controller's
-  band, abutting the IO blocks (see [Controller band](#controller-band---strips-in-controller)).
-  Supported for one column of tiles (one bank, or one shared pair) so far.
 - `--row-predecode-bits 2|3|4`: address bits per predecode group in the
   controller's wordline decode (default 3). 4-bit groups only pay off at 256 or
   more wordlines a bank; on an x64x8x1 they decode slower (327 vs 276 ps, OpenSTA)
@@ -152,24 +149,25 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   (clk->Q ~250 ps).  x16x16x1 is 6.64 x 25.28 um against 6.00 x 52.71 um for the
   8T x16x16x1.
 - `--strips-in-controller` works with one bank, segmented or not (see
-  [Controller band](#controller-band---strips-in-controller)); `--share-port-b`
+  [Controller band](#controller-band)); `--share-port-b`
   does not apply.
 - Limits so far: the timing model is fit to small macros and to the old BUFx2 controller outputs.
   The public DRC count is the released 6T cells' own findings, the end rows'
   gate pitch, standard cells, and a few router M1 markers.
 
-## Controller band (`--strips-in-controller`)
+## Controller band
 
-By default the wordline driver strips stand beside the tile stacks and the
-controller is a separate block. With `--strips-in-controller`, OpenROAD places
-and routes the controller around the strips, and its band fills the space
-between the two stacks, so the strips abut the IO blocks directly. It applies to
-both bitcells:
+8T OpenROAD builds always place and route the controller around the wordline
+driver strips. The controller band fills the space between the two tile stacks,
+with the strips aligned to the arrays and abutting the IO blocks. This includes
+multiple bank columns and multiple shared-B pairs. The old
+`--strips-in-controller` flag is accepted for compatibility and hidden from help;
+8T builds do not need a placement option. Generated 6T retains its existing
+single-bank opt-in behavior.
 
 ```
-# 8T two-port: one bank, or one pair sharing port B
-./build/OpenFinRAM --num-wls 2 --num-data-bits 2 --num-banks 2 --share-port-b \
-  --strips-in-controller --openroad
+# 8T two-port: two pairs sharing port B, integrated by default
+./build/OpenFinRAM --num-wls 2 --num-data-bits 2 --num-banks 4 --share-port-b --openroad
 
 # 6T single-port: one bank, optionally segmented
 ./build/OpenFinRAM --num-wls 32 --num-data-bits 8 --num-banks 1 --bitcell 6t \
@@ -183,6 +181,11 @@ The flow has three steps:
 2. OpenROAD builds the controller on that band die, keeping the strips fixed,
    and reports the die it used (`die.txt`).
 3. The assembler (`--band`) abuts the two tile stacks on the band's edges.
+
+Each bank column repeats the strips and dummy-row keep-outs at a stride that is
+a multiple of 1.728 um. The band height accounts for cell area, opposing strips
+and side-pin capacity. The physical manifest records `wordline_driver_placement`,
+`bank_columns`, `bank_column_stride_um` and `controller_band_size_um`.
 
 The tiles and strips sit half a nanometre off the whole-nm grid in their
 masters, with or without the band (see the DRM grid note below). For the 6T

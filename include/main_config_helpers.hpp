@@ -11,7 +11,7 @@ struct MainCliOptions {
     unsigned num_banks = 1;
     bool single_port = false;
     // The generated single-port macro (--bitcell 6t): the released 6T array
-    // with chipforge_asap7's staggered IO, built by the two-port machinery
+    // with chipforge_asap7's 270 nm column IO, built by the two-port machinery
     // with port A alone.  `single_port` stays the legacy srambank flow.
     bool bitcell_6t = false;
     // Divided wordlines (--segment-bits): each stack of data bits cut into
@@ -28,10 +28,12 @@ struct MainCliOptions {
     // Two-port only: banks in pairs share port B's IO block, the pair's
     // arrays mirrored about it (--share-port-b).
     bool share_port_b = false;
-    // Two-port only: the wordline driver strips go into the controller's band
-    // as placement keep-outs, the band abutting both stacks of column tiles
-    // (--strips-in-controller).
+    // Hidden compatibility flag; generated 6T still opts into the controller band.
     bool strips_in_controller = false;
+    bool use_controller_band() const {
+        return !single_port && (strips_in_controller ||
+            (!bitcell_6t && (use_openroad || openroad_only)));
+    }
     // Address bits per predecode group of the controller's slice decode
     // (sel_hi): 2, 3 or 4 (--row-predecode-bits).
     unsigned row_predecode_bits = 3;

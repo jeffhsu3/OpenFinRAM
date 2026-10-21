@@ -27,6 +27,7 @@ if ! "$binary" --openroad --num-wls 2 --num-data-bits 2 --num-banks 1 \
 fi
 "$python_bin" - "$scratch/compiler.log" <<'PY'
 from pathlib import Path
+import json
 import re
 import sys
 sys.path.insert(0, "tests/tools")
@@ -35,6 +36,8 @@ log = Path(sys.argv[1]).read_text()
 match = re.search(r"results/(sram_x4x2x1_\d{8}_\d{6})/", log)
 assert match, "no result directory in compiler log"
 folder = Path("results") / match[1]
+physical = json.loads((folder / "sram_x4x2x1.physical.json").read_text())
+assert physical["wordline_driver_placement"] == "controller_band", "8T default lost integrated wordline drivers"
 assert ".INCLUDE" not in (folder / "sram_x4x2x1.sp").read_text().upper(), "deck depends on tmp files"
 check(folder)
 print(f"Artifacts: {folder}")

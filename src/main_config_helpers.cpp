@@ -54,9 +54,9 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .scan<'u', unsigned>();
 
     program.add_argument("--strips-in-controller")
-        .help("Place and route the controller around the wordline driver strips, its band "
-              "filling the space between the two stacks of column tiles.  One tile column: "
-              "one bank, or (two-port) a pair sharing port B.")
+        .help("Compatibility flag: 8T OpenROAD builds always integrate the wordline strips. "
+              "Also enables the existing single-bank 6T controller band.")
+        .hidden()
         .default_value(false)
         .implicit_value(true);
 
@@ -258,9 +258,8 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         LOGE << "Error: --row-predecode-bits is for the slice-driven macros (two-port or --bitcell 6t).";
         std::exit(1);
     }
-    if (options.strips_in_controller &&
-        options.num_banks > (options.share_port_b ? 2u : 1u)) {
-        LOGE << "Error: --strips-in-controller abuts one tile column: one bank, or a pair with --share-port-b.";
+    if (options.strips_in_controller && options.bitcell_6t && options.num_banks > 1) {
+        LOGE << "Error: the generated 6T controller band currently supports one bank.";
         std::exit(1);
     }
     if (options.share_port_b && (options.single_port || options.num_banks < 2)) {
