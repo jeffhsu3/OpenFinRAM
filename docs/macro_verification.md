@@ -379,3 +379,21 @@ x16x16x1 is then 0 markers (27 waived). x4x2x1 keeps four at the macro's top
 level: two 17.5 nm M1.W.1 slivers and two M1.S.6 corners where router M1
 meets a tile's half-nanometre-shifted M1; the baseline was rewritten from a
 fresh x4x2x1 build.
+
+## gdscheck baseline (2026-10-21)
+
+Macro DRC now defaults to gdscheck's ASAP7 main suite (0.2.0), and the
+baseline records which engine, suite and version produced it, so the KLayout
+baseline above no longer applied. The suite reads M1.S.2 as the DRM writes
+it: 25 nm tip-to-side on M1, M2 and M3. It exempts shapes under the
+bitcells' SRAMDRC marker. A fresh x4x2x1 matches LVS strictly and has
+457 markers in 4 rules:
+* 430 are in the column tiles (221 M1.S.2, 209 M2.S.2), outside the arrays.
+  These are the 297 nm 8T IO cells, still drawn to the runset's 18 nm rail
+  spacing.
+* 24 are on the router's vias at the top level: M1.S.2, V1.M1.EN.1, M2.S.2
+  and V0.M1.AUX.3.
+* 3 are in the wordline driver strips: M1.S.2 and V0.M1.AUX.3.
+
+The baseline was rewritten from that build, made with chipforge_asap7 at
+53d27e8.
