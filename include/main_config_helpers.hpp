@@ -11,7 +11,7 @@ struct MainCliOptions {
     unsigned num_banks = 1;
     bool single_port = false;
     // The generated single-port macro (--bitcell 6t): the released 6T array
-    // with chipforge_asap7's staggered IO, built by the two-port machinery
+    // with chipforge_asap7's 270 nm column IO, built by the two-port machinery
     // with port A alone.  `single_port` stays the legacy srambank flow.
     bool bitcell_6t = false;
     // Divided wordlines (--segment-bits): each stack of data bits cut into

@@ -7,7 +7,7 @@ one is fixed and the baseline should be tightened.
 
 Set ``OPENFINRAM_MACRO_RESULT`` to a result folder to check that one; otherwise
 the newest ``results/sram_x4x2x1_*`` is used, or one is built when the compiler,
-yosys and openroad are all here.  Skips without KLayout and the ASAP7 runset.
+yosys and openroad are all here.  Skips without KLayout (LVS) and gdscheck (DRC).
 """
 
 from __future__ import annotations
@@ -68,11 +68,11 @@ def _result_dir(tmp_path: Path) -> Path:
 
 def test_macro_lvs_and_drc_hold_the_baseline(tmp_path: Path):
     pytest.importorskip("chipforge_asap7")
-    from chipforge_asap7.verification import find_drc_deck, find_klayout
+    from chipforge_asap7.verification import find_gdscheck, find_klayout
 
     try:
         find_klayout(None)
-        find_drc_deck(None)
+        find_gdscheck()
     except FileNotFoundError as error:
         pytest.skip(str(error))
 
