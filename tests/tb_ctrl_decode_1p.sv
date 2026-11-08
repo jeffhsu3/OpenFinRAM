@@ -1,7 +1,11 @@
 // Exhaustive functional check for the single-port ctrl_decode
 // (tech/verilog_dp/sram_control_1p.v, --bitcell 6t): every address read and
 // written, each checked against the decode the two-port controller's port A
-// performs, and an idle cycle checked to drive nothing.
+// performs, and an idle cycle checked to drive nothing.  As a synchronous
+// driver does, the pins change just after each capture edge (to an idle or
+// the opposite command): the captured command must still run the cycle, Q's
+// output enable must stay with the bank read last, and the write data latch
+// must be closed from the edge.
 `timescale 1ns/1ps
 module tb_ctrl_decode_1p #(
     parameter int NUM_WL     = 8,
@@ -41,6 +45,8 @@ module tb_ctrl_decode_1p #(
 
     always #5 clk = ~clk;
     int errors = 0;
+    int unsigned last_read_bank = 0;   // the bank whose output drives Q (bank 0 after reset)
+    int unsigned step = 0;
 
     function automatic bit is_power_of_two(input int value);
         return value > 0 && (value & (value - 1)) == 0;
@@ -65,6 +71,9 @@ module tb_ctrl_decode_1p #(
         expected_prech = '0;
         expected_wrena = '0; expected_wrenan = '1;
         expected_oeb = '1; expected_oe = '0; expected_sae = '0;
+        if (!write_access) last_read_bank = bank;
+        expected_oeb[last_read_bank] = 1'b0;
+        expected_oe[last_read_bank] = 1'b1;
         // The bit above the column select is the top bit of the wordline
         // index w; the slices make WL<w> = sel_hi[w >> 2] . sel_lo[w & 3].
         expected_hi[bank*SLICES + ((upper*NUM_WL + row) >> 2)] = 1'b1;
@@ -76,13 +85,21 @@ module tb_ctrl_decode_1p #(
             expected_wrena[bank] = 1'b1;
             expected_wrenan[bank] = 1'b0;
         end else begin
-            expected_oeb[bank] = 1'b0;
-            expected_oe[bank] = 1'b1;
             expected_sae[bank] = 1'b1;
         end
 
         ce_n_A = 0; we_n_A = !write_access; oe_n_A = write_access; A_A = address;
-        @(posedge clk); #2;
+        @(posedge clk); #0.1;
+        // The pins move on right after the edge: deselect, or the other
+        // command at another address.
+        step++;
+        if (step % 2) begin
+            ce_n_A = 1; we_n_A = 1; oe_n_A = 1;
+        end else begin
+            we_n_A = write_access; oe_n_A = !write_access;
+        end
+        A_A = ~address;
+        #1.9;
         if (sel_hi_A !== expected_hi || sel_lo_A !== expected_lo ||
             ysel_A !== expected_ysel || yseln_A !== expected_yseln ||
             blprechn_A !== expected_prech ||
@@ -110,9 +127,11 @@ module tb_ctrl_decode_1p #(
         ce_n_A = 1; we_n_A = 1; oe_n_A = 1;
         @(posedge clk); @(posedge clk); #2;
         if (sel_hi_A !== '0 || ysel_A !== '0 || blprechn_A !== '0 ||
-            wrena_A !== '0 || wrenan_A !== '1 || sae_A !== '0 || oeb_out_A !== '1) begin
+            wrena_A !== '0 || wrenan_A !== '1 || sae_A !== '0 ||
+            oeb_out_A !== ~(NUM_BANK'(1) << last_read_bank) ||
+            oe_out_A !== (NUM_BANK'(1) << last_read_bank)) begin
             errors++;
-            $display("FAIL deselected cycle drives the array");
+            $display("FAIL deselected cycle drives the array (or dropped Q's driver)");
         end
 
         if (errors == 0)

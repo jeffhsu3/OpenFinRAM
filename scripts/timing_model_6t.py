@@ -26,7 +26,13 @@ The model follows the read path:
   is twice clk->Q plus a margin, the margin fit to a period sweep;
 * Q's transition: the output latch's own edge, the worst one seen;
 * energy per access: a fixed part, a part per data bit (its IO), and a
-  part per bitline cell switched (every column of the bank precharges).
+  part per bitline cell switched (every column of the bank precharges);
+* D's hold: the IO columns' write latches take D when their WRENAN falls,
+  clk -> the latest column's close, linear in the bits (WRENAN runs along
+  every IO column), plus a margin.  ``fit-write-hold`` fits it from runs
+  that measured it (`simulate_macro.py` records ``clk_to_write_close_ps``
+  per write) into an existing model, and ``estimate`` emits it as D's own
+  ``data_constraints``; the controls keep the flat estimate.
 
 Every simulated point is a TT, 0.7 V run with a 1 fF load on Q and 20 ps
 input edges, so the tables are one point, as `gen_characterization_json.py`
@@ -43,6 +49,12 @@ from pathlib import Path
 import numpy as np
 
 SCHEMA = "openfinram-6t-timing-model-1"
+#: D's hold past the measured latch close: the close is where WRENAN crosses
+#: VDD/2, the pass transistor is off only at its threshold, and the runs are
+#: one corner (TT) and one clock slew.
+WRITE_HOLD_MARGIN_PS = 25.0
+#: The flat setup/hold estimate every other input keeps (liberty_estimator.cpp).
+FLAT_CONSTRAINT_NS = 0.05
 #: The stimulus every simulate_macro.py run uses.
 STIMULUS_SLEW_NS, STIMULUS_LOAD_PF = 0.020, 0.001
 
@@ -163,6 +175,42 @@ def predict(model: dict, g: dict) -> dict:
     return out
 
 
+def write_hold_points(specs: list[str]) -> list[dict]:
+    """Each run's latest write-latch close (ps after the capture edge) and its macro's bits."""
+    points = []
+    for spec in specs:
+        folder, _, result = spec.partition("@")
+        verdict = json.loads((Path(folder) / "simulation.json").read_text())
+        closes = [w["clk_to_write_close_ps"] for w in verdict["writes"] if w.get("clk_to_write_close_ps")]
+        if not closes:
+            raise ValueError(f"{folder}: no write recorded clk_to_write_close_ps (rerun simulate_macro.py)")
+        result_dir = Path(result or verdict.get("result_dir", ""))
+        physical = next(result_dir.glob("*.physical.json"), None) if result_dir.is_dir() else None
+        if physical is None:
+            raise ValueError(f"{folder}: name its result folder (folder@result)")
+        points.append({"folder": str(folder), "bits": json.loads(physical.read_text())["bits"],
+                       "clk_to_write_close_ps": max(closes)})  # fmt: skip
+    return points
+
+
+def fit_write_hold(points: list[dict]) -> dict:
+    """clk -> write-latch close against the bits; one width fits a constant (and says so)."""
+    widths = {p["bits"] for p in points}
+    if len(widths) > 1:
+        base, per_bit = least_squares([[1, p["bits"]] for p in points], [p["clk_to_write_close_ps"] for p in points])
+    else:
+        base, per_bit = max(p["clk_to_write_close_ps"] for p in points), 0.0
+    return {"base": base, "per_bit": per_bit, "margin_ps": WRITE_HOLD_MARGIN_PS,
+            "fit_widths": sorted(widths), "points": points}  # fmt: skip
+
+
+def write_hold_ps(model: dict, bits: int) -> float | None:
+    h = model.get("write_hold_ps")
+    if h is None:
+        return None
+    return h["base"] + h["per_bit"] * bits + h["margin_ps"]
+
+
 def characterization(model: dict, g: dict, label: str) -> dict:
     """The characterization JSON (`--liberty-from`) the model gives a macro of geometry `g`."""
     p = predict(model, g)
@@ -181,6 +229,16 @@ def characterization(model: dict, g: dict, label: str) -> dict:
             "fall_transition": [model["q_transition_ps"]["fall"] / 1000],
         }},  # fmt: skip
     }
+    hold = write_hold_ps(model, g["bits"])
+    if hold is not None:
+        flat = [[FLAT_CONSTRAINT_NS]]
+        held = [[round(hold / 1000, 4)]]
+        doc["timing"]["data_constraints"] = {
+            "index_1": [STIMULUS_SLEW_NS], "index_2": [STIMULUS_SLEW_NS],
+            "setup_rise": flat, "setup_fall": flat, "hold_rise": held, "hold_fall": held,
+        }  # fmt: skip
+        doc["comment"] += (f" D hold {hold:.0f} ps: clk -> the IO columns' write-latch close, modelled, "
+                           f"plus {model['write_hold_ps']['margin_ps']:g} ps; other setup/hold estimated.")
     if "min_period_ps" in p:
         doc["clock_min_period"] = round(p["min_period_ps"] / 1000, 4)
     # Energy per access as the emitter takes it: pJ, at a reference cycle.
@@ -209,6 +267,9 @@ def main(argv: list[str]) -> int:
     f.add_argument("simulations", nargs="+", help="simulate_macro.py output folders (folder or folder@result)")
     f.add_argument("--period-sweep", type=Path, nargs="*", default=[], help="one macro's runs at several periods")
     f.add_argument("--output", type=Path, required=True)
+    h = sub.add_parser("fit-write-hold")
+    h.add_argument("simulations", nargs="+", help="simulate_macro.py output folders (folder or folder@result)")
+    h.add_argument("--model", type=Path, default=Path(__file__).resolve().parents[1] / "tech/timing/sram_6t_timing.json")
     e = sub.add_parser("estimate")
     e.add_argument("--model", type=Path, default=Path(__file__).resolve().parents[1] / "tech/timing/sram_6t_timing.json")
     e.add_argument("--wordlines", type=int, required=True, help="NUM_WL (the array has twice that)")
@@ -224,6 +285,14 @@ def main(argv: list[str]) -> int:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(model, indent=1) + "\n")
         print(f"wrote {args.output}: {len(points)} points, clk->Q residuals {model['residuals_ps']} ps")
+        return 0
+    if args.mode == "fit-write-hold":
+        model = json.loads(args.model.read_text())
+        model["write_hold_ps"] = fit_write_hold(write_hold_points(args.simulations))
+        args.model.write_text(json.dumps(model, indent=1) + "\n")
+        h = model["write_hold_ps"]
+        print(f"wrote {args.model}: write-latch close {h['base']:.1f} + {h['per_bit']:.2f}/bit ps "
+              f"(widths {h['fit_widths']}), D hold adds {h['margin_ps']:g} ps")
         return 0
     model = json.loads(args.model.read_text())
     segment = args.segment_bits or args.bits // 2

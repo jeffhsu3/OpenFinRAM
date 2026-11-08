@@ -49,6 +49,21 @@ A command and its address are captured on a rising edge with ``ce_n`` low, and
 the operation runs in the clock-high phase that follows (`tech/verilog_dp/
 sram_control.v`), so inputs change on falling edges and Q is sampled just
 before the next one.
+
+``--input-delay PS`` drives the macro as a synchronous design does instead:
+every input changes PS after the rising edge before the one that captures it
+(a flop on the same clock), and Q is sampled 20 ps before the edge after its
+read, where such a design takes it.  The single-port controller
+(`sram_control_1p.v`) holds its command and Q's driver from the capture edge,
+so it passes this; the two-port controller reads ce_n/oe_n live in the
+clock-high phase and does not.
+
+The 6T IO columns take D in a write latch that closes when WRENAN falls, a
+gate after the clock: D's hold is that close, which each write records as
+``clk_to_write_close_ps`` (the latest column), and the Liberty publishes it
+plus a margin (`timing_model_6t.py fit-write-hold`).  ``--data-delay PS``
+launches D alone PS after the edge, to check a macro at its published hold
+while the controls keep ``--input-delay``.
 """
 
 from __future__ import annotations
@@ -395,12 +410,14 @@ def stimulus(
     vdd: float,
     edge: float,
     first: float,
+    input_delay: float | None = None,
 ) -> str:
-    """One input: ``levels[k]`` holds around rising edge k, changing on the falling edge before it."""
+    """One input: ``levels[k]`` holds around rising edge k, changing on the falling edge before it
+    (or `input_delay` after rising edge k-1)."""
     points, last = [(0.0, levels[0] * vdd)], levels[0]
     for k, level in enumerate(levels[1:], start=1):
         if level != last:
-            at = first + k * period - period / 2
+            at = first + k * period - (period / 2 if input_delay is None else period - input_delay)
             points += [(at, last * vdd), (at + edge, level * vdd)]
             last = level
     return f"V{name.replace('[', '_').replace(']', '')} {name} 0 {pwl(points)}"
@@ -475,7 +492,9 @@ def supply_network(source: str, ohms: float) -> tuple[str, dict[str, tuple[int, 
 def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cells: list[dict], g: Geometry,
                program: list[tuple[Op, Op]], *, period: float, vdd: float, load: float,
                probes: tuple[str, ...] = (), clock_slew: float | None = None,
-               temperature: float = 25.0, sample_interval: float | None = None) -> tuple[str, dict]:  # fmt: skip
+               temperature: float = 25.0, sample_interval: float | None = None,
+               input_delay: float | None = None, data_delay: float | None = None,
+               write_latches: tuple[str, ...] = ()) -> tuple[str, dict]:  # fmt: skip
     edge, first = (
         min(20e-12, period / 50),
         period,
@@ -486,6 +505,11 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
     interval = period / 400 if sample_interval is None else sample_interval
     if not 0 < interval <= period / 400:
         raise ValueError("sample interval must be positive and at most period / 400")
+    if input_delay is not None and not edge < input_delay < period / 2:
+        raise ValueError("input delay must be past the input edge and inside the clock-high phase")
+    if data_delay is not None and (input_delay is None or not edge < data_delay < period / 2):
+        raise ValueError("a data delay needs an input delay, and must be past the input edge and inside "
+                         "the clock-high phase")
     cycles = len(program) + 2  # an idle cycle either side
     # The single-port macro names its pins without the port (ce_n, A[], D[],
     # Q[]); the bench drives and reads them as port A's, by position.
@@ -526,7 +550,8 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         f"Vrst rst_n 0 {pwl([(0, 0), (period / 4, 0), (period / 4 + edge, vdd)])}",
     ]
     lines += [
-        stimulus(name, series, period=period, vdd=vdd, edge=edge, first=first)
+        stimulus(name, series, period=period, vdd=vdd, edge=edge, first=first,
+                 input_delay=data_delay if data_delay is not None and name.startswith("D_") else input_delay)
         for name, series in levels.items()
     ]
     outputs = [p for p in pins if p.lower().startswith("q_")]
@@ -547,6 +572,7 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
     watched += [f"Xdut:{net}_{port}[{io}]" for net in ("sae", "wrena") for port in g.ports
                 for io in range(g.ios(port))]  # fmt: skip
     watched += [f"Xdut:{cell['path']}:Q" for cell in cells]
+    watched += [f"Xdut:{path}:WRENAN" for path in write_latches]
     watched += [f"Xdut:{node}" for node in probes]
     lines += [
         # No DC operating point: 32 bistable cells, the flops and the output latches
@@ -567,6 +593,11 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
         "edge": edge,
         "clock_slew": clock_edge * 0.6,
         "outputs": outputs,
+        "input_delay": input_delay,
+        "data_delay": data_delay,
+        "write_latches": list(write_latches),
+        # Where Q is judged, after the capture edge.
+        "sample": 0.45 * period if input_delay is None else period - 20e-12,
     }
     return "\n".join(lines) + "\n", plan
 
@@ -656,7 +687,7 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
 
     for cycle, ops in enumerate(program, start=1):
         rise = first + cycle * period
-        sample = rise + 0.45 * period
+        sample = rise + plan["sample"]
         for port, op in zip(g.ports, ops):
             # Write enable only for a write, and only its bank's (its pair's, shared).
             for io in range(g.ios(port)):
@@ -692,8 +723,13 @@ def evaluate(waves: dict[str, list[float]], plan: dict, program: list[tuple[Op, 
             ]
             fired = None if any(f is None for f in fired_each) else max(fired_each)
             if op.kind == "W":
+                # The 6T IO column's write latch takes D when its WRENAN falls:
+                # D's hold is the latest column's close.
+                closed = [after_clock(f"V(XDUT:{path.upper()}:WRENAN)", rise) for path in plan.get("write_latches", [])]
+                closed = [c for c in closed if c is not None]
                 writes.append({"cycle": cycle, "port": port, "address": op.address, "data": op.data,
-                               "clk_to_wl_ps": ps(fired), "energy_fJ": cycle_energy_fj(rise)})  # fmt: skip
+                               "clk_to_wl_ps": ps(fired), "energy_fJ": cycle_energy_fj(rise),
+                               **({"clk_to_write_close_ps": ps(max(closed))} if closed else {})})  # fmt: skip
                 continue
             expected = [memory[(op.address, bit)] for bit in range(g.bits)]
             volts = [
@@ -777,7 +813,8 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
              load: float = 1e-15, netlist: Path | None = None, timeout: float = 7200,
              program: list[tuple[Op, Op]] | None = None, probes: tuple[str, ...] = (),
              spaced: bool = False, strap_ohms: float = 0.0, clock_slew: float | None = None,
-             temperature: float = 25.0, sample_interval: float | None = None) -> dict:  # fmt: skip
+             temperature: float = 25.0, sample_interval: float | None = None,
+             input_delay: float | None = None, data_delay: float | None = None) -> dict:  # fmt: skip
     result_dir = result_dir.resolve()
     described = json.loads(next(result_dir.glob("*.physical.json")).read_text())
     top = described["cell"]
@@ -831,9 +868,13 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
     card = (REPO_ROOT / f"tech/models/hspice/7nm_{corner}.pm").read_text()
     model.write_text(re.sub(r"level\s*=\s*72", "level = 107", card))
     program = program or default_program(g, spaced=spaced)
+    # The 6T IO columns' write latches (each column's WRENAN is watched).
+    latches = tuple(path for ref in sorted(subckts) if ref.startswith("iocol_block_6t")
+                    for path in (c["path"] for c in bitcells(subckts, top, ref))) if single else ()  # fmt: skip
     deck_text, plan = build_deck(dut, model, top, pins, cells, g, program, period=period, vdd=vdd, load=load,
                                  probes=probes, clock_slew=clock_slew, temperature=temperature,
-                                 sample_interval=sample_interval)  # fmt: skip
+                                 sample_interval=sample_interval, input_delay=input_delay,
+                                 data_delay=data_delay, write_latches=latches)  # fmt: skip
     deck = out / "macro_rw.cir"
     deck.write_text(deck_text)
 
@@ -860,6 +901,7 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
             worst[vdd_node.rsplit(":", 1)[0]] = round(min(hi[i] - lo[i] for i in settled), 4)
         verdict["supply"] = {"strap_ohms": strap_ohms, "min_rail_V": worst}
     verdict.update(cell=top, result_dir=str(result_dir), period_ns=period * 1e9, vdd=vdd, corner=corner, spaced=spaced,
+                   input_delay_ps=ps(input_delay), data_delay_ps=ps(data_delay),
                    clock_slew_ns=plan["clock_slew"] * 1e9, load_pf=load * 1e12, temperature=temperature,
                    program=[[f"{op.kind}{op.address}" + (f"={op.data:0{g.bits}b}" if op.kind == "W" else "")
                              for op in ops] for ops in program],
@@ -869,8 +911,12 @@ def simulate(result_dir: Path, out: Path, *, period: float = 2e-9, vdd: float = 
 
 
 def describe(verdict: dict) -> str:
+    launch = ("" if verdict.get("input_delay_ps") is None
+              else f"inputs {verdict['input_delay_ps']:g} ps after the edge, ")  # fmt: skip
+    if verdict.get("data_delay_ps") is not None:
+        launch += f"D {verdict['data_delay_ps']:g} ps, "
     lines = [f"{verdict['cell']}: {'PASS' if verdict['passed'] else 'FAIL'}  "
-             f"({'spaced' if verdict.get('spaced') else 'back to back'}, {verdict['corner']} {verdict['vdd']} V, {verdict['period_ns']:g} ns clock, "
+             f"({launch}{'spaced' if verdict.get('spaced') else 'back to back'}, {verdict['corner']} {verdict['vdd']} V, {verdict['period_ns']:g} ns clock, "
              f"Xyce {verdict['xyce_seconds']:.0f} s, {verdict['energy_fJ']:.0f} fJ)"]  # fmt: skip
     for read in verdict["reads"]:
         lines.append(f"  cycle {read['cycle']} {read['port']} read  {read['address']:>3}: {read['read']} "
@@ -878,8 +924,9 @@ def describe(verdict: dict) -> str:
                      f"clk->WL {read['clk_to_wl_ps']}  ->SAE {read['clk_to_sae_ps']}  ->Q {read['clk_to_q_ps']} ps"
                      f"  {'ok' if read['ok'] else 'WRONG ' + str(read['volts'])}")  # fmt: skip
     for write in verdict["writes"]:
+        close = write.get("clk_to_write_close_ps")
         lines.append(f"  cycle {write['cycle']} {write['port']} write {write['address']:>3} = {write['data']:b}  "
-                     f"clk->WL {write['clk_to_wl_ps']} ps")  # fmt: skip
+                     f"clk->WL {write['clk_to_wl_ps']} ps" + ("" if close is None else f"  ->D latched {close} ps"))  # fmt: skip
     lines.append(
         f"  final state of {verdict['cells_checked']} cells: {len(verdict['cells_wrong'])} wrong"
     )
@@ -920,17 +967,27 @@ def main(argv: list[str] | None = None) -> int:
                         help="Seconds Xyce may take (a large macro takes days).")
     parser.add_argument("--strap-ohms", type=float, default=0.0,
                         help="supply resistance between neighbouring column tiles (6T 4:1: ~135); 0 = ideal")
+    parser.add_argument("--input-delay", type=float, default=None, metavar="PS",
+                        help="Launch every input PS after the previous rising edge (a synchronous driver) "
+                             "and sample Q 20 ps before the next; default: inputs change on falling edges.")
+    parser.add_argument("--data-delay", type=float, default=None, metavar="PS",
+                        help="With --input-delay: launch D PS after the previous rising edge instead (D's "
+                             "hold, e.g. the Liberty's, while the controls keep --input-delay).")
     parser.add_argument("--probe", action="append", default=[], metavar="NODE",
                         help="Also print V(Xdut:NODE), e.g. XDATA_LO:X0_0:XIO_A:X_block:SA (repeatable).")
     args = parser.parse_args(argv)
-    tag = "_spaced" if args.spaced else ""
+    tag = ("_spaced" if args.spaced else "") + (
+        "" if args.input_delay is None else f"_in{args.input_delay:g}ps"
+    ) + ("" if args.data_delay is None else f"_d{args.data_delay:g}ps")
     out = (
         args.out
         or REPO_ROOT / "tmp" / f"simulate_{args.result_dir.resolve().name}{tag}"
     )
     verdict = simulate(args.result_dir, out, period=args.period, vdd=args.vdd, corner=args.corner,
                        netlist=args.netlist, spaced=args.spaced, timeout=args.timeout,
-                       probes=tuple(args.probe), strap_ohms=args.strap_ohms)  # fmt: skip
+                       probes=tuple(args.probe), strap_ohms=args.strap_ohms,
+                       input_delay=None if args.input_delay is None else args.input_delay * 1e-12,
+                       data_delay=None if args.data_delay is None else args.data_delay * 1e-12)  # fmt: skip
     print(describe(verdict))
     print(f"wrote {out / 'simulation.json'}")
     return 0 if verdict["passed"] else 1

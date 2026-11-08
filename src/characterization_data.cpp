@@ -351,6 +351,13 @@ bool parse_timing(const JValue& timing_obj, CharacterizationTiming& out,
             return false;
         }
     }
+    if (const JValue* c = timing_obj.find("data_constraints")) {
+        std::string local_error;
+        if (!parse_constraints(*c, out.data_constraints, &local_error)) {
+            if (error) *error = "data_constraints: " + local_error;
+            return false;
+        }
+    }
     return true;
 }
 

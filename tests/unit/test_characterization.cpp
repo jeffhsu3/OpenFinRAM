@@ -330,3 +330,49 @@ TEST(LibertyEstimator, RejectsDualPortLibertyForSinglePortLef) {
         opts, lef.string(), lib_path.string(), &err));
     EXPECT_NE(err.find("missing PIN rst_n"), std::string::npos) << err;
 }
+
+TEST(LibertyEstimator, SixTDataTakesItsOwnHold) {
+    // The 6T macro takes D in its IO columns' write latch: D's hold is the
+    // latch close (clk -> wrenan at the far column), the controls keep theirs.
+    std::string lef = "MACRO sram_x4x4x1\n  SIZE 10.0 BY 20.0 ;\n";
+    auto pin = [&lef](const std::string& name) { lef += "  PIN " + name + "\n  END " + name + "\n"; };
+    for (const char* name : {"vdd", "vss", "clk", "rst_n", "ce_n", "we_n", "oe_n"}) pin(name);
+    for (int bit = 0; bit < 4; ++bit) pin("A[" + std::to_string(bit) + "]");
+    for (int bit = 0; bit < 4; ++bit) {
+        pin("D[" + std::to_string(bit) + "]");
+        pin("Q[" + std::to_string(bit) + "]");
+    }
+    lef += "END sram_x4x4x1\n";
+    const std::string flat = R"("index_1":[0.02], "index_2":[0.02], "setup_rise":[[0.05]],
+        "setup_fall":[[0.05]])";
+    const std::string json = std::string("{") + kSchema + R"(, "timing":{"delay":{
+        "index_1":[0.02], "index_2":[0.001], "cell_rise":[[0.2]], "cell_fall":[[0.2]],
+        "rise_transition":[0.011], "fall_transition":[0.0095]},
+        "constraints":{)" + flat + R"(, "hold_rise":[[0.05]], "hold_fall":[[0.05]]},
+        "data_constraints":{)" + flat + R"(, "hold_rise":[[0.123]], "hold_fall":[[0.123]]}}})";
+    OpenFinRAM::CharacterizationData data;
+    std::string err;
+    ASSERT_TRUE(load("six_t_hold.json", json, data, err)) << err;
+    ASSERT_TRUE(data.timing.data_constraints.present);
+    MainCliOptions opts;
+    opts.single_port = false;
+    opts.bitcell_6t = true;
+    opts.num_wls = 2;
+    opts.num_data_bits = 4;
+    opts.num_banks = 1;
+    const fs::path lef_path = write_file("six_t_hold.lef", lef);
+    const fs::path lib_path = scratch_dir() / "six_t_hold.lib";
+    ASSERT_TRUE(OpenFinRAM::export_estimated_liberty(
+        opts, lef_path.string(), lib_path.string(), &err, &data)) << err;
+    const std::string lib = read_file(lib_path);
+    const std::size_t d = lib.find("bus (D)");
+    const std::size_t a = lib.find("bus (A)");
+    ASSERT_NE(d, std::string::npos);
+    ASSERT_NE(a, std::string::npos);
+    const std::string d_bus = lib.substr(d, lib.find("bus (", d + 1) == std::string::npos
+                                                ? std::string::npos
+                                                : lib.find("bus (", d + 1) - d);
+    const std::string a_bus = lib.substr(a, d > a ? d - a : std::string::npos);
+    EXPECT_NE(d_bus.find("0.123"), std::string::npos) << d_bus;
+    EXPECT_EQ(a_bus.find("0.123"), std::string::npos) << a_bus;
+}

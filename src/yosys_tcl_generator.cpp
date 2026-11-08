@@ -164,8 +164,13 @@ std::string YosysTclGenerator::generate_script(
         oss << "hilomap -singleton -hicell TIEHIx1_ASAP7_75t_R H -locell TIELOx1_ASAP7_75t_R L\n";
         oss << "opt\n";
         // Each port registers a full address and a two-bit read/write state.
+        // The single-port controller also holds Q's output enable in one
+        // flop per bank (with one bank it is constant and synthesizes away),
+        // and gates the access phase and each bank's write data latch from
+        // a command latch (DLLx1) each.
         const int ports = one_port ? 1 : 2;
-        const int expected_dp_dffs = ports * (addr_width + 2);
+        const int oe_dffs = one_port && num_banks > 1 ? num_banks : 0;
+        const int expected_dp_dffs = ports * (addr_width + 2) + oe_dffs;
         oss << "\n# Structural signoff for DP physical network\n";
         oss << "check -assert\n";
         // The wordlines are driven at the array by the driver-slice strips;
@@ -173,6 +178,10 @@ std::string YosysTclGenerator::generate_script(
         // dedicated wordline driver stage to count here.
         oss << "select -assert-count " << expected_dp_dffs
             << " t:*DFF*ASAP7_75t_R\n";
+        if (one_port) {
+            oss << "select -assert-count " << (num_banks + 1)
+                << " t:DLLx1_ASAP7_75t_R\n";
+        }
         const unsigned expected_bufx2 = ports * (num_wl_buf + num_sae_buf);
         oss << "select -assert-count " << expected_bufx2
             << " t:BUFx2_ASAP7_75t_R a:physical_dp_delay %i\n";

@@ -44,6 +44,10 @@ struct CharacterizationTiming {
     CharacterizationDelay delay;
     std::map<std::string, CharacterizationDelay> port_delays;
     CharacterizationConstraints constraints;
+    // The data inputs' own setup/hold, where they differ from the controls'
+    // (the 6T macro takes D in its IO columns' write latch, not a flop).
+    // Absent: D takes `constraints`.
+    CharacterizationConstraints data_constraints;
 };
 
 // Measured values that override the estimated early-PPA constants in

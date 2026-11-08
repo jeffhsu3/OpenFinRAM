@@ -29,3 +29,14 @@ endmodule
 module AND4x1_ASAP7_75t_R (input A, B, C, D, output Y);
     assign Y = A & B & C & D;
 endmodule
+
+// Latch transparent while CLK is low (Liberty: enable "!CLK").
+module DLLx1_ASAP7_75t_R (input CLK, input D, output Q);
+    reg q = 1'b0;
+    always @(CLK or D) if (!CLK) q = D;
+    assign Q = q;
+endmodule
+
+module AOI21x1_ASAP7_75t_R (input A1, A2, B, output Y);
+    assign Y = ~((A1 & A2) | B);
+endmodule

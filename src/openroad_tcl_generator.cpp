@@ -429,6 +429,28 @@ bool OpenRoadTclGenerator::generate_run_tcl(double width, double height,
         file << "unset_dont_touch $physical_delay_inputs\n";
     }
     file << "clock_tree_synthesis -clk_nets {clk} -root_buf BUFx4_ASAP7_75t_R -buf_list {BUFx2_ASAP7_75t_R BUFx4_ASAP7_75t_R BUFx8_ASAP7_75t_R} -wire_unit 20\n";
+    if (one_port_) {
+        // The 6T controller gates the access phase and the write-data latch
+        // with the clock itself (sram_control_1p.v).  TritonCTS takes those
+        // gates as macro sinks and balances them to the registers' latency
+        // with delay buffers (-delay_buffer_derate 0 does not stop it), which
+        // lands straight on clk -> wordline and on D's hold.  Bypass each one
+        // (its loads move to its input net); remove_buffers would ignore the
+        // list and take every buffer in the design.
+        file << R"(foreach inst [[ord::get_db_block] getInsts] {
+    if {![string match delaybuf_* [$inst getName]]} { continue }
+    set in_net [[$inst findITerm A] getNet]
+    set out_net [[$inst findITerm Y] getNet]
+    foreach iterm [$out_net getITerms] {
+        if {[$iterm getInst] eq $inst} { continue }
+        $iterm disconnect
+        $iterm connect $in_net
+    }
+    odb::dbInst_destroy $inst
+    odb::dbNet_destroy $out_net
+}
+)";
+    }
     file << "set_propagated_clock [get_clocks {clk}]\n";
     file << "repair_clock_nets -max_wire_length 20\n";
     if (single_port) {

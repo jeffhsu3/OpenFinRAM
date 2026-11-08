@@ -337,13 +337,21 @@ bool YosysManager::verify_periphery_structure() {
         const std::size_t ports = cli_options_.bitcell_6t ? 1 : 2;
         const std::size_t expected_bufx2 =
             ports * (cli_options_.num_wl_buf + cli_options_.num_sae_buf);
+        // The single-port controller adds Q's output enable, one flop a bank
+        // (constant, so synthesized away, with one bank), and a write-data
+        // command latch a bank, plus the access-phase command latch.
+        const std::size_t banks = static_cast<std::size_t>(cli_options_.num_banks);
+        const std::size_t oe_dffs = cli_options_.bitcell_6t && banks > 1 ? banks : 0;
         const std::size_t expected_dffs =
-            ports * (get_addr_width(cli_options_) + 2);
+            ports * (get_addr_width(cli_options_) + 2) + oe_dffs;
+        const std::size_t latch_count = count_occurrences(text, "DLLx1_ASAP7_75t_R");
+        const std::size_t expected_latches = cli_options_.bitcell_6t ? banks + 1 : 0;
         const std::size_t named_delay_count =
             count_occurrences(text, "physical_dp_delay_");
 
         const bool pass = dff_total == expected_dffs &&
-                          named_delay_count == expected_bufx2;
+                          named_delay_count == expected_bufx2 &&
+                          latch_count == expected_latches;
 
         const std::string report_path = syn_path_ + "/periphery_structure.rpt";
         std::ofstream report(report_path);
@@ -354,6 +362,7 @@ bool YosysManager::verify_periphery_structure() {
             report << "bufx2_total " << bufx2_count << "\n";
             report << "named_delay_bufx2 " << named_delay_count << " expected "
                    << expected_bufx2 << "\n";
+            report << "command_latches " << latch_count << " expected " << expected_latches << "\n";
             report << "status " << (pass ? "PASS" : "FAIL") << "\n";
         }
 
@@ -361,6 +370,7 @@ bool YosysManager::verify_periphery_structure() {
             LOGE << "Periphery structural signoff failed (DP): DFF=" << dff_total
                  << " (HQN=" << dff_count << " ASR=" << dff_asr_count << ") /" << expected_dffs
                  << ", named delay BUFx2=" << named_delay_count << "/" << expected_bufx2
+                 << ", DLLx1=" << latch_count << "/" << expected_latches
                  << " (total BUFx2=" << bufx2_count << "; see " << report_path << ")";
             return false;
         }
