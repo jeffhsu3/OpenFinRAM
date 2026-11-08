@@ -80,7 +80,13 @@ def bbox_origin(cell):
 
 
 #: How far a tile's supply pins stay inside its abutting edges (`abstract`).
-SUPPLY_PIN_INSET = 0.05
+#: The neighbour's metal overhangs the shared edge by ~40 nm (an obstruction
+#: there, or its own pin), and the pin's line end must clear it by the
+#: end-of-line keep-out (LEF58_EOLKEEPOUT forward 31 nm on M1-M3, 48 nm on
+#: M4-M7): both are fixed instance shapes, so no route can mend it.  At 50 nm
+#: the gap was 10 nm (M3 EolKeepOut on vdd at a tile seam: x16x8x2, x4x8x4,
+#: x64x32x1).
+SUPPLY_PIN_INSET = 0.1
 
 
 def abstract(cell, name, signal_labels, abutted=None, shift=(0.0, 0.0), abutted_supply=None,
