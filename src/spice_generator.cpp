@@ -5,6 +5,7 @@
 #include <stdexcept>
 #include <iomanip>
 #include <cctype>
+#include <vector>
 
 #include "plog/Log.h"
 
@@ -340,10 +341,37 @@ std::string SpiceGenerator::generate_wl_strips_8t() {
         append_indexed_ports(ports, "SEL[", slices, "]");
         append_indexed_ports(ports, "B[", 4, "]");
         append_indexed_ports(ports, "WL[", rows, "]");
+        // With precharge buffers the strip takes the controller's blprechn
+        // (PCH) and re-drives it for its wordline segment's IO blocks (PCHL).
+        if (config_.precharge_buffers) append_ports(ports, {"PCH", "PCHL"});
         append_ports(ports, {"VDD", "VSS"});
         std::stringstream instances;
+        if (config_.precharge_buffers) {
+            instances << "X_pbuf PCH VDD VSS PCHL " << precharge_buffer_cell(config_) << "\n";
+        }
+        // With select buffers the strip takes each predecode line once and a
+        // buffer per line re-drives it for each group of slices
+        // (scripts/compile_asap7_2rw.py, _select_buffer_row).
+        std::vector<int> group_of(slices, -1);
+        if (config_.select_buffers) {
+            const std::string buffer = select_buffer_cell(slices);
+            int first = 0, g = 0;
+            for (unsigned size : select_buffer_groups(slices)) {
+                for (int j = 0; j < 4; ++j) {
+                    instances << "X_buf" << g << "_" << j << " B[" << j << "] VDD VSS BG" << g << "[" << j << "] "
+                              << buffer << "\n";
+                }
+                for (unsigned k = 0; k < size; ++k) group_of[first + k] = g;
+                first += size;
+                ++g;
+            }
+        }
         for (int k = 0; k < slices; ++k) {
-            instances << "X_slice" << k << " SEL[" << k << "] B[0] B[1] B[2] B[3]";
+            instances << "X_slice" << k << " SEL[" << k << "]";
+            for (int j = 0; j < 4; ++j) {
+                if (group_of[k] < 0) instances << " B[" << j << "]";
+                else instances << " BG" << group_of[k] << "[" << j << "]";
+            }
             for (int j = 0; j < 4; ++j) instances << " WL[" << 4 * k + j << "]";
             instances << " VDD VSS wl_slice_c" << cells << "\n";
         }
@@ -364,6 +392,10 @@ std::string SpiceGenerator::generate_wl_strips_8t() {
             append_indexed_tokens(instances, "SEL" + suffix, slices, "]");
             append_indexed_tokens(instances, "B" + suffix, 4, "]");
             append_indexed_tokens(instances, "WL" + suffix, rows, "]");
+            if (config_.precharge_buffers) {
+                append_ports(ports, {std::string("PCH_") + port, std::string("PCHL_") + port});
+                instances << "PCH_" << port << " PCHL_" << port << " ";
+            }
             instances << "VDD VSS " << strip << "\n";
         }
         append_ports(ports, {"VDD", "VSS"});

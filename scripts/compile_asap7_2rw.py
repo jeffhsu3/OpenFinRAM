@@ -350,12 +350,19 @@ def wordline_bus(port, half, segment=None):
     return f"wl_{port}_{half}" + ("" if segment is None else f"_s{segment}")
 
 
-def leaf_net(name, bank, bit, wordlines, bits, shared_b=False, segment=None, mux=4):
+def precharge_bus(half, segment=None):
+    """A stack's copy of port A's precharge line, or a segment's, from its strips' precharge buffers."""
+    return f"blprechn_A_{half}" + ("" if segment is None else f"_s{segment}")
+
+
+def leaf_net(name, bank, bit, wordlines, bits, shared_b=False, segment=None, mux=4, precharge_buffers=False):
     """Macro net of a column pin; `wordlines` is NUM_WL, half the array's.
 
     A pair tile (`shared_b`, `bank` its first) names the second bank's
     wordlines and selects by continuing the first's indices, and its
     one-per-bank controls with an ``R``; port B's enables are the pair's.
+    With `precharge_buffers` the tile's precharge is its segment's copy of
+    the line, driven by the segment's strips, not the controller's.
     """
     if name in ("vdd", "vss"):
         return name
@@ -373,6 +380,8 @@ def leaf_net(name, bank, bit, wordlines, bits, shared_b=False, segment=None, mux
     ctrl = re.fullmatch(r"(wrena|wrenan|oeb_out|oe_out|blprechn|sae_)([AB])(R?)", name)
     if ctrl:
         signal = ctrl[1].rstrip("_")
+        if precharge_buffers and signal == "blprechn" and ctrl[2] == "A":
+            return f"{precharge_bus(half_of(bit, bits), segment)}[{bank}]"
         if shared_b and ctrl[2] == "B" and signal != "blprechn":
             return f"{signal}_B[{bank // 2}]"
         return f"{signal}_{ctrl[2]}[{bank + (1 if ctrl[3] else 0)}]"
@@ -384,9 +393,15 @@ def strip_net(name, bank, half, wordlines, segment=None, below=None, above=None)
 
     A band pair drives `segment` of its stack (None: the stack is one
     segment); a mid pair drives port A's segments `below` and `above` it.
+    A strip with a precharge buffer takes the bank's precharge line on
+    ``PCH`` and drives its segment's copy from ``PCHL``.
     """
     if name in ("vdd", "vss"):
         return name
+    pch = re.fullmatch(r"(PCH|PCHL)_([ADU])", name)
+    if pch:
+        target = {"D": below, "U": above}.get(pch[2], segment)
+        return f"blprechn_A[{bank}]" if pch[1] == "PCH" else f"{precharge_bus(half, target)}[{bank}]"
     sel = re.fullmatch(r"SEL_([ABDU])\[(\d+)\]", name)
     if sel:
         port = sel[1] if sel[1] in "AB" else "A"
@@ -431,7 +446,7 @@ def wordline_tracks(cell):
 
 
 def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_reach=0.0, segment_bits=None,
-                          mux=4, rail_on_grid=None):
+                          mux=4, rail_on_grid=None, select_buffers=False, precharge_buffer=None):
     """The strip pair for each side of the controller band, in the tile's x.
 
     A strip is one slice per four of the tile's port-A wordlines, the slice's
@@ -455,6 +470,14 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
     the segment below, one facing up into the segment above, on a shared
     VSS rail (the two-port pair's arrangement), its outputs labelled
     ``WL_D``/``WL_U``.
+
+    With `select_buffers` (single-port) each strip re-drives the predecode
+    lines for its own slices from a row of standard cells under them
+    (`_select_buffer_row`): the strip is that row taller, its ``B`` pins
+    the row's four rails, and a mid pair's two strips share the rows' VDD
+    rail instead of the slices' VSS.  `precharge_buffer` (a standard
+    cell's name) adds that buffer to the row's IO end: the strip's ``PCH``
+    pin its input, ``PCHL`` its output for the segment's IO blocks.
     """
     cells_along = mux * (segment_bits or bits // 2)
     load = wl_slices.load_class(cells_along)
@@ -511,14 +534,12 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
     # Every slice's B<j> is its own metal: the slices' predecode inputs do
     # not join across a slice boundary, so each is a pin and the router ties
     # them to the controller's sel_lo<j>.
-    for x0_slice in starts:
-        for j in range(4):
-            x, y, layer = pins[f"B{j}"]
-            strip.add(
-                gdstk.Label(f"B[{j}]", (x0_slice + x, y), layer=layer, texttype=251)
-            )
-    if ports == ("A",) and len(starts) > 1:  # one slice has nothing to join
-        _predecode_rails(strip, starts, pins, RAIL_ON_GRID if rail_on_grid is None else rail_on_grid)
+    b_pins = [(j, x0_slice + pins[f"B{j}"][0], *pins[f"B{j}"][1:]) for x0_slice in starts for j in range(4)]
+    on_grid = RAIL_ON_GRID if rail_on_grid is None else rail_on_grid
+    if select_buffers and ports != ("A",):
+        raise RuntimeError("select buffers are for the single-port macro so far")
+    if ports == ("A",) and len(starts) > 1 and not select_buffers:  # one slice has nothing to join
+        _predecode_rails(strip, starts, pins, on_grid)
     spans = [(x0, x0 + SLICE_WIDTH) for x0 in starts]
     gaps = [
         (spans[0][0] - WORDLINE_PITCH, spans[0][0]),
@@ -538,6 +559,18 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
         for c in range(count):
             strip.add(gdstk.Reference(filler, (g0 + c * WORDLINE_PITCH, 0)))
     x_left, x_right = spans[0][0] - WORDLINE_PITCH, spans[-1][1] + WORDLINE_PITCH
+    # The select buffers' row under the slices: the strip's B pins are its rails.
+    row = SELECT_ROW if select_buffers else 0.0
+    pch_pins = {}
+    if precharge_buffer and not select_buffers:
+        raise RuntimeError("a precharge buffer stands in the select buffers' row: it needs --select-buffers")
+    if select_buffers:
+        rails, pch_pins = _select_buffer_row(lib, strip, starts, pins, x_left, x_right, on_grid, precharge_buffer)
+        b_pins = [(j, *pin) for j, pin in enumerate(rails)]
+    for j, x, y, layer in b_pins:
+        strip.add(gdstk.Label(f"B[{j}]", (x, y), layer=layer, texttype=251))
+    for name, (x, y, layer) in pch_pins.items():
+        strip.add(gdstk.Label(name, (x, y), layer=layer, texttype=251))
 
     # OpenROAD's ASAP7 default via stacks, drawn as cells so the pair is one place to look.
     via34 = lib.new_cell("wl_via34")
@@ -567,8 +600,8 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
     )
     pairs = {}
     if ports == ("A",):
-        pair_height = height + 2 * FIN_HALF_PITCH
-        seam = FIN_HALF_PITCH  # port A's strip from here up, facing the array
+        pair_height = height + row + 2 * FIN_HALF_PITCH
+        seam = FIN_HALF_PITCH + row  # port A's slices from here up, facing the array
     else:
         pair_height = 2 * height + 2 * FIN_HALF_PITCH
         seam = height + FIN_HALF_PITCH  # the shared VSS rail
@@ -595,10 +628,10 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
             for k in range(rows // 4):
                 sx, sy, layer = pins["SEL"]
                 label(f"SEL_{port}[{k}]", starts[k] + sx, seam + sign * sy, layer)
-            for x0_slice in starts:  # every slice's, as in the strip
-                for j in range(4):
-                    x, y, layer = pins[f"B{j}"]
-                    label(f"B_{port}[{j}]", x0_slice + x, seam + sign * y, layer)
+            for j, x, y, layer in b_pins:  # every slice's, or the buffer row's rails, as in the strip
+                label(f"B_{port}[{j}]", x, seam + sign * y, layer)
+            for name, (x, y, layer) in pch_pins.items():
+                label(f"{name}_{port}", x, seam + sign * y, layer)
         for i in range(rows):
             x = tracks[("A", i)]
             rect(x - 0.009, seam + height, x + 0.009, pair_height, 30)
@@ -619,7 +652,7 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
         if ports != ("A",):
             raise RuntimeError("wordline segments are for the single-port macro so far")
         pairs["mid"] = _mid_strip_pair(lib, strip, starts, pins, tracks, gate_tracks, rows, height,
-                                       x_left, x_right, gate_reach, load)  # fmt: skip
+                                       x_left, x_right, gate_reach, load, b_pins, row, pch_pins)  # fmt: skip
     return pairs, load
 
 
@@ -766,7 +799,7 @@ PREDECODE_JOIN = {"B0": (0.108, 0.0), "B1": (0.036, 0.0), "B2": (0.254, -0.048),
 RAIL_ON_GRID = 0.0005
 
 
-def _predecode_rails(strip, starts, pins, on_grid=None):
+def _predecode_rails(strip, starts, pins, on_grid=None, groups=None, reach=None):
     """Join each predecode input B<j> across the strip's slices on an M4 rail.
 
     Each slice's B<j> is its own short M2 run; B1/B3 (and B0/B2) alternate
@@ -775,51 +808,384 @@ def _predecode_rails(strip, starts, pins, on_grid=None):
     strips stacked it ran out of tracks (DRT-0255 on sel_lo_A[1], x64x8x1
     and x64x64x1 with --segment-bits).  A rail per input makes them one
     pin, reached anywhere along the strip.
+
+    With `groups` (slice counts, `select_buffer_groups`) each rail is cut
+    into one piece a group, for that group's select buffer to drive;
+    `reach` ``{(j, group): x}`` carries a piece on to where its buffer's
+    output comes up.  Returns each rail's y.
     """
+    rails = []
     for j in range(4):
         sx, dy = PREDECODE_JOIN[f"B{j}"]
         _, y, _ = pins[f"B{j}"]
         rail_y = y + dy + (RAIL_ON_GRID if on_grid is None else on_grid)
+        rails.append(rail_y)
         xs = [x0 + sx for x0 in starts]
         for x in xs:
             strip.add(gdstk.rectangle((x - 0.009, y - 0.009), (x + 0.009, y + 0.009), layer=25))  # V2
             strip.add(gdstk.rectangle((x - 0.009, rail_y - 0.012), (x + 0.009, rail_y + 0.012), layer=35))  # V3
             low, high = min(y - 0.014, rail_y - 0.017), max(y + 0.014, rail_y + 0.017)
             strip.add(gdstk.rectangle((x - 0.009, low), (x + 0.009, high), layer=30))  # M3
-        strip.add(gdstk.rectangle((xs[0] - 0.020, rail_y - 0.012), (xs[-1] + 0.020, rail_y + 0.012), layer=40))
+        first, ends = 0, []
+        for g, count in enumerate(groups or [len(xs)]):
+            piece = xs[first:first + count] + ([reach[(j, g)]] if reach else [])
+            first += count
+            ends.append((min(piece) - 0.020, max(piece) + 0.020))
+            strip.add(gdstk.rectangle((ends[-1][0], rail_y - 0.012), (ends[-1][1], rail_y + 0.012), layer=40))
+        if any(right[0] - left[1] < SELECT_RAIL_GAP - 1e-6 for left, right in zip(ends, ends[1:])):
+            raise RuntimeError(f"B{j}: two groups' rails end within {round(SELECT_RAIL_GAP * 1000)} nm of each other")
+    return rails
+
+
+#: Select buffers (`--select-buffers`).  Every slice of every strip hangs on
+#: the controller's four sel_lo lines: 12 or 24 fins a slice, so their load
+#: grows with the macro's bits, and one output buffer cannot drive it past
+#: ~16 kbit (0.15 ns slew at ~175 fF on a BUFx24).  A buffered strip takes
+#: each line once, on an M4 rail over a row of ASAP7 standard cells under
+#: its slices, and a buffer per line re-drives every `SELECT_GROUP` slices:
+#: the controller sees a buffer input a group, and a buffer one group's
+#: slices and 7 um of rail (a strip's whole rail is 27 um at 256 wordlines,
+#: several kilohm of minimum-width M4, so a buffer at its end would not do).
+#:
+#: The row stands `SELECT_ROW_GAP` under the slices, turned over (its VSS
+#: rail towards theirs, its VDD rail on the strip's far edge), on their fin
+#: and 54 nm gate grids.  It cannot share their VSS rail, though a slice's
+#: edge is drawn as a 7.5-track cell's is: a standard cell stitches its rail
+#: to the LIG under it with a V0 every gate pitch, and a slice ties its
+#: sources to the rail with M1 stubs every 216 nm, so a V0 would sit in a
+#: T of M1 under each stub (V0.M1.AUX.3).
+STD_CELL_GDS = REPO / "tech/gds/asap7sc7p5t_28_R_220121a.gds"
+STD_CELL_LEF = REPO / "tech/lef/asap7sc7p5t_28_R.lef"
+STD_CELL_SUFFIX = "_ASAP7_75t_R"
+STD_ROW, STD_SITE = 0.27, 0.054
+SELECT_ROW_GAP = 0.108
+#: What a buffered strip is taller by.
+SELECT_ROW = STD_ROW + SELECT_ROW_GAP
+SELECT_GROUP = 16
+#: The fewest slices a buffered strip has: four buffers and two taps under them.
+SELECT_MIN_SLICES = 4
+#: Between two groups' pieces of one rail, end to end (M4.S.3 wants 40 nm).
+SELECT_RAIL_GAP = 0.060
+#: M3 a riser keeps from other M3: beside it (18 nm, 20 corner to corner)
+#: and end to end (M3.S.4).  Between two stacks' M2 pads, which are short
+#: on every side (M2.S.4): an abutting buffer's A pad is 23 nm from the Y
+#: pad before it unless their rows differ by this much.
+M3_SIDE_SPACE = 0.020
+M2_PAD_SPACE = 0.031
+#: A slice's SEL pin ends this far short of the buffer row's far edge: a
+#: mid pair's two rows meet there, and their pins tip to tip (M3.S.4).
+SELECT_PIN_END = 0.020
+
+#: Precharge buffers (`--precharge-buffers`).  The controller's blprechn
+#: hangs on every column's precharge gates, 6 fins a column: past ~175 fF
+#: (64 bits at 8:1) its output buffer misses the slew limit as sel_lo did.
+#: A strip's row takes one more buffer at its IO end, which re-drives the
+#: line for the IO blocks of the wordline segment the strip serves: the
+#: controller sees a buffer input a strip.  A segment between two strips
+#: has two buffers on its copy; the one farthest from the band has one,
+#: which the cell is sized for (`precharge_buffer_cell`).
+PRECHARGE_GATE_FF = 6 * 0.103  # a column's precharge gates (six_t_port_loads_pf)
+PRECHARGE_WIRE_FF = 0.1  # ... and an allowance an IO block
+#: The largest segment load each buffer takes, fF: near 100 ps of rise
+#: transition in the Liberty (TT).
+PRECHARGE_BUFFERS = (("BUFx8", 80.0), ("BUFx12f", 115.0), ("BUFx24", 175.0))
+#: The slices a strip's smallest select-buffer group must have for the row
+#: to have room for each, past the last group's four buffers and the taps
+#: (found by drawing every strip from 16 to 256 wordlines, every slice class).
+PRECHARGE_MIN_GROUP = {"BUFx8": 9, "BUFx12f": 10, "BUFx24": 11}
+#: The least M4 a precharge pin is drawn with, um.
+PRECHARGE_PIN_LENGTH = 0.4
+
+
+def select_buffer_groups(slices):
+    """The slices each select buffer of a strip of `slices` drives: balanced groups of at most `SELECT_GROUP`."""
+    count = -(-slices // SELECT_GROUP)
+    return [slices // count + (1 if g < slices % count else 0) for g in range(count)]
+
+
+def select_buffer_cell(slices):
+    """The buffer a strip of `slices` slices takes (SpiceGenerator::select_buffer_cell is the same rule)."""
+    if slices < SELECT_MIN_SLICES:
+        raise RuntimeError(f"select buffers need {SELECT_MIN_SLICES} slices a strip ({4 * SELECT_MIN_SLICES} wordlines)")
+    return ("BUFx8" if min(select_buffer_groups(slices)) >= 8 else "BUFx4") + STD_CELL_SUFFIX
+
+
+def precharge_buffer_cell(segment_bits, mux):
+    """The buffer a strip takes for a wordline segment of `segment_bits` IO blocks at `mux`:1
+    (precharge_buffer_cell in main_config_helpers.cpp is the same rule)."""
+    load = segment_bits * (mux * PRECHARGE_GATE_FF + PRECHARGE_WIRE_FF)
+    for cell, limit in PRECHARGE_BUFFERS:
+        if load <= limit:
+            return cell + STD_CELL_SUFFIX
+    raise RuntimeError(f"a wordline segment's precharge is {load:.0f} fF, past one buffer: use fewer bits a segment")
+
+
+def precharge_buffer_fits(slices, cell):
+    """Whether a strip of `slices` slices has room in its row for the precharge buffer `cell`
+    (precharge_buffer_fits in main_config_helpers.cpp is the same rule)."""
+    least = PRECHARGE_MIN_GROUP[cell.removesuffix(STD_CELL_SUFFIX)]
+    return slices >= SELECT_MIN_SLICES and min(select_buffer_groups(slices)) >= least
+
+
+@functools.cache
+def _std_cell_pins(name):
+    """A standard cell's width and its A and Y bars from the LEF, um: ``(width, {pin: (x, y_lo, y_hi)})``,
+    each bar the pin's tallest minimum-width M1 rectangle."""
+    block = re.search(rf"^MACRO {name}\n(.*?)^END {name}", STD_CELL_LEF.read_text(), re.S | re.M)
+    if block is None:
+        raise RuntimeError(f"{STD_CELL_LEF}: no {name}")
+    width = float(re.search(r"SIZE ([\d.]+) BY", block[1])[1])
+    bars = {}
+    for pin in re.finditer(r"PIN (\w+)\n(.*?)END \1\n", block[1], re.S):
+        rects = [tuple(float(v) for v in r) for r in re.findall(r"RECT ([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+)", pin[2])]
+        upright = [r for r in rects if abs(r[2] - r[0] - 0.018) < 1e-6]
+        if upright and "LAYER M1" in pin[2]:
+            x0, y0, x1, y1 = max(upright, key=lambda r: r[3] - r[1])
+            bars[pin[1]] = (round((x0 + x1) / 2, 4), y0, y1)
+    return width, bars
+
+
+@functools.cache
+def _std_cells():
+    return {cell.name: cell for cell in gdstk.read_gds(str(STD_CELL_GDS)).cells}
+
+
+def _std_cell(lib, name):
+    """The standard cell `name` in `lib`, added from the released library the first time."""
+    have = {cell.name: cell for cell in lib.cells}
+    if name not in have:
+        lib.add(_std_cells()[name], *_std_cells()[name].dependencies(True))
+        return _std_cells()[name]
+    return have[name]
+
+
+def _select_buffer_row(lib, strip, starts, pins, x_left, x_right, on_grid=None, precharge=None):
+    """Draw the strip's select buffers under its slices; returns each line's pin ``(x, y, layer)``
+    and the precharge buffer's ``{"PCH": pin, "PCHL": pin}`` (empty without one).
+
+    `SELECT_ROW_GAP` under y = 0 (the slices' VSS rail), turned over: a tap
+    at each end and at each group's start, then the group's four buffers,
+    fillers between.
+    Line j comes in on an M4 rail along the row (the strip's pin), each of
+    its buffers' A bars stacked up to it; a buffer's Y bar goes up on M3
+    past the row to its group's piece of the line's rail in the slices
+    (`_predecode_rails`), in a column the slices' own M3 leaves free.  The
+    slices' SEL pins come down through the row on their own M3 tracks, and
+    a buffer is drawn whichever way round keeps its two stacks off them.
+
+    The precharge buffer `precharge` (a cell name) goes as far towards the
+    row's high-x end, the IO blocks', as its stacks find room.  Its input
+    and output come up to the two M4 tracks between the lines' rails and
+    the slices', each a pin from its stack to the row's end.
+    """
+    count = len(starts)
+    groups = select_buffer_groups(count)
+    name = select_buffer_cell(count)
+    width, bars = _std_cell_pins(name)
+    (ax, a_lo, a_hi), (yx, y_lo, y_hi) = bars["A"], bars["Y"]
+    shift = RAIL_ON_GRID if on_grid is None else on_grid
+    local = [pins[f"B{j}"][1] + PREDECODE_JOIN[f"B{j}"][1] + shift for j in range(4)]
+    # The lines' rails over the row: four of B0's M4 tracks, the first far
+    # enough under the slices' rail for a via's metal.
+    y_row = -SELECT_ROW_GAP  # the row's top edge: its VSS rail
+    top = local[0] - 0.048 * math.ceil(round((local[0] - y_row + 0.040) / 0.048, 6))
+    rails = [top - 0.048 * j for j in range(4)]
+    if rails[-1] - 0.012 < y_row - STD_ROW + 0.030:
+        raise RuntimeError("the select lines' four rails do not fit over the buffer row")
+
+    # M3 already there: the slices' and their fillers', by bounding box.
+    taken = [poly.bounding_box() for poly in strip.get_polygons(depth=None, layer=30, datatype=0)]
+    for j in range(4):  # ... and the stacks `_predecode_rails` will draw on every slice
+        sx, dy = PREDECODE_JOIN[f"B{j}"]
+        y = pins[f"B{j}"][1]
+        low, high = min(y - 0.014, local[j] - 0.017), max(y + 0.014, local[j] + 0.017)
+        taken += [((x0 + sx - 0.009, low), (x0 + sx + 0.009, high)) for x0 in starts]
+
+    def clear(x, low, high, but=None):
+        return all(
+            max(x0 - (x + 0.009), (x - 0.009) - x1) >= M3_SIDE_SPACE - 1e-6
+            or max(y0 - high, low - y1) >= M3_TIP_SPACE - 1e-6
+            for (x0, y0), (x1, y1) in taken if ((x0, y0), (x1, y1)) != but
+        )
+
+    # Each slice's select pin, carried down through the row on its own M3
+    # track to `SELECT_PIN_END` short of the row's far edge.  The row is
+    # between the slices and whoever drives them: without this a pin is
+    # reached past the buffers' stacks, and in the controller's band the
+    # global router, which enters a macro's pin from the edge nearest its
+    # middle, comes at the pins from the array's side (x64x8x1: sel_hi
+    # congested under the lower strip).  The buffers keep off the tracks.
+    sx, sy, _ = pins["SEL"]
+    pin_end = y_row - STD_ROW + SELECT_PIN_END
+    for x0 in starts:
+        stub = next((box for box in taken if box[0][0] - 1e-6 <= x0 + sx <= box[1][0] + 1e-6
+                     and box[0][1] - 1e-6 <= sy <= box[1][1] + 1e-6), None)  # fmt: skip
+        if stub is None:
+            raise RuntimeError("a slice's SEL pin is not on M3")
+        x_pin, y_pin = (stub[0][0] + stub[1][0]) / 2, stub[0][1]
+        if not clear(x_pin, pin_end, y_pin, but=stub):
+            raise RuntimeError("a slice's own M3 is in the way of its SEL pin's track to the buffer row")
+        strip.add(gdstk.rectangle((x_pin - 0.009, pin_end), (x_pin + 0.009, y_pin), layer=30))
+        taken.append(((x_pin - 0.009, pin_end), (x_pin + 0.009, y_pin)))
+
+    pads = []  # the stacks' M2 pads drawn so far: (x, y) centres
+
+    def pad_clear(x, y):
+        return all(max(abs(x - px) - 0.034, abs(y - py) - 0.018) >= M2_PAD_SPACE - 1e-6 for px, py in pads)
+
+    # A buffer's A stack: on its bar where the line's rail crosses it, or at
+    # the bar's nearer end and on to the rail on M3.
+    def a_stack(j):
+        y_via = min(max(rails[j], y_row - a_hi + 0.014), y_row - a_lo - 0.014)
+        return y_via, min(y_via - 0.014, rails[j] - 0.017), max(y_via + 0.014, rails[j] + 0.017)
+
+    y_out = y_row + min(max(-STD_ROW / 2, -y_hi + 0.014), -y_lo - 0.014)  # where a Y bar is tapped
+    placed, reach = [], {}
+    first, cursor = 0, x_left
+    for g, size in enumerate(groups):
+        x_group, x_end = starts[first], starts[first + size - 1] + SLICE_WIDTH
+        first += size
+        cursor = max(cursor, x_group - (WORDLINE_PITCH if g == 0 else 0.0))
+        placed.append((cursor, "TAPCELL" + STD_CELL_SUFFIX, False))
+        cursor += 2 * STD_SITE
+        left = [0, 1, 2, 3]
+        while left:
+            # The first site, line and way round (as drawn, or turned about
+            # its middle: A and Y change sides) whose two stacks are clear.
+            found = None
+            for step in range(round((x_end - cursor) / STD_SITE)):
+                x = cursor + step * STD_SITE
+                for j, turned in itertools.product(left, (False, True)):
+                    xa, xy = (x + width - ax, x + width - yx) if turned else (x + ax, x + yx)
+                    a_via, a_low, a_high = a_stack(j)
+                    if (x_group <= xy <= x_end and clear(xy, y_out - 0.014, local[j] + 0.017)
+                            and clear(xa, a_low, a_high)
+                            and pad_clear(xa, a_via) and pad_clear(xy, y_out)):
+                        found = (x, j, turned, xa, xy)
+                        break
+                if found:
+                    break
+            if found is None:
+                raise RuntimeError(f"{name}: no room under group {g}'s {size} slices for its four select buffers")
+            x, j, turned, xa, xy = found
+            left.remove(j)
+            placed.append((x, name, turned))
+            reach[(j, g)] = xy
+            y_via, a_low, a_high = a_stack(j)
+            taken += [((xy - 0.009, y_out - 0.014), (xy + 0.009, local[j] + 0.017)),
+                      ((xa - 0.009, a_low), (xa + 0.009, a_high))]  # fmt: skip
+            pads += [(xa, y_via), (xy, y_out)]
+            # The line's stack on the A bar, up to its rail.
+            _via_stack(strip, xa, y_via, a_low, a_high, rails[j])
+            # The output: off the Y bar and up to the group's piece of the rail.
+            _via_stack(strip, xy, y_out, y_out - 0.014, local[j] + 0.017, local[j])
+            cursor = x + width
+    if cursor > x_right - 2 * STD_SITE + 1e-6:
+        raise RuntimeError(f"{name}: the select buffers overrun the strip's row")
+    placed.append((x_right - 2 * STD_SITE, "TAPCELL" + STD_CELL_SUFFIX, False))
+    pch_pins = {}
+    if precharge:
+        if not precharge_buffer_fits(count, precharge):
+            raise RuntimeError(f"{precharge}: a strip of {count} slices has no room in its row for the precharge "
+                               f"buffer (its smallest group of slices needs "
+                               f"{PRECHARGE_MIN_GROUP[precharge.removesuffix(STD_CELL_SUFFIX)]})")
+        p_width, p_bars = _std_cell_pins(precharge)
+        (pax, pa_lo, pa_hi), (pyx, py_lo, py_hi) = p_bars["A"], p_bars["Y"]
+        y_in, y_local = top + 0.048, top + 0.096  # the tracks over the lines' rails
+        if y_local > local[0] - 0.096 + 1e-6:
+            raise RuntimeError("no free M4 track between the select lines' rails and the slices' for the precharge")
+        in_via = min(max(y_in, y_row - pa_hi + 0.014), y_row - pa_lo - 0.014)
+        in_low, in_high = min(in_via - 0.014, y_in - 0.017), max(in_via + 0.014, y_in + 0.017)
+        out_via = y_row + min(max(-STD_ROW / 2, -py_hi + 0.014), -py_lo - 0.014)
+        found = None
+        for step in range(round((x_right - 2 * STD_SITE - p_width - cursor) / STD_SITE), -1, -1):
+            x = cursor + step * STD_SITE
+            for turned in (False, True):
+                xa, xy = (x + p_width - pax, x + p_width - pyx) if turned else (x + pax, x + pyx)
+                if (clear(xa, in_low, in_high) and clear(xy, out_via - 0.014, y_local + 0.017)
+                        and pad_clear(xa, in_via) and pad_clear(xy, out_via)):
+                    found = (x, turned, xa, xy)
+                    break
+            if found:
+                break
+        if found is None:
+            raise RuntimeError(f"{precharge}: no room at the end of the strip's row for the precharge buffer")
+        x, turned, xa, xy = found
+        placed.append((x, precharge, turned))
+        _via_stack(strip, xa, in_via, in_low, in_high, y_in)
+        _via_stack(strip, xy, out_via, out_via - 0.014, y_local + 0.017, y_local)
+        end = x_right - 0.020
+        for pin, x_stack, y in (("PCH", xa, y_in), ("PCHL", xy, y_local)):
+            strip.add(gdstk.rectangle((min(x_stack - 0.020, end - PRECHARGE_PIN_LENGTH), y - 0.012),
+                                      (end, y + 0.012), layer=40))  # fmt: skip
+            pch_pins[pin] = (end - 2 * STD_SITE, y, 40)
+    # Fill the row: every site has a cell, as a placed row has.
+    cursor = x_left
+    for x, cell, turned in sorted(placed):
+        gap = round((x - cursor) / STD_SITE)
+        if gap < 0:
+            raise RuntimeError(f"{cell} at {x:.4f} overlaps the cell before it")
+        for k in range(gap // 2):
+            strip.add(gdstk.Reference(_std_cell(lib, "FILLER" + STD_CELL_SUFFIX), (cursor + 2 * k * STD_SITE, y_row), x_reflection=True))
+        if gap % 2:
+            strip.add(gdstk.Reference(_std_cell(lib, "FILLERxp5" + STD_CELL_SUFFIX), (x - STD_SITE, y_row), x_reflection=True))
+        cell_width = _std_cell_pins(cell)[0]
+        if turned:  # about its middle: the same row, its left edge at x still
+            strip.add(gdstk.Reference(_std_cell(lib, cell), (x + cell_width, y_row), rotation=math.pi))
+        else:
+            strip.add(gdstk.Reference(_std_cell(lib, cell), (x, y_row), x_reflection=True))
+        cursor = x + cell_width
+    for j, y in enumerate(rails):
+        strip.add(gdstk.rectangle((x_left + 0.020, y - 0.012), (x_right - 0.020, y + 0.012), layer=40))
+    _predecode_rails(strip, starts, pins, on_grid, groups, reach)
+    return [(x_left + 2 * STD_SITE, y, 40) for y in rails], pch_pins
+
+
+def _via_stack(cell, x, y_via, low, high, y_rail):
+    """M1 to M4 at `x`: V1, an M2 pad and V2 at `y_via` on an M1 bar, M3 from `low` to `high`, V3 under the M4 at `y_rail`."""
+    cell.add(
+        gdstk.rectangle((x - 0.009, y_via - 0.009), (x + 0.009, y_via + 0.009), layer=21),  # V1
+        gdstk.rectangle((x - 0.017, y_via - 0.009), (x + 0.017, y_via + 0.009), layer=20),  # M2
+        gdstk.rectangle((x - 0.009, y_via - 0.009), (x + 0.009, y_via + 0.009), layer=25),  # V2
+        gdstk.rectangle((x - 0.009, low), (x + 0.009, high), layer=30),  # M3
+        gdstk.rectangle((x - 0.009, y_rail - 0.012), (x + 0.009, y_rail + 0.012), layer=35),  # V3
+    )
 
 
 def _mid_strip_pair(lib, strip, starts, pins, tracks, gate_tracks, rows, height, x_left, x_right,
-                    gate_reach, load):  # fmt: skip
+                    gate_reach, load, b_pins, row=0.0, pch_pins=None):  # fmt: skip
     """Two port-A strips back to back between two wordline segments: ``D`` drives the one below, ``U`` above.
 
     The two-port pair's geometry: each strip half a fin pitch in from its
     outer edge, the two sharing the VSS rail at the seam; each one's outputs
     bridged across its margin on M3, every gate track bridged there too (and
-    `gate_reach` on, into the tile's half-pitch margin).
+    `gate_reach` on, into the tile's half-pitch margin).  With select
+    buffers (`row`, their row's height) the strips' buffer rows meet at the
+    seam instead and share its VDD rail.
     """
     pair = lib.new_cell(f"wl_strips_mid_c{load}_x{rows // 4}")
-    seam = height + FIN_HALF_PITCH
+    seam = height + row + FIN_HALF_PITCH
     pair_height = 2 * seam
-    pair.add(gdstk.Reference(strip, (0, seam)))  # U, facing up
-    pair.add(gdstk.Reference(strip, (0, seam), x_reflection=True))  # D, facing down
+    pair.add(gdstk.Reference(strip, (0, seam + row)))  # U, facing up
+    pair.add(gdstk.Reference(strip, (0, seam - row), x_reflection=True))  # D, facing down
     for side, sign in (("U", 1), ("D", -1)):
+        base = seam + sign * row  # the strip's own origin: its slices' VSS rail
         for k in range(rows // 4):
             sx, sy, layer = pins["SEL"]
-            pair.add(gdstk.Label(f"SEL_{side}[{k}]", (starts[k] + sx, seam + sign * sy), layer=layer, texttype=251))
-        for x0_slice in starts:
-            for j in range(4):
-                x, y, layer = pins[f"B{j}"]
-                pair.add(gdstk.Label(f"B_{side}[{j}]", (x0_slice + x, seam + sign * y), layer=layer, texttype=251))
+            pair.add(gdstk.Label(f"SEL_{side}[{k}]", (starts[k] + sx, base + sign * sy), layer=layer, texttype=251))
+        for j, x, y, layer in b_pins:
+            pair.add(gdstk.Label(f"B_{side}[{j}]", (x, base + sign * y), layer=layer, texttype=251))
+        for name, (x, y, layer) in (pch_pins or {}).items():
+            pair.add(gdstk.Label(f"{name}_{side}", (x, base + sign * y), layer=layer, texttype=251))
     for i in range(rows):
         x = tracks[("A", i)]
-        pair.add(gdstk.rectangle((x - 0.009, seam + height), (x + 0.009, pair_height), layer=30))
-        pair.add(gdstk.rectangle((x - 0.009, 0.0), (x + 0.009, seam - height), layer=30))
+        pair.add(gdstk.rectangle((x - 0.009, seam + row + height), (x + 0.009, pair_height), layer=30))
+        pair.add(gdstk.rectangle((x - 0.009, 0.0), (x + 0.009, seam - row - height), layer=30))
         pair.add(gdstk.Label(f"WL_U[{i}]", (x, pair_height - 0.005), layer=30, texttype=251))
         pair.add(gdstk.Label(f"WL_D[{i}]", (x, 0.005), layer=30, texttype=251))
     for x in gate_tracks:
-        pair.add(gdstk.rectangle((x - 0.010, seam + height), (x + 0.010, pair_height + gate_reach), layer=7))
-        pair.add(gdstk.rectangle((x - 0.010, -gate_reach), (x + 0.010, seam - height), layer=7))
+        pair.add(gdstk.rectangle((x - 0.010, seam + row + height), (x + 0.010, pair_height + gate_reach), layer=7))
+        pair.add(gdstk.rectangle((x - 0.010, -gate_reach), (x + 0.010, seam - row - height), layer=7))
     pair.add(gdstk.rectangle((x_left, 0), (x_right, pair_height), layer=100))
     return pair
 
@@ -1441,7 +1807,8 @@ def run(args):
         strip_lib, leaf.references[0].cell if shared_b else leaf, args.wordlines, args.bits,
         ports=ports,
         segment_bits=segment if segments > 1 else None, mux=args.mux,
-        rail_on_grid=0.0,
+        rail_on_grid=0.0, select_buffers=args.select_buffers,
+        precharge_buffer=precharge_buffer_cell(segment, args.mux) if args.precharge_buffers else None,
     )
     if shared_b:
         tile_width = columns.boundary_box(leaf)[2]
@@ -1672,7 +2039,7 @@ def run(args):
             origin = (x_bank - (bx0 - tile_ox), y_tile - (by0 - tile_oy))
             resolve = functools.partial(
                 leaf_net, bank=bank, bit=bit, wordlines=args.wordlines, bits=args.bits, mux=args.mux,
-                shared_b=shared_b, segment=segment_of(index),
+                shared_b=shared_b, segment=segment_of(index), precharge_buffers=args.precharge_buffers,
             )
             instances.append((inst, hard.name, origin, resolve))
             for pin, info in pins.items():
@@ -1789,7 +2156,11 @@ def run(args):
     external.update(
         f"{p}_{port}[{bit}]" for p in "DQ" for port in ports for bit in range(args.bits)
     )
+    # A segment's copy of the precharge line is its strips' buffers' to drive.
+    local = re.compile(r"blprechn_A_(lo|hi)(_s\d+)?\[\d+\]")
     for net in nets:
+        if local.fullmatch(net) and any(inst.startswith("WL_") for inst, pin in nets[net]):
+            continue
         if net not in external and not any(inst == "CTRL" for inst, pin in nets[net]):
             raise RuntimeError(f"controller has no driver for {net}")
     if external - nets.keys():
@@ -2018,6 +2389,16 @@ def run(args):
         "cells_along_wordline": args.mux * segment,
         "wordline_segments_per_stack": segments,
         "wordline_strip_pairs": 2 * args.banks * segments,
+        "select_buffers": {
+            "cell": select_buffer_cell(array_wordlines // 4),
+            "slices_per_buffer": select_buffer_groups(array_wordlines // 4),
+            "row_um": SELECT_ROW,
+        } if args.select_buffers else None,
+        "precharge_buffers": {
+            "cell": precharge_buffer_cell(segment, args.mux),
+            "per_bank": 2 * (1 + 2 * (segments - 1)),
+            "segment_load_ff": round(segment * (args.mux * PRECHARGE_GATE_FF + PRECHARGE_WIRE_FF), 1),
+        } if args.precharge_buffers else None,
         "checked_net_partitions": len(probes),
         "routing_drc_violations": 0,
         "short_parallel_runs_fixed": {"controller": ctrl_prl[0], "macro": top_prl[0]},
@@ -2817,6 +3198,14 @@ def main():
     parser.add_argument("--segment-bits", type=int, default=0,
                         help="divided wordlines: cut each stack into segments of this many data bits, "
                         "a mid strip pair between two (single-port macro)")
+    parser.add_argument("--select-buffers", action="store_true",
+                        help="re-drive the predecode lines at every wordline strip, from a row of "
+                        "standard buffers under its slices (single-port macro; the controller "
+                        "built with the same option)")
+    parser.add_argument("--precharge-buffers", action="store_true",
+                        help="re-drive port A's precharge line at every wordline strip for the strip's "
+                        "wordline segment, from a buffer in the select buffers' row (needs "
+                        "--select-buffers; the deck built with the same option)")
     parser.add_argument("--share-port-b", action="store_true",
                         help="banks in pairs, mirrored about one two-sided port-B IO block "
                         "(the controller built with SHARED_B)")  # fmt: skip

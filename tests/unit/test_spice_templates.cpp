@@ -666,6 +666,63 @@ TEST(SpiceTemplates6T, DividedWordlinesSizeTheSlicesForASegment) {
     EXPECT_FALSE(subckt_text(deck, "wl_strip_c8_x1").empty());
 }
 
+TEST(SpiceTemplates6T, SelectBuffersRedriveThePredecodeLinesAGroupOfSlicesAtATime) {
+    ScopedCurrentPath cwd(REPO_ROOT);
+    MainCliOptions config;
+    config.bitcell_6t = true;
+    config.num_wls = 34;        // 68 wordlines: 17 slices a strip, groups of 9 and 8
+    config.num_data_bits = 8;
+    config.num_banks = 1;
+    const std::string plain = subckt_text(OpenFinRAM::SpiceGenerator(config).generate_spice_content(),
+                                          "wl_strip_c16_x17");
+    ASSERT_FALSE(plain.empty());
+    EXPECT_EQ(count_occurrences(plain, "BUFx"), 0U);
+    // Every slice on the strip's four lines (and once more, the port list).
+    EXPECT_EQ(count_occurrences(plain, "] B[0] B[1] B[2] B[3] WL["), 17U + 1U);
+    config.select_buffers = true;
+    const std::string deck = OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    const std::string strip = subckt_text(deck, "wl_strip_c16_x17");
+    ASSERT_FALSE(strip.empty());
+    // The strip's ports are unchanged: the buffers are inside it.
+    EXPECT_EQ(subckt_port_count(strip), subckt_port_count(plain));
+    EXPECT_EQ(count_occurrences(strip, "BUFx8_ASAP7_75t_R\n"), 8U);
+    EXPECT_NE(strip.find("X_buf1_2 B[2] VDD VSS BG1[2] BUFx8_ASAP7_75t_R"), std::string::npos);
+    // No slice hangs on a line itself: nine on the first group's buffers, eight on the second's.
+    EXPECT_EQ(count_occurrences(strip, "] B[0] B[1] B[2] B[3] WL["), 1U);  // the port list alone
+    EXPECT_EQ(count_occurrences(strip, " BG0[0] BG0[1] BG0[2] BG0[3] "), 9U);
+    EXPECT_EQ(count_occurrences(strip, " BG1[0] BG1[1] BG1[2] BG1[3] "), 8U);
+    // (The buffer's own subcircuit is the released CDL's, which the
+    // integrator writes at the head of every macro deck.)
+}
+
+TEST(SpiceTemplates6T, PrechargeBuffersRedriveTheLineInEveryStrip) {
+    ScopedCurrentPath cwd(REPO_ROOT);
+    MainCliOptions config;
+    config.bitcell_6t = true;
+    config.num_wls = 32;        // 64 wordlines: 16 slices a strip
+    config.num_data_bits = 8;
+    config.num_banks = 1;
+    config.segment_bits = 2;
+    config.select_buffers = true;
+    const std::string plain = OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    EXPECT_EQ(count_occurrences(subckt_text(plain, "wl_strip_c8_x16"), "PCH"), 0U);
+    config.precharge_buffers = true;
+    const std::string deck = OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    const std::string strip = subckt_text(deck, "wl_strip_c8_x16");
+    ASSERT_FALSE(strip.empty());
+    // The line in and the segment's copy out: two more ports, one more buffer.
+    EXPECT_EQ(subckt_port_count(strip), subckt_port_count(subckt_text(plain, "wl_strip_c8_x16")) + 2);
+    EXPECT_NE(strip.find("X_pbuf PCH VDD VSS PCHL BUFx8_ASAP7_75t_R"), std::string::npos);
+    EXPECT_EQ(count_occurrences(strip, "BUFx8_ASAP7_75t_R\n"), 4U + 1U);
+    for (const char* half : {"lo", "hi"}) {
+        const std::string pair = subckt_text(deck, std::string("wl_strips_") + half + "_c8_x16");
+        ASSERT_FALSE(pair.empty()) << half;
+        EXPECT_NE(pair.find(" PCH_A PCHL_A VDD VSS wl_strip_c8_x16"), std::string::npos) << half;
+        EXPECT_EQ(instance_node_count(pair, "X_a"), subckt_port_count(strip)) << half;
+        EXPECT_EQ(subckt_port_count(pair), subckt_port_count(strip)) << half;
+    }
+}
+
 TEST(SpiceTemplates6T, DeeperMuxesTakeTheirOwnIoBlock) {
     for (unsigned mux : {8U, 16U}) {
         ScopedCurrentPath cwd(REPO_ROOT);

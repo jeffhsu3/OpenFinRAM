@@ -141,6 +141,47 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   column muxes; `--num-banks` side by side.  Each strip joins its slices'
   predecode inputs on M4 rails, and the controller's array-wide outputs (sel_lo,
   sae, blprechn, ...) get drivers sized for their counted gate load.
+- Select buffers (`--select-buffers auto|on|off`, default `auto`): every slice of
+  every strip hangs on the controller's four sel_lo lines, so their load grows
+  with the macro's bits, and one output cannot drive it past ~175 fF (0.15 ns
+  slew; about 16 kbit).  A buffered strip takes each line once, on an M4 rail
+  over a row of standard cells under its slices (0.378 um a strip), and a
+  BUFx8 a line re-drives every group of at most 16 slices (BUFx4 for groups
+  under 8).  `auto` adds them when the counted sel_lo load is past that limit;
+  a strip needs 4 slices (16 wordlines a stack) to hold them.  x64x8x1
+  `--segment-bits 2 --select-buffers on` matches strict LVS with and without
+  `--strips-in-controller`, at the unbuffered macro's DRC count, and passes the
+  whole-macro Xyce program (clk->Q ~240 ps, no wordline glitch); with them the
+  controller passes its slew check at 32 and 64 kbit (x256x32x1 and x256x64x1,
+  `--segment-bits 8`); at 128 kbit blprechn is the next line past the limit
+  (precharge buffers, below).
+- Precharge buffers (`--precharge-buffers auto|on|off`, default `auto`): the
+  controller's blprechn hangs on every column's precharge gates (6 fins a
+  column: 323 fF at 64 bits and 8:1).  One more buffer at the IO end of every
+  strip's select-buffer row takes the bank's line (`PCH`) and re-drives it
+  (`PCHL`) for the IO blocks of the wordline segment that strip serves, on the
+  segment's own net (`blprechn_A_<lo|hi>_s<k>`), so the controller sees a
+  buffer input a strip (28 fF for that macro).  A segment between two strips
+  has both their buffers on its net; the one farthest from the band has one,
+  which sizes the cell: BUFx8 to 80 fF a segment, BUFx12f to 115, BUFx24 to
+  175, and past that fewer bits a segment (`--segment-bits`).  They stand in
+  the select buffers' row, so they turn those on and add no height; the row
+  has room when the strip's smallest group of slices has 9 (10 and 11 for the
+  larger cells), which rules out stacks of 68 wordlines or fewer than 36.
+  `auto` adds them when the counted blprechn load is past the 175 fF limit
+  and warns when it cannot.  x64x8x1 `--segment-bits 2 --precharge-buffers on`
+  matches strict LVS with and without `--strips-in-controller`, at the same
+  size and with no DRC marker of the buffers' own, and passes the whole-macro Xyce
+  program (clk->Q 234-239 ps): the copies release 15 ps after the controller's
+  line and 64-80 ps before a wordline rises (in the first two cycles 80 ps,
+  against 70 at FF and 90 at SS).  With them the controller passes its slew
+  check at 128 kbit (x256x64x1 at 8:1 and x256x32x1 at 16:1,
+  `--segment-bits 4`), and x256x64x1 at 8:1 assembles and routes: 16622 nets
+  connected, no routing violation, 30.5 x 202.4 um.  Its detailed route takes
+  2 h 41 min on the assembler's two threads, past the one-hour
+  `--route-timeout` the flow leaves at its default, so that macro was
+  assembled by `scripts/compile_asap7_2rw.py` directly with a longer one; LVS,
+  DRC and simulation are not run at that size.
 - The `.lib` timing and energy come from `scripts/timing_model_6t.py`, fit to
   whole-macro simulations (`tech/timing/sram_6t_timing.json`).
 - Verified: strict LVS match (`scripts/verify_macro.py`) on x4x2x1, x16x16x1,

@@ -159,6 +159,8 @@ bool OpenRoadManager::run_openroad_flow() {
              << (cli_options_.share_port_b ? " --share-port-b" : "")
              << (cli_options_.bitcell_6t ? " --bitcell 6t --mux " + std::to_string(cli_options_.num_rows_per_mux) : "")
              << (cli_options_.segment_bits ? " --segment-bits " + std::to_string(cli_options_.segment_bits) : "")
+             << (cli_options_.select_buffers ? " --select-buffers" : "")
+             << (cli_options_.precharge_buffers ? " --precharge-buffers" : "")
              << " --plan-band '" << band_dir << "' > '" << join_path(work_dir, "band_plan.log") << "' 2>&1";
         OpenFinRAM::BandPlan band;
         if (std::system(plan.str().c_str()) != 0 || !OpenFinRAM::read_band_plan(band_dir, band)) {

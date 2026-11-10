@@ -339,6 +339,73 @@ TEST(OpenRoadTclGeneratorTest, DualPortProtectsDelayCellsAndRejectsNegativeHold)
     EXPECT_NE(script.find("repair_design -max_utilization 90", hold), std::string::npos);
 }
 
+// Select buffers: a strip takes each sel_lo line once and re-drives it a
+// group of slices at a time, so the controller's output sees buffer inputs.
+TEST(SixTPortLoadsTest, SelectBuffersLeaveABufferInputAGroupOfSlices) {
+    EXPECT_EQ(select_buffer_groups(64), (std::vector<unsigned>{16, 16, 16, 16}));
+    EXPECT_EQ(select_buffer_groups(17), (std::vector<unsigned>{9, 8}));
+    EXPECT_EQ(select_buffer_groups(4), (std::vector<unsigned>{4}));
+    EXPECT_EQ(select_buffer_cell(4), "BUFx4_ASAP7_75t_R");
+    EXPECT_EQ(select_buffer_cell(7), "BUFx4_ASAP7_75t_R");
+    EXPECT_EQ(select_buffer_cell(8), "BUFx8_ASAP7_75t_R");
+    EXPECT_EQ(select_buffer_cell(17), "BUFx8_ASAP7_75t_R");
+    // 4096 x 32 at 16:1 in 4-bit segments: 64 slices in each of 14 strips, 24 fins a slice.
+    MainCliOptions big;
+    big.bitcell_6t = true;
+    big.num_wls = 128;
+    big.num_data_bits = 32;
+    big.num_rows_per_mux = 16;
+    big.segment_bits = 4;
+    EXPECT_NEAR(six_t_port_loads_pf(big).at("sel_lo_A"), 14 * 64 * (24 * 0.103 + 0.1) / 1000, 1e-9);
+    EXPECT_GT(six_t_port_loads_pf(big).at("sel_lo_A"), kSelectLineLimitPf);
+    big.select_buffers = true;
+    // Four BUFx8 inputs a line in every strip.
+    EXPECT_NEAR(six_t_port_loads_pf(big).at("sel_lo_A"), 14 * 4 * (0.85 + 0.1) / 1000, 1e-9);
+    EXPECT_LT(six_t_port_loads_pf(big).at("sel_lo_A"), kSelectLineLimitPf);
+    // sel_hi still reaches a slice in every strip.
+    EXPECT_NEAR(six_t_port_loads_pf(big).at("sel_hi_A"), 14 * (4 * 24 * 0.103 + 0.1) / 1000, 1e-9);
+}
+
+// Precharge buffers: a strip's buffer drives its wordline segment's IO
+// blocks, so the controller's blprechn sees a buffer input a strip.
+TEST(SixTPortLoadsTest, PrechargeBuffersLeaveABufferInputAStrip) {
+    // 128 kbit, 256 x 64 at 8:1 in 4-bit segments: 30 strips, 48 precharge fins an IO block.
+    MainCliOptions big;
+    big.bitcell_6t = true;
+    big.num_wls = 128;
+    big.num_data_bits = 64;
+    big.num_rows_per_mux = 8;
+    big.segment_bits = 4;
+    EXPECT_NEAR(six_t_port_loads_pf(big).at("blprechn_A"), 64 * (48 * 0.103 + 0.1) / 1000, 1e-9);
+    EXPECT_GT(six_t_port_loads_pf(big).at("blprechn_A"), kSelectLineLimitPf);
+    EXPECT_NEAR(precharge_segment_load_pf(big), 4 * (48 * 0.103 + 0.1) / 1000, 1e-9);
+    EXPECT_EQ(precharge_buffer_cell(big), "BUFx8_ASAP7_75t_R");
+    big.precharge_buffers = true;
+    EXPECT_EQ(big.wordline_strips(), 30U);
+    EXPECT_NEAR(six_t_port_loads_pf(big).at("blprechn_A"), 30 * (0.85 + 0.1) / 1000, 1e-9);
+    EXPECT_LT(six_t_port_loads_pf(big).at("blprechn_A"), kSelectLineLimitPf);
+    // The other IO controls are the controller's still.
+    EXPECT_NEAR(six_t_port_loads_pf(big).at("sae_A"), 64 * (18 * 0.103 + 0.1) / 1000, 1e-9);
+    // A heavier segment takes a larger buffer, and past 175 fF none will do.
+    big.segment_bits = 16;  // 81 fF
+    EXPECT_EQ(precharge_buffer_cell(big), "BUFx12f_ASAP7_75t_R");
+    EXPECT_NEAR(six_t_port_loads_pf(big).at("blprechn_A"), 6 * (2.34 + 0.1) / 1000, 1e-9);
+    big.segment_bits = 0;  // a whole stack of 32: 161 fF
+    EXPECT_EQ(precharge_buffer_cell(big), "BUFx24_ASAP7_75t_R");
+    big.num_rows_per_mux = 16;  // 320 fF
+    EXPECT_EQ(precharge_buffer_cell(big), "");
+    // The row has room past a group of nine slices' select buffers, more for the wider cells.
+    EXPECT_TRUE(precharge_buffer_fits(64, "BUFx8_ASAP7_75t_R"));
+    EXPECT_TRUE(precharge_buffer_fits(9, "BUFx8_ASAP7_75t_R"));
+    EXPECT_FALSE(precharge_buffer_fits(8, "BUFx8_ASAP7_75t_R"));
+    EXPECT_FALSE(precharge_buffer_fits(17, "BUFx8_ASAP7_75t_R"));  // groups of 9 and 8
+    EXPECT_TRUE(precharge_buffer_fits(18, "BUFx8_ASAP7_75t_R"));
+    EXPECT_FALSE(precharge_buffer_fits(9, "BUFx12f_ASAP7_75t_R"));
+    EXPECT_TRUE(precharge_buffer_fits(10, "BUFx12f_ASAP7_75t_R"));
+    EXPECT_FALSE(precharge_buffer_fits(10, "BUFx24_ASAP7_75t_R"));
+    EXPECT_TRUE(precharge_buffer_fits(11, "BUFx24_ASAP7_75t_R"));
+}
+
 // The 6T controller's array-wide outputs: loads counted from the geometry,
 // and the port buffer the TCL sizes for them (x256x2x1 read the wrong row
 // with a BUFx2 on a 170 fF sel_lo).
@@ -352,9 +419,13 @@ TEST(SixTPortLoadsTest, SelLoCountsEverySliceOfEveryStrip) {
     segmented.segment_bits = 8;
     // 256 rows: 64 slices a strip, two strips, 12 fins and 0.1 fF of wire each.
     EXPECT_NEAR(six_t_port_loads_pf(tall).at("sel_lo_A"), 128 * (12 * 0.103 + 0.1) / 1000, 1e-9);
-    // 64 rows in four segments: 16 slices x 2 halves x 4 segments, the same 128 loads.
-    EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sel_lo_A"),
-                six_t_port_loads_pf(tall).at("sel_lo_A"), 1e-9);
+    // 64 rows in four segments a stack: 16 slices in each of 14 strips (one
+    // on each side of the band and a mid pair's two between segments; the
+    // deck has 14 Xwl_ instances, where "a strip per segment" counted 8).
+    EXPECT_EQ(segmented.wordline_strips(), 14U);
+    EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sel_lo_A"), 14 * 16 * (12 * 0.103 + 0.1) / 1000, 1e-9);
+    EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sel_hi_A"), 14 * (4 * 12 * 0.103 + 0.1) / 1000, 1e-9);
+    EXPECT_EQ(tall.wordline_strips(), 2U);
     EXPECT_LT(six_t_port_loads_pf(small).at("sel_lo_A"), 0.005);
     // The IO controls scale with the IO blocks: one per data bit.
     EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sae_A"), 64 * (18 * 0.103 + 0.1) / 1000, 1e-9);
