@@ -171,10 +171,17 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   `auto` adds them when the counted blprechn load is past the 175 fF limit
   and warns when it cannot.  x64x8x1 `--segment-bits 2 --precharge-buffers on`
   matches strict LVS with and without `--strips-in-controller`, at the same
-  size and with no DRC marker on a buffer row; in Xyce the copies release
-  15 ps after the controller's line and 80 ps before the wordline rises (70 at
-  FF, 90 at SS).  With them the controller passes its slew check at 128 kbit
-  (x256x64x1 at 8:1 and x256x32x1 at 16:1, `--segment-bits 4`).
+  size and with no DRC marker of the buffers' own, and passes the whole-macro Xyce
+  program (clk->Q 234-239 ps): the copies release 15 ps after the controller's
+  line and 64-80 ps before a wordline rises (in the first two cycles 80 ps,
+  against 70 at FF and 90 at SS).  With them the controller passes its slew
+  check at 128 kbit (x256x64x1 at 8:1 and x256x32x1 at 16:1,
+  `--segment-bits 4`), and x256x64x1 at 8:1 assembles and routes: 16622 nets
+  connected, no routing violation, 30.5 x 202.4 um.  Its detailed route takes
+  2 h 41 min on the assembler's two threads, past the one-hour
+  `--route-timeout` the flow leaves at its default, so that macro was
+  assembled by `scripts/compile_asap7_2rw.py` directly with a longer one; LVS,
+  DRC and simulation are not run at that size.
 - The `.lib` timing and energy come from `scripts/timing_model_6t.py`, fit to
   whole-macro simulations (`tech/timing/sram_6t_timing.json`).
 - Verified: strict LVS match (`scripts/verify_macro.py`) on x4x2x1, x16x16x1,
