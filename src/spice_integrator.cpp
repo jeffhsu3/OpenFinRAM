@@ -400,8 +400,12 @@ std::string SpiceIntegrator::generate_datapath_instance() const {
             const bool per_pair = cli_options_.share_port_b && sig != "blprechn_B" &&
                                   sig.size() > 2 && sig.compare(sig.size() - 2, 2, "_B") == 0;
             const int count = per_pair ? cli_options_.num_banks / 2 : cli_options_.num_banks;
+            // With precharge buffers the segment's IO blocks hang on its
+            // strips' copy of the precharge line, not the controller's.
+            const std::string net = cli_options_.precharge_buffers && sig == "blprechn_A"
+                ? sig + "_" + half + suffix : sig;
             for (int bank = 0; bank < count; ++bank) {
-                oss << " " << sig << "[" << bank << "]";
+                oss << " " << net << "[" << bank << "]";
             }
 
             oss << "\n+";
@@ -478,6 +482,14 @@ std::string SpiceIntegrator::generate_wordline_strip_instances() const {
     auto bus = [segments](char port, const char* half, unsigned seg) {
         return std::string("wl_") + port + "_" + half + (segments > 1 ? "_s" + std::to_string(seg) : "");
     };
+    // With precharge buffers every strip takes the bank's blprechn_A and
+    // drives its own segment's copy (two strips a segment but the one
+    // farthest from the band).
+    auto precharge = [this, segments](const char* half, unsigned seg, int bank) {
+        if (!cli_options_.precharge_buffers) return std::string();
+        return " blprechn_A[" + std::to_string(bank) + "] blprechn_A_" + half
+            + (segments > 1 ? "_s" + std::to_string(seg) : "") + "[" + std::to_string(bank) + "]\n+";
+    };
     oss << "** Instantiate the wordline driver strips\n";
     for (const char* half : {"lo", "hi"}) {
         const unsigned band_seg = std::string(half) == "lo" ? segments - 1 : 0;
@@ -499,7 +511,7 @@ std::string SpiceIntegrator::generate_wordline_strip_instances() const {
                         << "[" << i + bank * rows << "]";
                     if (i % 8 == 7 && i + 1 < rows) oss << "\n+";
                 }
-                oss << "\n+";
+                oss << "\n+" << precharge(half, band_seg, bank);
             }
             oss << " VDD VSS " << generator.wordline_strip_pair_name(half) << "\n";
             for (unsigned seg = 1; seg < segments; ++seg) {
@@ -513,7 +525,7 @@ std::string SpiceIntegrator::generate_wordline_strip_instances() const {
                         oss << " " << bus('a', half, target) << "[" << i + bank * rows << "]";
                         if (i % 8 == 7 && i + 1 < rows) oss << "\n+";
                     }
-                    oss << "\n+ VDD VSS " << generator.wordline_strip_name() << "\n";
+                    oss << "\n+" << precharge(half, target, bank) << " VDD VSS " << generator.wordline_strip_name() << "\n";
                 }
             }
         }
