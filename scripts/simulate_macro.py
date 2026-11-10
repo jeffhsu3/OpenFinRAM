@@ -573,7 +573,12 @@ def build_deck(netlist: Path, model: Path, top: str, pins: tuple[str, ...], cell
                 for io in range(g.ios(port))]  # fmt: skip
     watched += [f"Xdut:{cell['path']}:Q" for cell in cells]
     watched += [f"Xdut:{path}:WRENAN" for path in write_latches]
-    watched += [f"Xdut:{node}" for node in probes]
+    # A probe may name a node already watched (sae, a wordline): print each node
+    # once, or the CSV has two columns of one name (Xyce's names are case-blind).
+    printed: dict[str, str] = {}
+    for node in watched + [f"Xdut:{node}" for node in probes]:
+        printed.setdefault(node.lower(), node)
+    watched = list(printed.values())
     lines += [
         # No DC operating point: 32 bistable cells, the flops and the output latches
         # have no unique one, and Xyce does not find any.  Start from the preload,
@@ -607,11 +612,14 @@ def read_csv(path: Path) -> dict[str, list[float]]:
     with path.open() as stream:
         rows = list(csv.reader(stream))
     header = [h.strip().upper() for h in rows[0]]
+    # One column a name: a node printed twice would otherwise put two values a
+    # row in one list and slide that wave against TIME.
+    first = {name: i for i, name in reversed(list(enumerate(header)))}
     columns = {name: [] for name in header}
     for row in rows[1:]:
         if len(row) == len(header):
-            for name, value in zip(header, row):
-                columns[name].append(float(value))
+            for name, i in first.items():
+                columns[name].append(float(row[i]))
     return columns
 
 
