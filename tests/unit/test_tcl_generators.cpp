@@ -188,6 +188,23 @@ TEST(YosysTclGeneratorTest, DualPortChecksAndNamesExactPhysicalStructure) {
     EXPECT_EQ(script.find("select -assert-min 108"), std::string::npos);
 }
 
+TEST(YosysTclGeneratorTest, OnePortCountsOutputEnableFlopsAndCommandLatches) {
+    YosysTclGenerator gen;
+    auto script = [&](unsigned banks) {
+        return gen.generate_script(
+            std::string(REPO_ROOT) + "/tech/verilog_dp", "tmp/syn_1p",
+            "ADDR_WIDTH=7,NUM_WL=8,NUM_BANK=2,COLUMN_MUX=4", 7, 8, banks, 4, 5, 15, 24.5,
+            2500.0, "", std::string(REPO_ROOT) + "/tech/lib",
+            /*single_port=*/false, /*shared_port_b=*/false, /*one_port=*/true);
+    };
+    // Address + two state bits; with several banks, one output enable flop a bank.
+    // A command latch for the access phase, and one a bank for the write latch.
+    EXPECT_NE(script(1).find("select -assert-count 9 t:*DFF*ASAP7_75t_R"), std::string::npos);
+    EXPECT_NE(script(1).find("select -assert-count 2 t:DLLx1_ASAP7_75t_R"), std::string::npos);
+    EXPECT_NE(script(2).find("select -assert-count 11 t:*DFF*ASAP7_75t_R"), std::string::npos);
+    EXPECT_NE(script(2).find("select -assert-count 3 t:DLLx1_ASAP7_75t_R"), std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // OpenRoadTclGenerator: floorplan math + QoR parsing (pure functions)
 // ---------------------------------------------------------------------------
@@ -369,6 +386,11 @@ TEST(OpenRoadTclGeneratorTest, PortDriversAreSizedAndFrozen) {
     EXPECT_LT(sized, script.find("global_placement"));
     EXPECT_NE(script.find("replace_cell $inst BUFx24_ASAP7_75t_R", sized), std::string::npos);
     EXPECT_NE(script.find("set_dont_touch $net", sized), std::string::npos);
+    // The 6T controller's clock gates stay ahead of the registers' latency.
+    const auto cts = script.find("clock_tree_synthesis");
+    ASSERT_NE(cts, std::string::npos);
+    EXPECT_NE(script.find("string match delaybuf_*", cts), std::string::npos);
+    EXPECT_EQ(script.find("remove_buffers", cts), std::string::npos);
 }
 
 // --strips-in-controller: the die is the band between the stacks, the strips
@@ -378,11 +400,12 @@ TEST(OpenRoadTclGeneratorTest, BandTakesTheStripsInAndHandsTheirPinsTheSelects) 
     std::filesystem::create_directories(dir);
     {
         std::ofstream plan(dir / "plan.txt");
-        plan << "width 7.3440\nreserved 7.3551\ninset 0.108\nhalo_x 0.216\nhalo_y 0.27\n";
+        plan << "width 7.3440\nreserved 7.3551\ninset 0.108\nhalo_x 0.216\nhalo_y 0.27\nmin_height 4.824\n";
     }
     BandPlan band;
     ASSERT_TRUE(read_band_plan(dir.string(), band));
     EXPECT_NEAR(band.reserved, 7.3551, 1e-9);
+    EXPECT_NEAR(band.min_height, 4.824, 1e-9);
 
     OpenRoadTclGenerator gen;
     gen.set_design_name("ctrl_decode");
@@ -393,6 +416,10 @@ TEST(OpenRoadTclGeneratorTest, BandTakesTheStripsInAndHandsTheirPinsTheSelects) 
     gen.set_band(band);
     // Rows for the cells at 50 % and the strips' keep-outs, then both insets.
     const double h = gen.band_die_height(band.width);
+    // A wide multi-bank band must not collapse until opposing strips overlap.
+    EXPECT_GE(gen.band_die_height(100.0), band.min_height);
+    gen.set_min_height(9.0);  // side-pin capacity can dominate a wide band
+    EXPECT_GE(gen.band_die_height(100.0), 9.0);
     EXPECT_GE(h - 2 * 0.108, (123.45 / 0.5 + 7.3551) / 7.344 - 1e-9);
     EXPECT_NEAR((h - 2 * 0.108) / 0.54, std::nearbyint((h - 2 * 0.108) / 0.54), 1e-9);
 

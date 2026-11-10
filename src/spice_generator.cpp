@@ -712,7 +712,7 @@ std::string SpiceGenerator::generate_colgrp_6t() {
     append_indexed_tokens(instances, "BL_A[", mux, "]");
     append_indexed_tokens(instances, "BLN_A[", mux, "]");
     instances << " VDD VSS array_sram_6t\n";
-    // The staggered IO block (chipforge_asap7's StaggeredIoColumnSpec),
+    // The 270 nm IO block (chipforge_asap7's SidewaysIoColumnSpec),
     // wrapped as iocol_sram_6t in tech/spice/sram_6t_iocolumn.sp, in the pin
     // order generate_asap7_6t_iocolumn.py writes: per leaf bitline,
     // complement, select, complement select; then precharge, sense enable,

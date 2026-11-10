@@ -186,5 +186,31 @@
   -0.0,
   3.9,
   -0.1
- ]
+ ],
+ "write_hold_ps": {
+  "base": 39.08571428571428,
+  "per_bit": 0.35714285714285626,
+  "margin_ps": 25.0,
+  "fit_widths": [
+   2,
+   16
+  ],
+  "points": [
+   {
+    "folder": "sram_x8x2x1_20261107_161656, inputs 60 ps after the edge",
+    "bits": 2,
+    "clk_to_write_close_ps": 39.3
+   },
+   {
+    "folder": "sram_x4x2x2_20261107_161730, inputs 60 ps after the edge",
+    "bits": 2,
+    "clk_to_write_close_ps": 40.3
+   },
+   {
+    "folder": "sram_x4x16x1_20261107_161853, inputs 60 ps after the edge",
+    "bits": 16,
+    "clk_to_write_close_ps": 44.8
+   }
+  ]
+ }
 }

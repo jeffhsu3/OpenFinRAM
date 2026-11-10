@@ -6,8 +6,9 @@ one known reason, and this fails when there is a *new* reason, or when the known
 one is fixed and the baseline should be tightened.
 
 Set ``OPENFINRAM_MACRO_RESULT`` to a result folder to check that one; otherwise
-the newest ``results/sram_x4x2x1_*`` is used, or one is built when the compiler,
-yosys and openroad are all here.  Skips without KLayout and the ASAP7 runset.
+the newest 8T ``results/sram_x4x2x1_*`` is used (the 6T macro check writes the
+same name), or one is built when the compiler, yosys and openroad are all here.
+Skips without KLayout (LVS) and gdscheck (DRC).
 """
 
 from __future__ import annotations
@@ -49,30 +50,40 @@ def test_the_baseline_is_a_ratchet():
     assert verify_macro.compare(_found(), _found(lvs_matched=True))[0] == ["LVS no longer matches"]
 
 
+def _two_port_results() -> list[Path]:
+    """x4x2x1 results built with the 8T bitcell; the 6T macro check writes the same name."""
+    found = []
+    for result in sorted((REPO / "results").glob("sram_x4x2x1_*")):
+        physical = result / "sram_x4x2x1.physical.json"
+        if physical.is_file() and json.loads(physical.read_text()).get("bitcell") == "8t":
+            found.append(result)
+    return found
+
+
 def _result_dir(tmp_path: Path) -> Path:
     given = os.environ.get("OPENFINRAM_MACRO_RESULT")
     if given:
         return Path(given)
-    built = sorted((REPO / "results").glob("sram_x4x2x1_*"))
+    built = _two_port_results()
     if built:
         return built[-1]
     binary = Path(os.environ.get("OPENFINRAM_BIN", REPO / "build/OpenFinRAM"))
     if not binary.is_file() or not all(shutil.which(tool) for tool in ("yosys", "openroad")):
-        pytest.skip("no built sram_x4x2x1 result, and no compiler with yosys and openroad to build one")
+        pytest.skip("no built 8T sram_x4x2x1 result, and no compiler with yosys and openroad to build one")
     log = tmp_path / "compiler.log"
     with log.open("w") as stream:
         subprocess.run([str(binary), "--openroad", "--num-wls", "2", "--num-data-bits", "2", "--num-banks", "1",
                         "--skip-characterization"], cwd=REPO, stdout=stream, stderr=subprocess.STDOUT, check=True)  # fmt: skip
-    return sorted((REPO / "results").glob("sram_x4x2x1_*"))[-1]
+    return _two_port_results()[-1]
 
 
 def test_macro_lvs_and_drc_hold_the_baseline(tmp_path: Path):
     pytest.importorskip("chipforge_asap7")
-    from chipforge_asap7.verification import find_drc_deck, find_klayout
+    from chipforge_asap7.verification import find_gdscheck, find_klayout
 
     try:
         find_klayout(None)
-        find_drc_deck(None)
+        find_gdscheck()
     except FileNotFoundError as error:
         pytest.skip(str(error))
 

@@ -229,7 +229,8 @@ void emit_input_bus(std::ostringstream& out,
                     const std::string& bus_type,
                     const std::string& constraint_template,
                     const std::string& write_address,
-                    const CharacterizationData* data) {
+                    const CharacterizationData* data,
+                    bool data_input = false) {
     out << "    bus (" << name << ") {\n";
     out << "      bus_type : " << bus_type << ";\n";
     out << "      direction : input;\n";
@@ -242,8 +243,10 @@ void emit_input_bus(std::ostringstream& out,
         out << "        clocked_on : \"clk\";\n";
         out << "      }\n";
     }
-    emit_constraint_arcs(out, constraint_template, "      ",
-                         data ? &data->timing.constraints : nullptr);
+    const CharacterizationConstraints* constraints = data ? &data->timing.constraints : nullptr;
+    if (data_input && data && data->timing.data_constraints.present)
+        constraints = &data->timing.data_constraints;
+    emit_constraint_arcs(out, constraint_template, "      ", constraints);
     out << "    }\n";
 }
 
@@ -527,7 +530,7 @@ std::string build_estimated_liberty(const MainCliOptions& options,
         emit_input_pin(out, "we_n", constraint_template, data);
         emit_input_pin(out, "oe_n", constraint_template, data);
         emit_input_bus(out, "A", address_type, constraint_template, "", data);
-        emit_input_bus(out, "D", data_type, constraint_template, "A", data);
+        emit_input_bus(out, "D", data_type, constraint_template, "A", data, true);
     } else {
         emit_input_pin(out, "rst_n", constraint_template, data, true);
         emit_input_pin(out, "ce_n_A", constraint_template, data);

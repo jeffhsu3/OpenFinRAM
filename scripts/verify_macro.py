@@ -25,9 +25,10 @@ ACTIVE under both implants acts as a well tap, which ties whatever diffusion it
 belongs to to the substrate; one such error grounds a whole class of nets and
 hides everything else.  The second run shows what is left without it.
 
-DRC is the public ASAP7 KLayout runset over the whole macro.  It is not a
-sign-off deck, and the released hard cells and OpenROAD's routing both trip it,
-so the result is a count per rule to hold a line with, not a pass.
+DRC defaults to gdscheck's ASAP7 main suite over the whole macro. The public
+KLayout runset is available for comparison. The released hard cells and
+OpenROAD's routing have findings, so record counts per rule rather than
+interpreting completion as a clean result.
 
 ``--baseline`` compares against known findings, the way
 `tests/run_8t_device_drc_check.sh` holds cell DRC: exit 0 if nothing is new,
@@ -84,13 +85,15 @@ def _lvs_findings(result) -> dict:
     }
 
 
-def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Path, Path]]:
-    """One copy of the macro per bank, the other banks' column tiles taken out of both sides.
+def bank_views(gds: Path, netlist: Path, cell: str, out: Path, *,
+               banks_per_column: int = 1) -> list[tuple[Path, Path]]:
+    """One copy per bank column, removing other columns from GDS and SPICE.
 
     KLayout's comparer does not finish on a whole multi-bank macro: every
     bit's column appears once per bank on the same data nets, and it gets
     lost pairing the copies.  Each view keeps one bank's tiles and all the
-    rest (controller, routing), so it is a single-bank problem.  A bank's
+    rest (controller, routing). A shared-B column keeps its pair of banks
+    together (``banks_per_column=2``). A bank's
     wordline strips (``Xwl_<half>[_m<k><d|u>]_<bank>``, the strip masters
     standing in its column) go with its tiles: left behind, a segmented 6T
     macro's other-bank strips drive wordlines nothing loads on either side,
@@ -133,16 +136,20 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path) -> list[tuple[Pat
 
         view_top.remove(*[r for r in view_top.references if other_bank(r)])
         library.write_gds(str(view / gds.name))
-        # The column groups are X<bank>_<bit> in the stacked column group,
+        # The column groups are X<column>_<bit> in the stacked column group,
         # and a 6T stack's dummy end rows XE<bank>_B/_T (inside its end tiles).
+        # A shared-B column contains two banks: keep both banks' wordline
+        # drivers, matching the two physical strip pairs retained above.
         kept, dropping = [], False
         for line in text.splitlines():
             if line.startswith("+"):
                 if not dropping:
                     kept.append(line)
                 continue
-            dropping = bool(re.match(rf"X(?!{bank}_)\d+_\d+ |XE(?!{bank}_)\d+_[BT] "
-                                     rf"|Xwl_(?:lo|hi)(?:_m\d+[du])?_(?!{bank} )\d+ ", line))  # fmt: skip
+            strip = re.match(r"Xwl_(?:lo|hi)(?:_m\d+[du])?_(\d+) ", line)
+            dropping = bool(re.match(rf"X(?!{bank}_)\d+_\d+ |XE(?!{bank}_)\d+_[BT] ", line))
+            if strip:
+                dropping = int(strip[1]) // banks_per_column != bank
             if not dropping:
                 kept.append(line)
         (view / netlist.name).write_text("\n".join(kept) + "\n")
@@ -228,7 +235,7 @@ def verify(result_dir: Path, out: Path, *, cell: str | None = None, drc: bool = 
     # banks: a whole two-bank 6T macro at 8:1 (x8x8x2) did not finish in
     # four hours; its views match in minutes once each takes its bank's
     # wordline strips with its tiles.
-    views = bank_views(gds, netlist, cell, out / "banks") if units > 1 else [(gds, netlist)]
+    views = bank_views(gds, netlist, cell, out / "banks", banks_per_column=2 if shared else 1) if units > 1 else [(gds, netlist)]
     strict, relaxed = [], []
     for index, (view_gds, view_netlist) in enumerate(views):
         tag = f"bank{index}/" if units > 1 else ""

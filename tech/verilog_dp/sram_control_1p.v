@@ -87,12 +87,34 @@ module ctrl_decode #(
     state_t state;
     state_t next_state;
 
-    wire read_req  = (state == READ)  && !ce_n_A;
-    wire write_req = (state == WRITE) && !ce_n_A;
+    // The command captured at the rising edge runs the whole cycle, whatever
+    // the pins do after the edge: a synchronous driver changes ce_n/we_n/oe_n
+    // a flop delay after the edge it launches from, long before this cycle's
+    // wordline (~120 ps) and sense enable (~210 ps).
+    wire read_req  = (state == READ);
+    wire write_req = (state == WRITE);
 
     // Precharge is released first, then WL is asserted after a short delay
-    // to avoid VDD->BL->cell->VSS crowbar current.
-    wire prech_off = (read_req || write_req) && clk;
+    // to avoid VDD->BL->cell->VSS crowbar current.  The access phase is the
+    // clock's high phase, gated by the incoming command held in a latch that
+    // is transparent while the clock is low.
+    //
+    // Clock gating here and for the write latch below: the latch is clocked
+    // from the clock tree, like the flops, but the gate takes the clock ahead
+    // of the registers' latency (the P&R script keeps CTS from balancing
+    // these gates to the registers).  So the gate output follows the pin by
+    // a gate and the short tree, not by the register tree plus a flop (as
+    // (state != IDLE) && clk would), and cannot glitch: it rises before the
+    // latch closes, which the command pins' hold to the flops already
+    // covers, and falls before the latch reopens.  (An ICG would put the
+    // register tree in front of the gate.)
+    wire access_next = rst_n && (next_state != IDLE);
+    wire access_l;
+    wire prech_off;
+    (* keep, dont_touch *)
+    DLLx1_ASAP7_75t_R u_access_en (.CLK(clk), .D(access_next), .Q(access_l));
+    (* keep, dont_touch *)
+    AND2x2_ASAP7_75t_R u_access_gate (.A(clk), .B(access_l), .Y(prech_off));
 
     wire wl_any_fire;
     delay_cell #(.BUF_COUNT(WL_BUF)) u_delay_wl (
@@ -138,6 +160,32 @@ module ctrl_decode #(
         .Y(sae_raw)
     );
 
+    // Write data.  The IO block's write driver latch follows D while wrenan
+    // is high, so D is taken when wrenan falls: D's hold is clk -> wrenan
+    // falling at the farthest column.  Per bank, the incoming write command,
+    // latched as above, closes it one gate after the clock pin rises
+    // (wrenan = !(clk & write_next | wl_write_fire)); it stays closed until
+    // the wordline is off (wl_write_fire falls a WL_BUF delay after the
+    // falling edge) and reopens for the next cycle's D.
+    for (genvar bank = 0; bank < NUM_BANK; bank = bank + 1) begin : g_write_latch
+        wire wr_next = rst_n && !ce_n_A && !we_n_A && oe_n_A && (slice_sel_d == bank);
+        wire wr_next_l;
+        wire wr_fire = wl_write_fire && (slice_sel_r == bank);
+        (* keep, dont_touch *)
+        DLLx1_ASAP7_75t_R u_wr_en (.CLK(clk), .D(wr_next), .Q(wr_next_l));
+        (* keep, dont_touch *)
+        AOI21x1_ASAP7_75t_R u_wr_close (
+            .A1(clk), .A2(wr_next_l), .B(wr_fire), .Y(wrenan_A[bank])
+        );
+    end
+
+    // Output enable.  Q is the selected bank's tri-state output latch; the
+    // banks share Q.  Enable the bank read last, from a flop, from the read's
+    // capture edge until the next read's, so Q holds the last word read (and
+    // is driven) through writes and idle cycles, and a synchronous reader
+    // sampling at the next edge sees a driven Q.  Bank 0 after reset.
+    logic [NUM_BANK-1:0] oe_r;
+
     always_ff @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state       <= IDLE;
@@ -145,8 +193,11 @@ module ctrl_decode #(
             col_sel_r   <= '0;
             bank_sel_r  <= 1'b0;
             slice_sel_r <= '0;
+            oe_r        <= NUM_BANK'(1);
         end else begin
             state <= next_state;
+            if (next_state == READ)
+                oe_r <= NUM_BANK'(1) << slice_sel_d;
             if (!ce_n_A) begin
                 row_sel_r   <= row_sel_d;
                 col_sel_r   <= col_sel_d;
@@ -167,17 +218,17 @@ module ctrl_decode #(
 
     always_comb begin
         blprechn_A = '0;
-        oeb_out_A  = '1;
         sae_A      = '0;
         for (int i = 0; i < NUM_BANK; i = i + 1) begin
             ysel_A[i]   = '0;
             yseln_A[i]  = '1;
             wrena_A[i]  = 1'b0;
-            wrenan_A[i] = 1'b1;
         end
 
+        // prech_off is high only in an access cycle, so it needs no gating
+        // by the (later) state flop.
+        blprechn_A[slice_sel_r] = prech_off;
         if (read_req || write_req) begin
-            blprechn_A[slice_sel_r] = prech_off;
             if (YSEL_PREDECODE != 0) begin
                 ysel_A[slice_sel_r][col_sel_r[1:0]]     = 1'b1;
                 ysel_A[slice_sel_r][4 + (col_sel_r >> 2)] = 1'b1;
@@ -188,18 +239,15 @@ module ctrl_decode #(
             // constants would share one tie cell's output across pins.)
             yseln_A[slice_sel_r] = ~ysel_A[slice_sel_r];
 
-            if (read_req) begin
-                oeb_out_A[slice_sel_r] = oe_n_A;
-                sae_A[slice_sel_r]     = sae_raw;
-            end
+            if (read_req)
+                sae_A[slice_sel_r] = sae_raw;
 
-            if (write_req) begin
-                wrena_A[slice_sel_r]  = wl_write_fire;
-                wrenan_A[slice_sel_r] = ~wl_write_fire;
-            end
+            if (write_req)
+                wrena_A[slice_sel_r] = wl_write_fire;
         end
-
-        oe_out_A = ~oeb_out_A;
     end
+
+    assign oe_out_A  = oe_r;
+    assign oeb_out_A = ~oe_r;
 
 endmodule

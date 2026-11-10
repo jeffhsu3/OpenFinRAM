@@ -116,3 +116,27 @@ OpenSTA loaded the generated Liberty without warnings and reproduced all
 JSON. A separate regression checks interpolation between grid points.
 These results validate this schematic read-model path; the uncharacterized
 items above remain outstanding.
+
+## Integrated reference (2026-10-20)
+
+The default integrated build `sram_x4x2x1_20261020_172211` is the new reference:
+16 words x 2 bits, 4.884 x 14.272 um, with the wordline drivers inside the
+controller band. Its four TT points passed both ports and all 32 stored bits.
+The maximum observed clock-to-Q delay per point is:
+
+| Clock slew (ps) | Load per Q (fF) | Port A (ps) | Port B (ps) |
+| ---: | ---: | ---: | ---: |
+| 10 | 0.5 | 247.9 | 246.8 |
+| 10 | 2.0 | 252.6 | 251.5 |
+| 40 | 0.5 | 257.1 | 256.4 |
+| 40 | 2.0 | 261.4 | 261.0 |
+
+The measured Liberty, timing JSON, simulation verdicts and OpenSTA checks are
+in `results/characterization_8t_integrated_sram_x4x2x1_tt_20261020/`.
+OpenSTA reproduced all 16 delay and 16 transition values. These are schematic
+measurements; the floorplan's interconnect has not been extracted. Setup/hold,
+power and the other characterization gaps above remain outstanding.
+
+LVS matches. The gdscheck 0.2.0 main suite reports 485 markers in seven rules,
+exactly matching the earlier integrated `sram_x4x2x1_20261010_055813` under
+the same checker. This reference is not DRC clean.

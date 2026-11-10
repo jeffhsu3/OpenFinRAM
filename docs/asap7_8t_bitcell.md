@@ -744,19 +744,21 @@ block. `sram_x4x2x2`: 7.94 x 16.31 um against 10.46 x 16.88 um unshared
 not have (KLayout reports a cell once per orientation, so the mirrored half
 repeats the cells' known markers under `:m90`).
 
-### Strips in the controller's band (`--strips-in-controller`)
+### Strips in the controller's band
 
 A strip pair is only as wide as its array, so the band it stands in was
 mostly empty (two thirds of it on a shared `sram_x4x2x2`), and a 0.3 um
-channel on each side of the controller held its fan-out to the strips. With
-`--strips-in-controller` the controller's die is the whole band between the
-two stacks and the strips sit inside it:
+channel on each side of the controller held its fan-out to the strips. The
+default 8T OpenROAD floorplan now makes the controller's die the whole band
+between the two stacks, with the strips inside it. The old
+`--strips-in-controller` flag is a hidden compatibility alias:
 
 * `compile_asap7_2rw.py --plan-band DIR` builds the tiles and strips first and
   writes the band's width, the core area the strips and their halos take, the
   strips' abstracts (`strips.lef`) and `band.tcl`;
 * the controller's place-and-route (`OpenRoadManager`) sizes the die from its
-  cells at the utilization cap plus that keep-out, places the strips as fixed
+  cells at the utilization cap plus that keep-out, with lower bounds for
+  opposing-strip clearance and side-pin capacity. It places the strips as fixed
   physical instances, and cuts the rows around them (`cut_rows`, and
   `tapcell` with the same halos: 0.216 um across, one row along). Its pins
   stand on the side edges only. After timing closure on the ports' SDC loads
@@ -810,9 +812,30 @@ matches; DRC 547 against 562, nothing at the seams. `sram_x8x8x2` shared:
 8.86 x 27.82 um, against 28.68 with the inset band and 31.54 without (-12 %),
 controller at 50 %, strict LVS, DRC 902 against 876 without the band (router
 classes on M1/M4/M5, the controller's own placement), the spaced program
-passing on all 512 cells. The band abuts one tile
-column so far: with several banks or pairs the stride would also have to keep
-the gate grid, a multiple of 54 nm.
+passing on all 512 cells. Those measurements predate the current DRM-grid
+alignment. Multiple bank columns are now supported: their stride is a multiple
+of 1.728 um, preserving gate, fin and routing grids. Each column gets its own
+translated strips and dummy-row keep-outs. The physical manifest records the
+placement mode, bank-column count, stride and controller-band dimensions.
+
+Integrated-floorplan validation on 2026-10-20 (2 bits, four wordlines per bank):
+
+| Banks | Shared B | Size (um) | Stored bits checked | LVS | gdscheck main markers |
+| ---: | :---: | --- | ---: | --- | ---: |
+| 1 | no | 4.884 x 14.272 | 32 | MATCH | 485 |
+| 2 | no | 10.068 x 13.732 | 64 | MATCH | 946 |
+| 4 | yes | 16.764 x 15.892 | 128 | MATCH | 1758 |
+
+All three pass routed connectivity and schematic read/write simulation at TT,
+0.7 V and a 2 ns clock. Multi-bank simulation exercises the first and last
+banks and checks every stored bit's final state; coverage is not exhaustive.
+LVS checks each bank column with the full controller, retaining both banks'
+strips in a shared-B pair. The gdscheck 0.2.0 main-suite findings are metal/via
+rules, with no gate- or fin-grid findings; these macros are not DRC clean.
+The single-bank counts match the previous integrated reference exactly.
+Artifacts and detailed reports are indexed in
+`results/validation_8t_integrated_20261020/README.md`; the single-bank
+[measured Liberty](liberty_8t.md#integrated-reference-2026-10-20) is regenerated.
 
 `scripts/mapped_verilog_to_spice.py` parses the routed controller through
 Yosys and orders every instance using the actual CDL formal pins, including

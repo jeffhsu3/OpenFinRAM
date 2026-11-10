@@ -54,3 +54,31 @@ def test_estimate_writes_the_characterization_the_emitter_reads(tmp_path):
     assert 0.2 < delay["cell_rise"][0][0] < 1.0
     assert doc["clock_min_period"] > 2 * delay["cell_rise"][0][0]
     assert doc["power"]["read_access_pj"] > 0
+
+
+def test_d_hold_is_the_write_latch_close_plus_a_margin(tmp_path):
+    """Fit from runs that measured the close; estimate emits it as D's own constraint."""
+    specs = []
+    for bits, close in ((2, 70.0), (16, 98.0)):
+        result = tmp_path / f"result_{bits}"
+        result.mkdir()
+        (result / "m.physical.json").write_text(json.dumps({"bits": bits}))
+        run = tmp_path / f"run_{bits}"
+        run.mkdir()
+        writes = [{"clk_to_write_close_ps": close - 3}, {"clk_to_write_close_ps": close}, {}]
+        (run / "simulation.json").write_text(json.dumps({"writes": writes, "result_dir": str(result)}))
+        specs.append(str(run))
+    hold = tm.fit_write_hold(tm.write_hold_points(specs))
+    assert abs(hold["base"] - 66.0) < 1e-6 and abs(hold["per_bit"] - 2.0) < 1e-6
+    m = {**model(), "write_hold_ps": hold}
+    assert tm.write_hold_ps(m, 64) == 66.0 + 2.0 * 64 + tm.WRITE_HOLD_MARGIN_PS
+    g = {"bitline_cells": 8, "slice_inputs": tm.slice_inputs(8, 1), "wordline_cells": 4, "mux": 4, "bits": 2,
+         "bitline_cells_switched": 64}  # fmt: skip
+    doc = tm.characterization(m, g, "x8x2")
+    data = doc["timing"]["data_constraints"]
+    assert data["hold_rise"] == [[round((70.0 + tm.WRITE_HOLD_MARGIN_PS) / 1000, 4)]]
+    assert data["setup_rise"] == [[tm.FLAT_CONSTRAINT_NS]]
+    assert "constraints" not in doc["timing"]  # the controls keep the emitter's flat estimate
+    # A model without the fit emits no D constraint (the emitter's flat estimate).
+    bare = {k: v for k, v in model().items() if k != "write_hold_ps"}
+    assert "data_constraints" not in tm.characterization(bare, g, "x8x2")["timing"]

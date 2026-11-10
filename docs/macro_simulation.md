@@ -303,3 +303,67 @@ write enables are watched per pair of banks (`Geometry.io`). `sram_x4x2x2`
 shared: both programs PASS, all 64 cells, no hazards, clk to Q 206-289 ps,
 1592 / 1651 fJ. A port-B read of bank 1 (address 20) moves both bits after
 sense enable, so the block's second group reads through the shared amplifier.
+
+## 6T single-port: synchronous inputs (2026-11-07)
+
+A synchronous design drives the macro from flops on the same clock: every
+input changes a clock-to-Q after the edge *before* the one that takes it, not
+on the falling edge as the bench had driven it. `--input-delay PS` drives it
+that way and samples Q 20 ps before the next edge. On the 6T macro as it was
+(`sram_control_1p.v` before this date), `sram_x8x2x1` at 1 ns with inputs 60
+ps after the edge fails three ways, all from the controller reading the pins
+live in the clock-high phase:
+
+* a read followed by an idle cycle never fires its wordline (ce_n going high
+  60 ps after the edge kills the request);
+* Q is tri-stated outside a read cycle's clock-high phase (oe_n live), so a
+  reader sampling at the next edge sees a floating Q;
+* the IO columns' write latch stays open until write enable (~124 ps), so a
+  write stores the next cycle's D.
+
+The controller now:
+
+* registers the command at the edge (`state`), so the cycle runs whatever the
+  pins do after it;
+* drives Q from a flop per bank holding the bank read last (bank 0 after
+  reset), so Q holds the last word read through writes and idle cycles;
+* starts the access phase (precharge off, the wordline delay chain) and
+  closes each bank's write latch with a gate that takes the clock, enabled by
+  the incoming command held in a latch transparent while the clock is low
+  (`DLLx1`): `prech_off = clk & access_next`, `wrenan = !(clk & write_next |
+  wl_write_fire)`. The latch keeps the gate from glitching on the edge where
+  an access goes idle; the gate follows the clock pin, not the registers'
+  clock tree plus a flop. An ICG did the same job but put the whole register
+  tree in front of the gate (clk -> wordline 157 ps, D's hold 85 ps), and
+  TritonCTS, which takes the gates as macro sinks, balanced them to the
+  registers' latency with four delay buffers; the P&R script now bypasses
+  those (`delaybuf_*`) for the 6T controller. The gates sit two buffers from
+  the pin, the registers three.
+
+Results (TT 0.7 V, 1 ns, back to back; LVS match on all three):
+
+| macro | inputs | clk -> WL | clk -> Q | write latch closed | |
+|---|---|---|---|---|---|
+| x8x2x1 old controller | falling edge | 124 ps | 236-240 ps | | PASS |
+| x8x2x1 old controller | 60 ps after | 122 ps | 235-240 ps | | FAIL (writes, R->idle) |
+| x8x2x1 | 60 ps after | 115 ps | 220-225 ps | 39 ps | PASS |
+| x4x2x2 | 60 ps after | 116 ps | | 40 ps | PASS |
+| x4x16x1 | 60 ps after | 120 ps | | 44-45 ps | PASS |
+| all three | falling edge | | | | PASS |
+
+D's hold is the write latch's close, not a flop's: `simulate_macro.py`
+records `clk_to_write_close_ps` (the latest column's WRENAN crossing VDD/2)
+for each write, `timing_model_6t.py fit-write-hold` fits it against the bits
+(39.1 + 0.36 per bit ps from the three runs above) into
+`tech/timing/sram_6t_timing.json`, and the estimated Liberty publishes it
+plus 25 ps as D's own hold (`data_constraints`; the controls keep the flat
+0.05 ns): 65 ps at 2 bits, 87 ps at 64. `--data-delay PS` launches D alone
+PS after the edge to check that number: x8x2x1 (Liberty D hold 0.0648 ns)
+passes with D 65 ps after the edge, and also with D 30 ps after it (its 50 %
+point at 40 ps, with the close): the published hold is conservative, by at
+least the margin.
+
+Still estimated: the model's clk -> Q coefficients are fit to runs of the old
+controller (now 10-15 ps faster, so the Liberty's clk -> Q is pessimistic),
+the hold is one corner (TT) and one clock slew, and the two-port controller
+(`sram_control.v`) still reads ce_n/oe_n live.

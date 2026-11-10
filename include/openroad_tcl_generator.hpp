@@ -25,6 +25,7 @@ struct BandPlan {
     double inset = 0.0;
     double halo_x = 0.0;
     double halo_y = 0.0;
+    double min_height = 0.0; // opposing strips and their halos must not overlap
 };
 
 // Reads <dir>/plan.txt; false if it is missing or incomplete.

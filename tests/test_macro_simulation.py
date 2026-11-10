@@ -147,6 +147,34 @@ def test_inputs_move_on_the_falling_edge_before_the_edge_that_takes_them():
     assert "7e-09 0 7.02e-09 0.7" in line  # and rises again half a period before edge 3
 
 
+def test_a_synchronous_driver_launches_inputs_after_the_edge_before():
+    # Edge k is at 2 ns + 2k ns: the value for edge 2 (6 ns) launches 60 ps after edge 1 (4 ns).
+    line = sm.stimulus("we_n_A", [1, 1, 0, 1], period=2e-9, vdd=0.7, edge=20e-12, first=2e-9,
+                       input_delay=60e-12)  # fmt: skip
+    assert "4.06e-09 0.7 4.08e-09 0" in line
+    assert "6.06e-09 0 6.08e-09 0.7" in line
+
+
+def test_data_delay_launches_d_alone_later():
+    """`data_delay` moves D (the 6T write latch's hold) and leaves the controls at `input_delay`."""
+    g = sm.Geometry(wordlines=4, mux=4, bits=2, ports="A")
+    cells = [{"path": f"Xc{a}_{b}", "address": a, "bit": b, "stack": "lo"} for a in range(g.words) for b in range(g.bits)]
+    pins = ("clk", "rst_n", "ce_n", "we_n", "oe_n", *(f"A[{i}]" for i in range(5)), "D[0]", "D[1]", "Q[0]", "Q[1]")
+    program = [(sm.Op("W", 1, 0b11),), (sm.Op("R", 1),)]
+    deck, plan = sm.build_deck(Path("dut.sp"), Path("m.pm"), "top", pins, cells, g, program, period=1e-9,
+                               vdd=0.7, load=1e-15, input_delay=60e-12, data_delay=150e-12,
+                               write_latches=("XIO:X_block",))  # fmt: skip
+    d0 = next(line for line in deck.splitlines() if line.startswith("VD_A_0 "))
+    ce = next(line for line in deck.splitlines() if line.startswith("Vce_n_A "))
+    assert "1.15e-09 0 1.17e-09 0.7" in d0  # D for edge 1 (2 ns) launches 150 ps after edge 0
+    assert "1.06e-09 0.7 1.08e-09 0" in ce  # ce_n 60 ps after it
+    assert "V(Xdut:XIO:X_block:WRENAN)" in deck
+    assert plan["data_delay"] == 150e-12
+    with pytest.raises(ValueError, match="data delay needs an input delay"):
+        sm.build_deck(Path("dut.sp"), Path("m.pm"), "top", pins, cells, g, program, period=1e-9, vdd=0.7,
+                      load=1e-15, data_delay=150e-12)  # fmt: skip
+
+
 def _result_dir() -> Path:
     given = os.environ.get("OPENFINRAM_MACRO_RESULT")
     built = [Path(given)] if given else sorted((REPO / "results").glob("sram_x4x2x1_*"))

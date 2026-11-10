@@ -147,7 +147,7 @@ bool OpenRoadManager::run_openroad_flow() {
     }
     // With the strips in the controller's band, the assembler plans the band
     // first: its width is the tiles', and the strips' keep-outs are known.
-    if (!cli_options_.single_port && cli_options_.strips_in_controller) {
+    if (cli_options_.use_controller_band()) {
         const std::string band_dir = join_path(work_dir, "band");
         const std::string local_python = join_path(get_current_dir_name(), ".venv/bin/python");
         std::ostringstream plan;
@@ -166,6 +166,18 @@ bool OpenRoadManager::run_openroad_flow() {
             return false;
         }
         gen.set_band(band);
+        if (!cli_options_.bitcell_6t) {
+            // ctrl_decode's scalar ports after expanding its buses: inputs,
+            // two four-way row selects, per-bank selects/IO, and shared B IO.
+            // Only the side edges are available. Keep the default 96 nm pin
+            // pitch, allow 1 um at each corner and four spare slots per side.
+            const unsigned banks = cli_options_.num_banks;
+            const unsigned b_io = cli_options_.share_port_b ? banks / 2 : banks;
+            const unsigned pins = 8 + 2 * addr_width + 8
+                + banks * (cli_options_.num_wls + 2 + 4 * num_ysel + 5)
+                + 5 * b_io;
+            gen.set_min_height(2.0 + 0.096 * ((pins + 1) / 2 + 4));
+        }
         sram_width = band.width;
         LOGI << "Controller band: " << band.width << " um wide, " << band.reserved
              << " um^2 kept out for the wordline strips";
@@ -255,7 +267,7 @@ bool OpenRoadManager::run_openroad_flow() {
         LOGE << "OpenROAD completed without required DEF/Verilog outputs";
         return false;
     }
-    if (cli_options_.strips_in_controller && !cli_options_.single_port) {
+    if (cli_options_.use_controller_band()) {
         // The assembler stacks the tiles on the band's edges: tell it the die.
         std::ofstream die(join_path(work_dir, "band/die.txt"));
         die << std::fixed << std::setprecision(4) << "width " << sram_width << "\nheight "
