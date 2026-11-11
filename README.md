@@ -198,6 +198,25 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   Macros whose logic sets the height (x4x2x1, x16x16x1, x4x2x2, x4x8x2) keep
   theirs.  A run that fails place-and-route is retried with a lower target,
   or two more rows where the pins set the height.
+- Outer strips (`--outer-strips`, standard floorplan): a strip at each stack's
+  far end as well, so the segment farthest from the band is driven from both
+  ends like the others, and every slice is sized for half a segment.  A
+  segment twice as long then has the wordline of today's slowest one: 64
+  cells driven from both ends by 32-cell slices reach half swing in 18.3 ps
+  at the middle, and 32 cells driven from one end in 18.3 ps at the far end
+  (Xyce at TT with the M3 at 233 ohm/um; 20.0 and 20.0 ps at SS), where a
+  32-cell segment between two strips takes 14.4 ps.  The strips about halve:
+  x256x64x1 at 8:1 with `--segment-bits 8 --outer-strips` has 16 for the 30
+  of `--segment-bits 4` and is 30.5 x 174.1 um against 200.8 (13 % less); it
+  assembles and routes like that one (10522 nets connected, no routing
+  violation, 2 h 46 min of detailed route).  x256x32x1 with whole stacks has
+  4 for the 6 of `--segment-bits 8` and places at 30.9 x 47.5 um against
+  51.8.  Both controllers pass place-and-route.  x64x8x1 with them matches
+  strict LVS, with whole stacks and with
+  `--segment-bits 2 --precharge-buffers on`, at the DRC rules of the macros
+  without (59 and 63 markers), and with whole stacks passes the whole-macro
+  Xyce program (clk->Q 237-243 ps).  A small macro gains nothing: x64x8x1
+  grows from 17.19 to 18.30 um.  Not with `--strips-in-controller`.
 - The `.lib` timing and energy come from `scripts/timing_model_6t.py`, fit to
   whole-macro simulations (`tech/timing/sram_6t_timing.json`).
 - Verified: strict LVS match (`scripts/verify_macro.py`) on x4x2x1, x16x16x1,

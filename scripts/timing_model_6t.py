@@ -64,23 +64,32 @@ def geometry(described: dict) -> dict:
     rows = 2 * described["wordlines_per_half"]
     mux = described.get("column_mux", 4)
     segments = described.get("wordline_segments_per_stack", 1)
+    outer = bool(described.get("outer_strips"))
+    cells = described.get("cells_along_wordline", mux * (described["bits"] // 2))
     return {
         "bitline_cells": rows,
-        "slice_inputs": slice_inputs(rows, segments),
-        "wordline_cells": described.get("cells_along_wordline", mux * (described["bits"] // 2)),
+        "slice_inputs": slice_inputs(rows, segments, outer),
+        "wordline_cells": driven_cells(cells, outer),
         "mux": mux,
         "bits": described["bits"],
         "bitline_cells_switched": described["bits"] * mux * rows,
     }
 
 
-def slice_inputs(rows: int, segments: int) -> int:
+def slice_inputs(rows: int, segments: int, outer: bool = False) -> int:
     """Slices a predecode line reaches in a bank: one per four rows in each strip.
 
     A stack has its band strip and two (a mid pair) at each boundary
-    between its segments; there are two stacks.
+    between its segments, and with `outer` one more at its far end; there
+    are two stacks.
     """
-    return (rows // 4) * 2 * (2 * segments - 1)
+    return (rows // 4) * 2 * (2 * segments - 1 + (1 if outer else 0))
+
+
+def driven_cells(cells: int, outer: bool) -> int:
+    """The cells one slice drives along a segment of `cells`: with outer strips
+    both ends are driven, each by a slice sized for half of it."""
+    return (cells + 1) // 2 if outer else cells
 
 
 def point(spec: str) -> dict:
@@ -276,6 +285,7 @@ def main(argv: list[str]) -> int:
     e.add_argument("--bits", type=int, required=True)
     e.add_argument("--mux", type=int, default=4)
     e.add_argument("--segment-bits", type=int, default=0)
+    e.add_argument("--outer-strips", action="store_true", help="a strip at each stack's far end too")
     e.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -296,8 +306,9 @@ def main(argv: list[str]) -> int:
         return 0
     model = json.loads(args.model.read_text())
     segment = args.segment_bits or args.bits // 2
-    g = {"bitline_cells": 2 * args.wordlines, "wordline_cells": args.mux * segment, "mux": args.mux,
-         "slice_inputs": slice_inputs(2 * args.wordlines, (args.bits // 2) // segment),
+    g = {"bitline_cells": 2 * args.wordlines, "wordline_cells": driven_cells(args.mux * segment, args.outer_strips),
+         "mux": args.mux,
+         "slice_inputs": slice_inputs(2 * args.wordlines, (args.bits // 2) // segment, args.outer_strips),
          "bits": args.bits, "bitline_cells_switched": args.bits * args.mux * 2 * args.wordlines}  # fmt: skip
     doc = characterization(model, g, f"x{2 * args.wordlines}x{args.bits}, {args.mux}:1, {segment}-bit segments")
     args.output.parent.mkdir(parents=True, exist_ok=True)

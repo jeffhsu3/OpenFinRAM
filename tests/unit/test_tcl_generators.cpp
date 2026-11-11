@@ -485,6 +485,24 @@ TEST(SixTPortLoadsTest, SelLoCountsEverySliceOfEveryStrip) {
     EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sel_lo_A"), 14 * 16 * (12 * 0.103 + 0.1) / 1000, 1e-9);
     EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sel_hi_A"), 14 * (4 * 12 * 0.103 + 0.1) / 1000, 1e-9);
     EXPECT_EQ(tall.wordline_strips(), 2U);
+    // Outer strips: one more a stack.  128 kbit at 8:1 in 8-bit segments has
+    // 16 strips of slices sized for 32 cells (12 fins an input), where 4-bit
+    // segments without them have 30.
+    MainCliOptions outer;
+    outer.bitcell_6t = true;
+    outer.num_wls = 128;
+    outer.num_data_bits = 64;
+    outer.num_rows_per_mux = 8;
+    outer.segment_bits = 8;
+    EXPECT_EQ(outer.wordline_strips(), 14U);
+    EXPECT_EQ(outer.wordline_slice_cells(), 64U);
+    EXPECT_NEAR(six_t_port_loads_pf(outer).at("sel_hi_A"), 14 * (4 * 24 * 0.103 + 0.1) / 1000, 1e-9);
+    outer.outer_strips = true;
+    EXPECT_EQ(outer.wordline_strips(), 16U);
+    EXPECT_EQ(outer.wordline_slice_cells(), 32U);
+    EXPECT_NEAR(six_t_port_loads_pf(outer).at("sel_hi_A"), 16 * (4 * 12 * 0.103 + 0.1) / 1000, 1e-9);
+    tall.outer_strips = true;
+    EXPECT_EQ(tall.wordline_strips(), 4U);
     EXPECT_LT(six_t_port_loads_pf(small).at("sel_lo_A"), 0.005);
     // The IO controls scale with the IO blocks: one per data bit.
     EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sae_A"), 64 * (18 * 0.103 + 0.1) / 1000, 1e-9);

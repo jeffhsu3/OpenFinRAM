@@ -298,8 +298,9 @@ std::string SpiceGenerator::load_wl_slice_netlist() {
 // assembler draws the pair as one cell, so the deck has it as one subcircuit.
 int SpiceGenerator::wordline_cells_per_half() const {
     // A cell per mux row of every data bit along one wordline segment (a
-    // whole stack unless --segment-bits divides it).
-    return static_cast<int>(config_.num_rows_per_mux * config_.wordline_segment_bits());
+    // whole stack unless --segment-bits divides it); half of them a slice
+    // when both the segment's ends are driven (--outer-strips).
+    return static_cast<int>(config_.wordline_slice_cells());
 }
 
 int SpiceGenerator::wordline_slice_class(int cells) {

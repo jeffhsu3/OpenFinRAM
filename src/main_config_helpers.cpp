@@ -39,6 +39,14 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .default_value(unsigned{0})
         .scan<'u', unsigned>();
 
+    program.add_argument("--outer-strips")
+        .help("Generated 6T, standard floorplan: a wordline driver strip at each stack's far "
+              "end too, so every wordline segment is driven from both ends by slices sized for "
+              "half of it.  Segments twice as long (--segment-bits) then keep their wordline "
+              "delay with about half the strips.")
+        .default_value(false)
+        .implicit_value(true);
+
     program.add_argument("--select-buffers")
         .help("Generated 6T: re-drive the predecode lines (sel_lo) at every wordline strip, "
               "from a row of standard buffers under its slices.  auto (default): when one "
@@ -174,6 +182,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.bitcell_6t            = bitcell == "6t";
     options.segment_bits          = program.get<unsigned>("--segment-bits");
     options.strips_in_controller  = program.get<bool>("--strips-in-controller");
+    options.outer_strips          = program.get<bool>("--outer-strips");
     options.row_predecode_bits    = program.get<unsigned>("--row-predecode-bits");
     options.skip_characterization = program.get<bool>("--skip-characterization");
     options.num_wl_buf            = program.get<unsigned>("--num-wl-buf");
@@ -234,6 +243,11 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         }
     }
     if (options.segment_bits >= options.num_data_bits / 2) options.segment_bits = 0;
+    if (options.outer_strips && (!options.bitcell_6t || options.strips_in_controller)) {
+        LOGE << "Error: --outer-strips is for the generated 6T macro's standard floorplan "
+             << "(--bitcell 6t without --strips-in-controller).";
+        std::exit(1);
+    }
     if (options.bitcell_6t && options.num_rows_per_mux != 4 && options.num_rows_per_mux != 8 &&
         options.num_rows_per_mux != 16) {
         LOGE << "Error: --bitcell 6t's IO block is 4:1, 8:1 or 16:1 (--num-rows-per-mux).";
@@ -423,7 +437,7 @@ std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options)
     const unsigned slices = rows / 4;
     // A slice's predecode input is two NAND2 gates; the c64 slice (past 32
     // cells a wordline) doubles them (scripts/generate_asap7_8t_wl_slices.py).
-    const unsigned nand_fins = mux * options.wordline_segment_bits() > 32 ? 24 : 12;
+    const unsigned nand_fins = options.wordline_slice_cells() > 32 ? 24 : 12;
     const unsigned ios = options.num_data_bits;  // IO blocks a bank's port drives
     auto pf = [](double fins, double loads) {
         return (fins * kGateFfPerFin + loads * kWireFfPerLoad) / 1000.0;

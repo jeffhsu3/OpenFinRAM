@@ -26,12 +26,24 @@ struct MainCliOptions {
     unsigned wordline_segments() const {
         return wordline_segment_bits() ? (num_data_bits / 2) / wordline_segment_bits() : 1;
     }
+    // Outer strips (--outer-strips, generated 6T, standard floorplan): one
+    // more strip at each stack's far end, so the segment farthest from the
+    // band is driven from both ends like the others and every driver slice
+    // is sized for half a segment.  A segment twice as long then has the
+    // wordline delay of one driven from one end, with half the strips.
+    bool outer_strips = false;
     // The wordline driver strips of one bank: one on each side of the
     // controller band, and a mid pair's two between every two segments of a
     // stack (a segment has a strip at each end, but the one farthest from
-    // the band).
+    // the band, unless the stacks have outer strips).
     unsigned wordline_strips() const {
-        return 2 * (1 + 2 * (wordline_segments() - 1));
+        return 2 * (1 + 2 * (wordline_segments() - 1) + (outer_strips ? 1 : 0));
+    }
+    // The bitcells along a wordline one driver slice is sized for: a
+    // segment's, or half of them when both its ends are driven.
+    unsigned wordline_slice_cells() const {
+        const unsigned cells = num_rows_per_mux * wordline_segment_bits();
+        return outer_strips ? (cells + 1) / 2 : cells;
     }
     // Select buffers (--select-buffers, generated 6T): every strip re-drives
     // the predecode lines (sel_lo) for its own slices from a row of standard
@@ -102,12 +114,12 @@ std::vector<unsigned> select_buffer_groups(unsigned slices);
 std::string select_buffer_cell(unsigned slices);
 // A strip's precharge buffer drives one wordline segment's IO blocks (two
 // strips share most segments, one drives the segment farthest from the
-// band): that load in pF, and the smallest buffer that holds it near 100 ps
-// of transition, empty when none does (more segments are the cure).  The
-// row has room for it past the last group's select buffers when the
-// strip's smallest group has precharge_buffer_min_group slices (9 to 11,
-// by the cell).  The assembler's precharge_buffer_cell and
-// precharge_buffer_fits are the same rules.
+// band unless the stacks have outer strips): that load in pF, and the
+// smallest buffer that holds it near 100 ps of transition, empty when none
+// does (more segments are the cure).  The row has room for it past the last
+// group's select buffers when the strip's smallest group has
+// precharge_buffer_min_group slices (9 to 11, by the cell).  The assembler's
+// precharge_buffer_cell and precharge_buffer_fits are the same rules.
 double precharge_segment_load_pf(const MainCliOptions& options);
 std::string precharge_buffer_cell(const MainCliOptions& options);
 unsigned precharge_buffer_min_group(const std::string& cell);
