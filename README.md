@@ -198,6 +198,38 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   Macros whose logic sets the height (x4x2x1, x16x16x1, x4x2x2, x4x8x2) keep
   theirs.  A run that fails place-and-route is retried with a lower target,
   or two more rows where the pins set the height.
+- Read margin: a read's clock edge reaches the wordline through the gated
+  select (sel_hi) and the sense amplifier through a longer chain of buffers
+  (`--num-sae-buf`, default 10).  Only that chain keeps the sense enable
+  behind the wordline, so whatever place-and-route adds to the wordline
+  enable comes off the read.  The controller's script holds it: after the
+  routed STA it times the clock's rising edge through the access gate to
+  sel_hi and sel_lo (the latest; sel_lo through its strip's select buffer
+  where there is one) and to sae (the earliest) at the controller's ports,
+  writes `sense_gap.rpt` beside the other reports, logs
+  `PERIPHERY_SENSE_GAP`, and fails the run unless the sense enable follows
+  by what the array needs.  That is the driver slice bringing the far end
+  of its wordline to half swing (8.7 ps for 4 cells, 18.3 for 32 and 28.1
+  for 64, driven from one end) and then the bitline pair splitting 100 mV
+  at the IO block (17 ps at 64 cells a bitline, 29 at 128, 55 at 256, 128
+  at 512: `scripts/sense_timing_6t.py` with the bitline's own RC).
+  Measured: x4x2x1 184 ps for 19 needed; x64x8x1
+  `--segment-bits 2 --precharge-buffers on` 154 for 28 (152 with
+  `--segment-bits 2 --strips-in-controller`); x256x64x1 at 8:1 with
+  `--segment-bits 4` 117 for 73 (143 with `--segment-bits 8 --outer-strips`);
+  x256x32x1 at 16:1 with `--segment-bits 4` (64 cells a slice) 85 for 83;
+  x256x2x1 74 for 64, and 90 at the 6.48 um band it had, where the wordline
+  enable got no repeater.  x512x2x1 fails (74-82 ps for 137) and passes
+  with `--num-sae-buf 16` (183 ps).  A failing run is retried like any
+  other place-and-route failure and then stops with the two numbers.  It
+  is a guard, not signoff.  Both sides are
+  at TT only.  The gap is the STA's, on the extracted-cell Liberty, whose
+  delays are about twice those of the schematic standard cells in the macro
+  deck: the whole-macro simulation of x256x2x1 shows that gap as 19-39 ps.
+  The need is Xyce on schematic array cells with the wires' RC, and its
+  100 mV is an assumed requirement (the simulated amplifier has no offset).
+  The lines from the controller to the strips and to the IO blocks are not
+  counted.  The two-port controller has no such check.
 - Outer strips (`--outer-strips`, standard floorplan): a strip at each stack's
   far end as well, so the segment farthest from the band is driven from both
   ends like the others, and every slice is sized for half a segment.  A
@@ -226,7 +258,9 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   the sense enable follows the wordline by only 19-39 ps: 30-48 ps at the
   6.48 um band, where place-and-route put no repeater on the wordline enable,
   and 67-69 ps in the October build.  The deck has no bitline wire RC, with
-  which 256 cells take 26 ps to split 25 mV, so that margin is not proven.
+  which 256 cells take 26 ps to split 25 mV and 55 ps to split 100 mV, so
+  the simulation does not prove that margin; the controller's read-margin
+  check (above) holds it on the STA's delays, 74 ps for 64 needed.
   x16x16x1 is 4.94 x 27.72 um against 6.18 x 49.37 um for the 8T x16x16x1.
 - `--strips-in-controller` works with one bank, segmented or not (see
   [Controller band](#controller-band)); `--share-port-b`

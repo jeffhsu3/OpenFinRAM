@@ -125,4 +125,32 @@ std::string precharge_buffer_cell(const MainCliOptions& options);
 unsigned precharge_buffer_min_group(const std::string& cell);
 bool precharge_buffer_fits(unsigned slices, const std::string& cell);
 
+// A read: the controller raises the gated wordline select (sel_hi) and, a
+// chain of buffers later (--num-sae-buf), the sense enable.  What the array
+// needs between the two at the controller's ports, ps, all at TT:
+//  * wordline_ps: a driver slice brings the far end of its wordline to half
+//    swing after its select (Xyce: the slice classes on released 6T cells,
+//    the M3 bar at 233 ohm/um; a segment driven from both ends is half of
+//    one driven from one);
+//  * bitline_ps: the pair then splits kSenseSplitMv at the IO block
+//    (scripts/sense_timing_6t.py: the 4:1 block, the bitline bar's own RC,
+//    the far cell read against the leakage of every other);
+//  * select_buffer_ps: what a strip's select buffer puts on sel_lo before
+//    its slices see it (--select-buffers; Liberty at a 50 ps input edge and
+//    the group's counted load).  It only delays the wordline if sel_lo is
+//    the later of the two selects.
+// The controller's place-and-route holds its post-route STA to them
+// (OpenRoadTclGenerator::set_sense_gap).  The lines from the ports to the
+// strips and to the IO blocks run the same length and are not counted.
+constexpr double kSenseSplitMv = 100.0;
+struct SenseGapNeed {
+    double wordline_ps = 0.0;
+    double bitline_ps = 0.0;
+    double select_buffer_ps = 0.0;
+    double floor_ps() const { return wordline_ps + bitline_ps; }
+};
+double wordline_far_end_ps(unsigned cells);
+double bitline_split_ps(unsigned cells);
+SenseGapNeed sense_gap_need(const MainCliOptions& options);
+
 #endif // MAIN_CONFIG_HELPERS_HPP

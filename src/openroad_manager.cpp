@@ -13,6 +13,26 @@
 #include "cell_utils.hpp"
 #include "layermap.hpp"
 
+namespace {
+// The script's own lines in an OpenROAD log, the last with this prefix.
+std::string last_log_line(const std::string& log_file, const std::string& prefix) {
+    std::ifstream log(log_file);
+    std::string line, found;
+    while (std::getline(log, line)) {
+        if (line.rfind(prefix, 0) == 0) found = line;
+    }
+    return found;
+}
+// Why a run failed, when its own gates stopped it ("PERIPHERY_STA: ...").
+std::string periphery_error(const std::string& log_file) {
+    for (const char* gate : {"PERIPHERY_STA: ", "PERIPHERY_STRUCTURE: ", "PERIPHERY_DRC: "}) {
+        const std::string line = last_log_line(log_file, gate);
+        if (!line.empty()) return line;
+    }
+    return "no PERIPHERY_ gate reported: OpenROAD itself stopped";
+}
+}  // namespace
+
 OpenRoadManager::OpenRoadManager(const MainCliOptions& cli_options)
     : cli_options_(cli_options) {}
 
@@ -49,6 +69,14 @@ bool OpenRoadManager::run_openroad_flow() {
             else if (pf > 0.020) drivers[prefix] = "BUFx12f_ASAP7_75t_R";
         }
         gen.set_port_drivers(drivers);
+        // Nothing else holds the sense enable behind the wordline: the two
+        // leave the controller a buffer chain apart, and what place-and-route
+        // adds to the wordline enable comes off the read (x256x2x1: 90 ps at
+        // a 6.48 um band, 74 ps at 3.78 um, where repair_design buffered that
+        // net's wire).  The script checks the routed gap against what this
+        // array's wordline and bitline need.
+        const SenseGapNeed need = sense_gap_need(cli_options_);
+        gen.set_sense_gap(need.wordline_ps, need.bitline_ps, kSenseSplitMv, need.select_buffer_ps);
     }
 
     // QoR and work_dir must match YosysManager's CWD-based tmp (repo/tmp) for consistency
@@ -276,6 +304,7 @@ bool OpenRoadManager::run_openroad_flow() {
     for (int retry = 0; retry < 2 && !or_ok; ++retry) {
         LOGW << "OpenROAD periphery flow failed at " << utilization
              << " utilization (see " << log_file << "); retrying lower";
+        LOGW << "  " << periphery_error(log_file);
         const double failed_height = gen.planned_height(sram_width);
         utilization -= 0.06;
         gen.set_max_utilization(utilization);
@@ -300,7 +329,11 @@ bool OpenRoadManager::run_openroad_flow() {
     if (!or_ok) {
         LOGE << "OpenROAD periphery flow failed (see " << log_file
              << "); refusing to use partial DEF/netlist artifacts";
+        LOGE << "  " << periphery_error(log_file);
         return false;
+    }
+    if (const std::string gap = last_log_line(log_file, "PERIPHERY_SENSE_GAP"); !gap.empty()) {
+        LOGI << "Controller read margin: " << gap;
     }
 
     if (!file_exists(def_path) || !file_exists(v_path)) {

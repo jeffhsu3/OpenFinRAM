@@ -541,6 +541,120 @@ TEST(OpenRoadTclGeneratorTest, PortDriversAreSizedAndFrozen) {
     EXPECT_EQ(script.find("remove_buffers", cts), std::string::npos);
 }
 
+// What a read needs between the wordline select and the sense enable, by the
+// macro's shape: the slice to the far end of its wordline, then the bitline.
+TEST(SenseGapNeedTest, GrowsWithTheWordlineASliceDrivesAndTheBitline) {
+    // The measured points themselves.
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(4), 8.66);
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(32), 18.34);
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(33), 16.83);  // the c64 slice's shortest line
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(64), 28.12);
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(1), 8.16);
+    EXPECT_NEAR(wordline_far_end_ps(24), 14.62 + (18.34 - 14.62) * 7 / 15, 1e-9);
+    EXPECT_DOUBLE_EQ(bitline_split_ps(8), 10.0);
+    EXPECT_DOUBLE_EQ(bitline_split_ps(256), 55.0);
+    EXPECT_DOUBLE_EQ(bitline_split_ps(384), (55.0 + 128.0) / 2);
+    EXPECT_DOUBLE_EQ(bitline_split_ps(2048), 436.0 + 2 * (436.0 - 128.0));
+
+    // x256x2x1: one bit a stack at 4:1, 256 cells a bitline.
+    MainCliOptions tall;
+    tall.bitcell_6t = true;
+    tall.num_wls = 128;
+    tall.num_data_bits = 2;
+    tall.num_rows_per_mux = 4;
+    SenseGapNeed need = sense_gap_need(tall);
+    EXPECT_DOUBLE_EQ(need.wordline_ps, 8.66);
+    EXPECT_DOUBLE_EQ(need.bitline_ps, 55.0);
+    EXPECT_DOUBLE_EQ(need.select_buffer_ps, 0.0);
+    EXPECT_NEAR(need.floor_ps(), 63.66, 1e-9);
+
+    // 128 kbit at 8:1: 4-bit segments are 32 cells from one end; 8-bit ones
+    // with outer strips are driven from both and need no more.
+    MainCliOptions big = tall;
+    big.num_data_bits = 64;
+    big.num_rows_per_mux = 8;
+    big.segment_bits = 4;
+    big.select_buffers = true;
+    need = sense_gap_need(big);
+    EXPECT_DOUBLE_EQ(need.wordline_ps, 18.34);
+    // A BUFx8 into 16 slices of two 6-fin NAND inputs each.
+    EXPECT_NEAR(need.select_buffer_ps, 35.5 + 0.52 * 16 * (12 * 0.103 + 0.1), 1e-9);
+    MainCliOptions outer = big;
+    outer.segment_bits = 8;
+    outer.outer_strips = true;
+    EXPECT_DOUBLE_EQ(sense_gap_need(outer).floor_ps(), need.floor_ps());
+    outer.outer_strips = false;  // 64 cells from one end: the c64 slice
+    EXPECT_DOUBLE_EQ(sense_gap_need(outer).wordline_ps, 28.12);
+    EXPECT_GT(sense_gap_need(outer).select_buffer_ps, need.select_buffer_ps);
+
+    // Twice the bitline more than doubles what the sense enable must wait.
+    MainCliOptions taller = tall;
+    taller.num_wls = 256;
+    EXPECT_DOUBLE_EQ(sense_gap_need(taller).bitline_ps, 128.0);
+}
+
+// The 6T controller's script times the read's clock edge to the wordline
+// selects and to the sense enable, and stops when they come out too close.
+TEST(OpenRoadTclGeneratorTest, SenseGapIsTimedThroughTheAccessGateAndHeldToTheArraysNeed) {
+    auto script_for = [](bool one_port, bool with_gap) {
+        OpenRoadTclGenerator gen;
+        gen.set_design_name("ctrl_decode");
+        gen.set_site_name("asap7sc7p5t");
+        gen.set_site_height(0.27);
+        gen.set_one_port(one_port);
+        if (with_gap) gen.set_sense_gap(/*wordline_ps=*/18.34, /*bitline_ps=*/55.0, /*split_mv=*/100.0,
+                                        /*select_buffer_ps=*/46.63);
+        EXPECT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+        const std::string out =
+            (std::filesystem::temp_directory_path() / "or_run_tcl_sense_gap_test" / "run.tcl").string();
+        EXPECT_TRUE(gen.generate_run_tcl(
+            /*width=*/15.0, /*height=*/0.0, /*output_file=*/out,
+            /*num_wlt=*/8, /*num_wlb=*/8, /*num_ysel=*/4,
+            /*addr_width=*/6, /*num_mux=*/4,
+            /*spice_only=*/false, /*col_width=*/7.5,
+            /*platform_path=*/"/nonexistent/platform/asap7",
+            /*tech_root=*/std::string(REPO_ROOT) + "/tech",
+            /*single_port=*/false));
+        return read_file(out);
+    };
+    const std::string script = script_for(true, true);
+    // After the routed parasitics and the slack gates, before the verdict.
+    const auto routed = script.find("estimate_parasitics -global_routing");
+    const auto gate = script.find("set sense_gate [get_pins -quiet u_access_gate/A]");
+    const auto pass = script.find("puts \"PERIPHERY_STA_PASS");
+    ASSERT_NE(gate, std::string::npos);
+    EXPECT_LT(script.find("detailed_route"), routed);
+    EXPECT_LT(routed, gate);
+    EXPECT_LT(script.find("PERIPHERY_STA: hold timing violation"), gate);
+    EXPECT_LT(gate, pass);
+    // The rising clock edge as data: latest to the selects, earliest to the
+    // sense enable.
+    EXPECT_NE(script.find("set sel_hi_ps [periphery_edge_ps max [get_ports -quiet sel_hi_A*] -rise_through $sense_gate]"),
+              std::string::npos);
+    EXPECT_NE(script.find("set sel_lo_ps [periphery_edge_ps max [get_ports -quiet sel_lo_A*]]"), std::string::npos);
+    EXPECT_NE(script.find("set sae_ps [periphery_edge_ps min [get_ports -quiet sae_A*] -rise_through $sense_gate]"),
+              std::string::npos);
+    EXPECT_NE(script.find("find_timing_paths {*}$args -rise_to $ports -path_delay $pick"), std::string::npos);
+    // The wordline rises on the later select; sel_lo goes through its strip buffer.
+    EXPECT_NE(script.find("set select_ps [expr {max($sel_hi_ps, $sel_lo_ps + 46.6)}]"), std::string::npos);
+    EXPECT_NE(script.find("set sense_gap_ps [expr {$sae_ps - $select_ps}]"), std::string::npos);
+    // The report is written before the gate can stop the script.
+    const auto report = script.find("open sense_gap.rpt w");
+    const auto stop = script.find("if {$sense_gap_ps < 73.3} { error [format \"PERIPHERY_STA: the sense enable follows");
+    ASSERT_NE(report, std::string::npos);
+    ASSERT_NE(stop, std::string::npos);
+    EXPECT_LT(report, stop);
+    EXPECT_LT(script.find("close $sense_fd"), stop);
+    EXPECT_NE(script.find("(wordline 18.3 + bitline 55.0 to split 100.0 mV)", stop), std::string::npos);
+    EXPECT_NE(script.find("--num-sae-buf", stop), std::string::npos);
+    EXPECT_NE(script.find("PERIPHERY_SENSE_GAP sel_hi=%.1f sel_lo=%.1f sae=%.1f gap=%.1f needed=73.3 ps"),
+              std::string::npos);
+
+    // Only where it was asked for: the two-port controller's script has none.
+    EXPECT_EQ(script_for(true, false).find("sense_gap"), std::string::npos);
+    EXPECT_EQ(script_for(false, false).find("sense_gap"), std::string::npos);
+}
+
 // --strips-in-controller: the die is the band between the stacks, the strips
 // fixed instances in it, routed to and then removed.
 TEST(OpenRoadTclGeneratorTest, BandTakesTheStripsInAndHandsTheirPinsTheSelects) {
