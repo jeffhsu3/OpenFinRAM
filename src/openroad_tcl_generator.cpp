@@ -7,6 +7,7 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cstdio>
 #include <cstdlib>
 
 #include "plog/Log.h"
@@ -52,6 +53,50 @@ bool read_band_plan(const std::string& dir, BandPlan& plan) {
     plan.halo_y = values["halo_y"];
     plan.min_height = values.count("min_height") ? values["min_height"] : 0.0;
     return plan.width > 0.0;
+}
+
+double OpenRoadTclGenerator::port_driver_area(const std::string& netlist_path, const std::string& lef_path,
+                                              const std::string& cell) const {
+    // The cell's area, from "MACRO name ... SIZE w BY h".
+    double cell_area = -1.0;
+    {
+        std::ifstream lef(lef_path);
+        std::string word, macro;
+        while (lef >> word) {
+            if (word == "MACRO") {
+                lef >> macro;
+            } else if (word == "SIZE" && macro == cell) {
+                double w = 0.0, h = 0.0;
+                std::string by;
+                if (lef >> w >> by >> h) cell_area = w * h;
+                break;
+            }
+        }
+    }
+    std::ifstream netlist(netlist_path);
+    if (cell_area < 0.0 || !netlist.is_open()) return -1.0;
+    unsigned bits = 0;
+    std::string line;
+    while (std::getline(netlist, line)) {
+        std::istringstream words(line);
+        std::string keyword, range, name;
+        if (!(words >> keyword) || keyword != "output" || !(words >> range)) continue;
+        unsigned width = 1;
+        if (range.front() == '[') {
+            int msb = 0, lsb = 0;
+            if (std::sscanf(range.c_str(), "[%d:%d]", &msb, &lsb) != 2 || !(words >> name)) continue;
+            width = static_cast<unsigned>(std::abs(msb - lsb)) + 1;
+        } else {
+            name = range;
+        }
+        // The run sizes a port by the last prefix that matches it.
+        std::string driver;
+        for (const auto& [prefix, sized] : port_drivers_) {
+            if (name.compare(0, prefix.size(), prefix) == 0) driver = sized;
+        }
+        if (driver == cell) bits += width;
+    }
+    return bits * cell_area;
 }
 
 double OpenRoadTclGenerator::band_die_height(double width) const {
@@ -127,13 +172,7 @@ double OpenRoadTclGenerator::calculate_floorplan_height(double width) const {
     // Leave room for load/slew repair, CTS, taps, and fillers.  The previous
     // 90% sizing target made the load-aware controller impossible to repair.
     const double max_util = max_utilization_;
-    double min_h = qor_.cell_area / width;
-    double aligned = align_to_site_height(min_h);
-    double util = qor_.cell_area / (width * aligned);
-    if (util > max_util) {
-        double target = qor_.cell_area / (width * max_util);
-        aligned = align_to_site_height(target);
-    }
+    double aligned = align_to_site_height(qor_.cell_area / (width * max_util) + reserved_core_area_ / width);
     if (aligned < min_height_) aligned = align_to_site_height(min_height_);
     return aligned;
 }

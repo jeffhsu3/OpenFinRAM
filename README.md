@@ -172,23 +172,43 @@ The two-port machinery with port A alone, on the released ASAP7 6T cell:
   and warns when it cannot.  x64x8x1 `--segment-bits 2 --precharge-buffers on`
   matches strict LVS with and without `--strips-in-controller`, at the same
   size and with no DRC marker of the buffers' own, and passes the whole-macro Xyce
-  program (clk->Q 234-239 ps): the copies release 15 ps after the controller's
+  program (clk->Q 234-240 ps): the copies release 15 ps after the controller's
   line and 64-80 ps before a wordline rises (in the first two cycles 80 ps,
-  against 70 at FF and 90 at SS).  With them the controller passes its slew
-  check at 128 kbit (x256x64x1 at 8:1 and x256x32x1 at 16:1,
-  `--segment-bits 4`), and x256x64x1 at 8:1 assembles and routes: 16622 nets
-  connected, no routing violation, 30.5 x 202.4 um.  Its detailed route takes
-  2 h 41 min on the assembler's two threads, past the one-hour
+  against 70 at FF and 90 at SS; probed at the 5.40 um band the macro had
+  before the height rule below, which moved clk->WL by 1 ps).  With them the
+  controller passes its slew check at 128 kbit (x256x64x1 at 8:1 and
+  x256x32x1 at 16:1, `--segment-bits 4`), and x256x64x1 at 8:1 assembles and
+  routes: 16622 nets connected, no routing violation, 30.5 x 200.8 um.  Its
+  detailed route takes about 3 h on the assembler's two threads (2 h 41 min
+  and 3 h 09 min in two runs on a loaded machine), past the one-hour
   `--route-timeout` the flow leaves at its default, so that macro was
   assembled by `scripts/compile_asap7_2rw.py` directly with a longer one; LVS,
   DRC and simulation are not run at that size.
+- Controller band height (standard floorplan): the taller of two rules, in whole
+  row pairs.  Pins: port A's inputs (address, ce_n, we_n, oe_n) stand in order
+  on the band's left edge 0.192 um apart, which pin placement seats once the
+  band is 1.28 + 0.192 um an input tall (it was a 0.4 um allowance an input).
+  Cells: the synthesized logic at 50 %, as before, plus the BUFx24 output
+  drivers (the lines over 60 fF) at 60 %.  The synthesized area has no output
+  drivers, and at 128 kbit there are 78 of those, 34 um² beside 40 um² of
+  logic.  That makes the band 3.78 um at 32 kbit (x256x32x1,
+  `--segment-bits 8`; it was 6.48 um) and 4.86 um at 128 kbit (x256x64x1 at
+  8:1 and x256x32x1 at 16:1; 6.48 and 7.02 um), where 4.32 um ends one select
+  line over its slew limit; x64x8x1 and x256x2x1 are 3.78 um (5.40 and 6.48).
+  Macros whose logic sets the height (x4x2x1, x16x16x1, x4x2x2, x4x8x2) keep
+  theirs.  A run that fails place-and-route is retried with a lower target,
+  or two more rows where the pins set the height.
 - The `.lib` timing and energy come from `scripts/timing_model_6t.py`, fit to
   whole-macro simulations (`tech/timing/sram_6t_timing.json`).
 - Verified: strict LVS match (`scripts/verify_macro.py`) on x4x2x1, x16x16x1,
   x64x8x1 (segmented), x256x2x1 and multi-bank x4x2x2/x4x8x2; the whole-macro Xyce
   program (`scripts/simulate_macro.py`) passes on x4x2x1, x16x16x1 and x256x2x1
-  (clk->Q ~250 ps).  x16x16x1 is 6.64 x 25.28 um against 6.00 x 52.71 um for the
-  8T x16x16x1.
+  (clk->Q ~250 ps; x256x2x1 221-227 ps with its 3.78 um band).  On x256x2x1
+  the sense enable follows the wordline by only 19-39 ps: 30-48 ps at the
+  6.48 um band, where place-and-route put no repeater on the wordline enable,
+  and 67-69 ps in the October build.  The deck has no bitline wire RC, with
+  which 256 cells take 26 ps to split 25 mV, so that margin is not proven.
+  x16x16x1 is 4.94 x 27.72 um against 6.18 x 49.37 um for the 8T x16x16x1.
 - `--strips-in-controller` works with one bank, segmented or not (see
   [Controller band](#controller-band)); `--share-port-b`
   does not apply.
@@ -271,9 +291,11 @@ Results (`scripts/verify_macro.py`, `scripts/simulate_macro.py`):
 
 - 8T x4x2x2 with `--share-port-b`: 20 % smaller than without the band, LVS match.
   x8x2x2 also matches LVS.
-- 6T x64x8x1 with `--segment-bits 2`: 9.99 x 20.20 um (202 um²) against
-  10.03 x 22.52 um (226 um²) without the band, 11 % smaller. LVS matches; the
-  macro is too large to simulate at transistor level.
+- 6T x64x8x1 with `--segment-bits 2`: 10.12 x 20.40 um (206 um²) against
+  10.12 x 21.00 um (212 um²) without the band, 3 % smaller (it was 11 % before
+  the standard floorplan's band took its height from the measured pin
+  spacing). LVS matches; the macro is too large to simulate at transistor
+  level.
 - 6T x16x8x1: 4.81 x 16.91 um, LVS match. The Xyce program passes, with clk->WL
   128 ps, clk->SAE 223 ps and clk->Q about 260 ps.
 - DRC findings fall in the same categories as without the band: 52 against 63

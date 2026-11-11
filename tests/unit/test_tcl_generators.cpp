@@ -264,6 +264,65 @@ TEST(OpenRoadTclGeneratorUnitTest, FloorplanHeightRespectsUtilizationCap) {
     EXPECT_NEAR(h / 0.54, std::nearbyint(h / 0.54), 1e-9);  // even row count
 }
 
+// The generated 6T controller's floorplan counts the heavy output drivers,
+// which the synthesized area does not have.
+TEST(OpenRoadTclGeneratorUnitTest, FloorplanReservesRoomForThePortDrivers) {
+    const auto dir = std::filesystem::temp_directory_path() / "or_port_drivers_test";
+    std::filesystem::create_directories(dir);
+    {
+        std::ofstream netlist(dir / "netlist.v");
+        netlist << "module ctrl_decode(clk, A_A, sel_hi_A, sel_lo_A, sae_A, clk_out);\n"
+                   "  input clk;\n  input [10:0] A_A;\n"
+                   "  output [63:0] sel_hi_A;\n  wire [63:0] sel_hi_A;\n"
+                   "  output [3:0] sel_lo_A;\n  output [0:0] sae_A;\n  output clk_out;\n"
+                   "endmodule\n";
+    }
+    const std::string netlist = (dir / "netlist.v").string();
+    const std::string lef = std::string(REPO_ROOT) + "/tech/lef/asap7sc7p5t_28_R.lef";
+    const std::string x24 = "BUFx24_ASAP7_75t_R", x12 = "BUFx12f_ASAP7_75t_R";
+    OpenRoadTclGenerator gen;
+    gen.set_site_height(0.27);
+    gen.set_max_utilization(0.5);
+    ASSERT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+    gen.set_port_drivers({{"sel_hi_A", x24}, {"sae_A", x24}, {"sel_lo_A", x12}});
+    // 65 BUFx24 (1.62 x 0.27 um) and 4 BUFx12f (0.972 x 0.27); clk_out has no sized driver.
+    const double heavy = gen.port_driver_area(netlist, lef, x24);
+    EXPECT_NEAR(heavy, 65 * 1.62 * 0.27, 1e-6);
+    EXPECT_NEAR(gen.port_driver_area(netlist, lef, x12), 4 * 0.972 * 0.27, 1e-6);
+    EXPECT_NEAR(gen.port_driver_area(netlist, lef, "BUFx2_ASAP7_75t_R"), 0.0, 1e-12);
+    // A file that cannot be read is an error, not a quietly smaller die.
+    EXPECT_LT(gen.port_driver_area((dir / "absent.v").string(), lef, x24), 0.0);
+    EXPECT_LT(gen.port_driver_area(netlist, (dir / "absent.lef").string(), x24), 0.0);
+    EXPECT_LT(gen.port_driver_area(netlist, lef, "NO_SUCH_CELL"), 0.0);
+
+    // The logic at 50 % as before, and the drivers at 60 % on top.
+    const double logic_only = gen.calculate_floorplan_height(30.0);
+    EXPECT_NEAR(logic_only, 8.64, 1e-9);  // 123.45 / (30 * 0.5) = 8.23 um -> 32 rows
+    gen.set_reserved_core_area(heavy / 0.60);
+    const double h = gen.calculate_floorplan_height(30.0);
+    const double target = (123.45 / 0.5 + heavy / 0.60) / 30.0;
+    EXPECT_GE(h, target - 1e-9);
+    EXPECT_LT(h, target + 0.54);
+    EXPECT_GT(h, logic_only);
+    EXPECT_NEAR(gen.planned_height(30.0), h, 1e-9);
+    std::filesystem::remove_all(dir);
+}
+
+// A floor on the height is rounded up to whole row pairs, so a failed run's
+// height plus one row is the next pair (the flow's retry when pins bind).
+TEST(OpenRoadTclGeneratorUnitTest, MinimumHeightStepsByRowPairs) {
+    OpenRoadTclGenerator gen;
+    gen.set_site_height(0.27);
+    gen.set_max_utilization(0.5);
+    ASSERT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+    // 13 ordered inputs on the left edge: 1.28 + 0.192 * 13 = 3.776 um.
+    gen.set_min_height(1.28 + 0.192 * 13);
+    const double h = gen.planned_height(100.0);
+    EXPECT_NEAR(h, 3.78, 1e-9);
+    gen.set_min_height(h + 0.27);
+    EXPECT_NEAR(gen.planned_height(100.0), 4.32, 1e-9);
+}
+
 TEST(OpenRoadTclGeneratorUnitTest, FloorplanCommandFormat) {
     OpenRoadTclGenerator gen;
     gen.set_site_name("asap7sc7p5t");

@@ -58,6 +58,19 @@ public:
     // prefix -> cell.  repair_design leaves a 170 fF array-wide port on a
     // BUFx8 (OpenROAD does not grow a port's own buffer past its slew).
     void set_port_drivers(std::map<std::string, std::string> drivers) { port_drivers_ = std::move(drivers); }
+    // Cell area (um^2) of the output drivers above whose cell is `cell`: the
+    // netlist's output bits with that driver (Yosys's "output [63:0] x;")
+    // times the cell's LEF size.  Negative if a file cannot be read or the
+    // cell is not in the LEF.
+    double port_driver_area(const std::string& netlist_path, const std::string& lef_path,
+                            const std::string& cell) const;
+    // Core area (um^2) the derived floorplan keeps on top of the cells at
+    // the utilization cap: cells the synthesized area does not have.
+    void set_reserved_core_area(double area) { reserved_core_area_ = area; }
+    // The die height the run will use for `width`.
+    double planned_height(double width) const {
+        return band_.enabled ? band_die_height(width) : calculate_floorplan_height(width);
+    }
     // The band's die height for `width`: rows for the cells at the
     // utilization cap plus the strips' keep-outs, and the two insets.
     double band_die_height(double width) const;
@@ -112,6 +125,7 @@ private:
     BandPlan band_;
     bool one_port_ = false;
     double min_height_ = 0.0;
+    double reserved_core_area_ = 0.0;
     std::map<std::string, std::string> port_drivers_;
 
     // helpers
