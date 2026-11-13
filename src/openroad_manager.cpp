@@ -13,6 +13,26 @@
 #include "cell_utils.hpp"
 #include "layermap.hpp"
 
+namespace {
+// The script's own lines in an OpenROAD log, the last with this prefix.
+std::string last_log_line(const std::string& log_file, const std::string& prefix) {
+    std::ifstream log(log_file);
+    std::string line, found;
+    while (std::getline(log, line)) {
+        if (line.rfind(prefix, 0) == 0) found = line;
+    }
+    return found;
+}
+// Why a run failed, when its own gates stopped it ("PERIPHERY_STA: ...").
+std::string periphery_error(const std::string& log_file) {
+    for (const char* gate : {"PERIPHERY_STA: ", "PERIPHERY_STRUCTURE: ", "PERIPHERY_DRC: "}) {
+        const std::string line = last_log_line(log_file, gate);
+        if (!line.empty()) return line;
+    }
+    return "no PERIPHERY_ gate reported: OpenROAD itself stopped";
+}
+}  // namespace
+
 OpenRoadManager::OpenRoadManager(const MainCliOptions& cli_options)
     : cli_options_(cli_options) {}
 
@@ -20,20 +40,27 @@ bool OpenRoadManager::run_openroad_flow() {
     OpenFinRAM::OpenRoadTclGenerator gen;
     gen.set_design_name("ctrl_decode");
     gen.set_site_name("asap7sc7p5t");
-    gen.set_site_height(0.27);
+    const double site_height = 0.27;
+    gen.set_site_height(site_height);
     // 40% was safe while the two-port controller carried a buffer stage per
     // wordline; since the driver slices took the wordlines it is small
     // logic plus its delay chains; 50% leaves hold repair its buffers (60%
     // did not).
-    gen.set_max_utilization(cli_options_.single_port ? 0.40 : 0.50);
+    const double base_utilization = cli_options_.single_port ? 0.40 : 0.50;
+    gen.set_max_utilization(base_utilization);
     gen.set_bitcell_width(cli_options_.bitcell_width);
     gen.set_one_port(cli_options_.bitcell_6t);
     if (cli_options_.bitcell_6t) {
         // Port A's inputs (address, ce_n, we_n, oe_n) stand in order on the
-        // band's left edge; pin placement found six slots in 2.16 um, so
-        // give each 0.4 um and two to spare.  A wide multi-bank band of
-        // little logic is otherwise too short for them.
-        gen.set_min_height(0.4 * (get_addr_width(cli_options_) + 3 + 2));
+        // band's left edge.  With the standard floorplan's 0.192 um pin
+        // spacing, pin placement seats the group of n once the die is
+        // 1.27 + 0.192 n um tall (found by bisection at 11, 13 and 15 pins:
+        // 3.40, 3.78 and 4.16 um pass, 3.36, 3.76 and 4.14 do not).  A wide
+        // multi-bank band of little logic is otherwise too short for them.
+        // The strips-in-controller band places its pins on other terms and
+        // keeps its 0.4 um a pin and two to spare.
+        const int inputs = get_addr_width(cli_options_) + 3;
+        gen.set_min_height(cli_options_.use_controller_band() ? 0.4 * (inputs + 2) : 1.28 + 0.192 * inputs);
         // The array-wide outputs get a driver for their counted load (the
         // SDC's set_load): BUFx24 holds 170 fF under the 150 ps slew limit.
         std::map<std::string, std::string> drivers;
@@ -42,6 +69,14 @@ bool OpenRoadManager::run_openroad_flow() {
             else if (pf > 0.020) drivers[prefix] = "BUFx12f_ASAP7_75t_R";
         }
         gen.set_port_drivers(drivers);
+        // Nothing else holds the sense enable behind the wordline: the two
+        // leave the controller a buffer chain apart, and what place-and-route
+        // adds to the wordline enable comes off the read (x256x2x1: 90 ps at
+        // a 6.48 um band, 74 ps at 3.78 um, where repair_design buffered that
+        // net's wire).  The script checks the routed gap against what this
+        // array's wordline and bitline need.
+        const SenseGapNeed need = sense_gap_need(cli_options_);
+        gen.set_sense_gap(need.wordline_ps, need.bitline_ps, kSenseSplitMv, need.select_buffer_ps);
     }
 
     // QoR and work_dir must match YosysManager's CWD-based tmp (repo/tmp) for consistency
@@ -199,6 +234,30 @@ bool OpenRoadManager::run_openroad_flow() {
         platform_path = tech_root;
     }
 
+    if (cli_options_.bitcell_6t && !cli_options_.use_controller_band()) {
+        // The synthesized area has no output drivers.  The 50 % above has
+        // always covered the small ones, but a BUFx24 is six BUFx2 wide and
+        // at 128 kbit there are 78 of them, 34 um^2 beside 40 um^2 of logic:
+        // the old 0.4 um a pin made room for them by accident.  They are
+        // counted, at 60 % (they need no hold buffers or clock tree of their
+        // own): 4.86 um at 128 kbit, where 4.32 um ends one 151 fF select
+        // line over its slew limit.
+        const std::string heavy = "BUFx24_ASAP7_75t_R";
+        const std::string netlist_path =
+            qor_path.substr(0, qor_path.size() - std::string("qor_report.txt").size()) + "netlist.v";
+        std::string cell_lef = join_path(platform_path, "lef/asap7sc7p5t_28_R.lef");
+        if (!file_exists(cell_lef)) cell_lef = join_path(tech_root, "lef/asap7sc7p5t_28_R.lef");
+        const double area = gen.port_driver_area(netlist_path, cell_lef, heavy);
+        if (area < 0.0) {
+            LOGE << "Cannot count the controller's output drivers from " << netlist_path
+                 << " and " << cell_lef;
+            return false;
+        }
+        gen.set_reserved_core_area(area / 0.60);
+        LOGI << "Controller sized for " << gen.get_qor_report().cell_area << " um^2 of logic and "
+             << area << " um^2 of " << heavy << " output drivers";
+    }
+
     if (!gen.generate_run_tcl(sram_width, 0.0, output_tcl,
                               cli_options_.num_wls, cli_options_.num_wls,
                               num_ysel, addr_width,
@@ -238,13 +297,21 @@ bool OpenRoadManager::run_openroad_flow() {
     // The utilization cap is a target, and the controller's place-and-route
     // can still end one short of a clean route (a two-bank controller left a
     // single 1 nm M1 spacing at 50 %).  Retry with a little more height
-    // rather than lowering the target for every build.
-    double utilization = cli_options_.single_port ? 0.40 : 0.50;
+    // rather than lowering the target for every build.  Where the height is
+    // the pins' and not the cells', a lower target changes nothing: such a
+    // retry takes two more rows instead.
+    double utilization = base_utilization;
     for (int retry = 0; retry < 2 && !or_ok; ++retry) {
         LOGW << "OpenROAD periphery flow failed at " << utilization
              << " utilization (see " << log_file << "); retrying lower";
+        LOGW << "  " << periphery_error(log_file);
+        const double failed_height = gen.planned_height(sram_width);
         utilization -= 0.06;
         gen.set_max_utilization(utilization);
+        if (gen.planned_height(sram_width) <= failed_height) {
+            // Rows come in pairs: one more row's height is the next pair.
+            gen.set_min_height(failed_height + site_height);
+        }
         if (!gen.generate_run_tcl(sram_width, 0.0, output_tcl,
                                   cli_options_.num_wls, cli_options_.num_wls,
                                   num_ysel, addr_width,
@@ -262,7 +329,11 @@ bool OpenRoadManager::run_openroad_flow() {
     if (!or_ok) {
         LOGE << "OpenROAD periphery flow failed (see " << log_file
              << "); refusing to use partial DEF/netlist artifacts";
+        LOGE << "  " << periphery_error(log_file);
         return false;
+    }
+    if (const std::string gap = last_log_line(log_file, "PERIPHERY_SENSE_GAP"); !gap.empty()) {
+        LOGI << "Controller read margin: " << gap;
     }
 
     if (!file_exists(def_path) || !file_exists(v_path)) {

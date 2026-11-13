@@ -7,6 +7,7 @@
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cstdio>
 #include <cstdlib>
 
 #include "plog/Log.h"
@@ -52,6 +53,50 @@ bool read_band_plan(const std::string& dir, BandPlan& plan) {
     plan.halo_y = values["halo_y"];
     plan.min_height = values.count("min_height") ? values["min_height"] : 0.0;
     return plan.width > 0.0;
+}
+
+double OpenRoadTclGenerator::port_driver_area(const std::string& netlist_path, const std::string& lef_path,
+                                              const std::string& cell) const {
+    // The cell's area, from "MACRO name ... SIZE w BY h".
+    double cell_area = -1.0;
+    {
+        std::ifstream lef(lef_path);
+        std::string word, macro;
+        while (lef >> word) {
+            if (word == "MACRO") {
+                lef >> macro;
+            } else if (word == "SIZE" && macro == cell) {
+                double w = 0.0, h = 0.0;
+                std::string by;
+                if (lef >> w >> by >> h) cell_area = w * h;
+                break;
+            }
+        }
+    }
+    std::ifstream netlist(netlist_path);
+    if (cell_area < 0.0 || !netlist.is_open()) return -1.0;
+    unsigned bits = 0;
+    std::string line;
+    while (std::getline(netlist, line)) {
+        std::istringstream words(line);
+        std::string keyword, range, name;
+        if (!(words >> keyword) || keyword != "output" || !(words >> range)) continue;
+        unsigned width = 1;
+        if (range.front() == '[') {
+            int msb = 0, lsb = 0;
+            if (std::sscanf(range.c_str(), "[%d:%d]", &msb, &lsb) != 2 || !(words >> name)) continue;
+            width = static_cast<unsigned>(std::abs(msb - lsb)) + 1;
+        } else {
+            name = range;
+        }
+        // The run sizes a port by the last prefix that matches it.
+        std::string driver;
+        for (const auto& [prefix, sized] : port_drivers_) {
+            if (name.compare(0, prefix.size(), prefix) == 0) driver = sized;
+        }
+        if (driver == cell) bits += width;
+    }
+    return bits * cell_area;
 }
 
 double OpenRoadTclGenerator::band_die_height(double width) const {
@@ -127,13 +172,7 @@ double OpenRoadTclGenerator::calculate_floorplan_height(double width) const {
     // Leave room for load/slew repair, CTS, taps, and fillers.  The previous
     // 90% sizing target made the load-aware controller impossible to repair.
     const double max_util = max_utilization_;
-    double min_h = qor_.cell_area / width;
-    double aligned = align_to_site_height(min_h);
-    double util = qor_.cell_area / (width * aligned);
-    if (util > max_util) {
-        double target = qor_.cell_area / (width * max_util);
-        aligned = align_to_site_height(target);
-    }
+    double aligned = align_to_site_height(qor_.cell_area / (width * max_util) + reserved_core_area_ / width);
     if (aligned < min_height_) aligned = align_to_site_height(min_height_);
     return aligned;
 }
@@ -552,6 +591,57 @@ dict for {net pins} $dp_reset_nets {
     file << "set hold_slack [worst_slack -min]\n";
     file << "if {$setup_slack < -0.001} { error \"PERIPHERY_STA: setup timing violation $setup_slack ns\" }\n";
     file << "if {$hold_slack < -0.001} { error \"PERIPHERY_STA: hold timing violation $hold_slack ns\" }\n";
+    if (!single_port && sense_gap_.enabled) {
+        // The slacks above are against the SDC's port delays and say nothing
+        // of one output against another.  The read's margin is such a pair:
+        // the clock's rising edge is data from u_access_gate on, to sel_hi
+        // through the wordline chain and to sae through the longer one.  (A
+        // plain report_checks to those ports shows the latch's paths, which
+        // leave on the falling edge.)  The wordline rises on the later of
+        // its two selects; sel_lo leaves the address registers on the same
+        // edge.
+        auto ps = [](double value) {
+            std::ostringstream text;
+            text << std::fixed << std::setprecision(1) << value;
+            return text.str();
+        };
+        const std::string need = ps(sense_gap_.wordline_ps + sense_gap_.bitline_ps);
+        const std::string needs = "wordline " + ps(sense_gap_.wordline_ps) + " + bitline " + ps(sense_gap_.bitline_ps)
+            + " to split " + ps(sense_gap_.split_mv) + " mV";
+        file << "proc periphery_edge_ps {pick ports args} {\n";
+        file << "    set found {}\n";
+        file << "    if {[llength $ports] == 0} { return $found }\n";
+        file << "    foreach end [find_timing_paths {*}$args -rise_to $ports -path_delay $pick -group_path_count [llength $ports]] {\n";
+        file << "        set t [expr {[$end data_arrival_time] * 1e12}]\n";
+        file << "        if {$found eq {} || ($pick eq {max} && $t > $found) || ($pick eq {min} && $t < $found)} { set found $t }\n";
+        file << "    }\n";
+        file << "    return $found\n";
+        file << "}\n";
+        file << "set sense_gate [get_pins -quiet u_access_gate/A]\n";
+        file << "if {[llength $sense_gate] != 1} { error \"PERIPHERY_STRUCTURE: no u_access_gate/A to time the read from\" }\n";
+        file << "set sel_hi_ps [periphery_edge_ps max [get_ports -quiet sel_hi_A*] -rise_through $sense_gate]\n";
+        file << "set sel_lo_ps [periphery_edge_ps max [get_ports -quiet sel_lo_A*]]\n";
+        file << "set sae_ps [periphery_edge_ps min [get_ports -quiet sae_A*] -rise_through $sense_gate]\n";
+        file << "if {$sel_hi_ps eq {} || $sel_lo_ps eq {} || $sae_ps eq {}} { error \"PERIPHERY_STA: the clock's rising edge is not timed to sel_hi_A, sel_lo_A and sae_A\" }\n";
+        file << "set select_ps [expr {max($sel_hi_ps, $sel_lo_ps + " << ps(sense_gap_.select_buffer_ps) << ")}]\n";
+        file << "set sense_gap_ps [expr {$sae_ps - $select_ps}]\n";
+        file << "set sense_fd [open sense_gap.rpt w]\n";
+        file << "puts $sense_fd \"# ps after the clock's rising edge at the controller's ports (post-route STA, TT)\"\n";
+        file << "puts $sense_fd [format \"sel_hi_rise_latest %.1f\" $sel_hi_ps]\n";
+        file << "puts $sense_fd [format \"sel_lo_rise_latest %.1f\" $sel_lo_ps]\n";
+        file << "puts $sense_fd \"select_buffer " << ps(sense_gap_.select_buffer_ps) << "\"\n";
+        file << "puts $sense_fd [format \"sae_rise_earliest %.1f\" $sae_ps]\n";
+        file << "puts $sense_fd [format \"sense_gap %.1f\" $sense_gap_ps]\n";
+        file << "puts $sense_fd \"needed " << need << "\"\n";
+        file << "puts $sense_fd \"needed_wordline " << ps(sense_gap_.wordline_ps) << "\"\n";
+        file << "puts $sense_fd \"needed_bitline " << ps(sense_gap_.bitline_ps) << "\"\n";
+        file << "puts $sense_fd \"bitline_split_mv " << ps(sense_gap_.split_mv) << "\"\n";
+        file << "close $sense_fd\n";
+        file << "puts [format \"PERIPHERY_SENSE_GAP sel_hi=%.1f sel_lo=%.1f sae=%.1f gap=%.1f needed=" << need
+             << " ps\" $sel_hi_ps $sel_lo_ps $sae_ps $sense_gap_ps]\n";
+        file << "if {$sense_gap_ps < " << need << "} { error [format \"PERIPHERY_STA: the sense enable follows the wordline selects by %.1f ps, the array needs "
+             << need << " (" << needs << "); a longer sense-enable chain (--num-sae-buf) widens it\" $sense_gap_ps] }\n";
+    }
     file << "puts \"PERIPHERY_STA_PASS paths=[llength $final_paths] setup_slack=$setup_slack hold_slack=$hold_slack\"\n\n";
 
     // Physical pin creation for stacked_colgrp alignment (M3)

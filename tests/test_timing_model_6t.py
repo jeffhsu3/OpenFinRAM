@@ -43,6 +43,20 @@ def test_bigger_macros_are_slower_and_cost_more():
     assert p["min_period_ps"] > 2 * p["clk_to_q_ps"]
 
 
+def test_outer_strips_add_a_strip_a_stack_and_halve_what_a_slice_drives():
+    # x256x64x1 at 8:1: 8-bit segments with outer strips against 4-bit ones without.
+    assert tm.slice_inputs(256, 8) == 64 * 2 * 15
+    assert tm.slice_inputs(256, 4, outer=True) == 64 * 2 * 8
+    described = {"wordlines_per_half": 128, "bits": 64, "column_mux": 8, "cells_along_wordline": 64,
+                 "wordline_segments_per_stack": 4}  # fmt: skip
+    assert tm.geometry(described)["wordline_cells"] == 64
+    with_outer = tm.geometry({**described, "outer_strips": 2})
+    assert with_outer["wordline_cells"] == 32
+    assert with_outer["slice_inputs"] == tm.slice_inputs(256, 4, outer=True)
+    # The assembler writes 0 when the macro has none.
+    assert tm.geometry({**described, "outer_strips": 0}) == tm.geometry(described)
+
+
 def test_estimate_writes_the_characterization_the_emitter_reads(tmp_path):
     out = tmp_path / "timing.json"
     subprocess.run([sys.executable, str(REPO / "scripts/timing_model_6t.py"), "estimate", "--wordlines", "32",

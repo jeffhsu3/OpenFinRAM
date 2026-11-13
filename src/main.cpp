@@ -200,6 +200,7 @@ int main(int argc, char **argv) {
                 " --bits " + std::to_string(cli_options.num_data_bits) +
                 " --mux " + std::to_string(cli_options.num_rows_per_mux) +
                 " --segment-bits " + std::to_string(cli_options.segment_bits) +
+                (cli_options.outer_strips ? " --outer-strips" : "") +
                 " --output '" + estimate + "' > /dev/null";
             if (std::system(command.c_str()) == 0) {
                 liberty_from = estimate;

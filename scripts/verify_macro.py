@@ -94,7 +94,7 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path, *,
     lost pairing the copies.  Each view keeps one bank's tiles and all the
     rest (controller, routing). A shared-B column keeps its pair of banks
     together (``banks_per_column=2``). A bank's
-    wordline strips (``Xwl_<half>[_m<k><d|u>]_<bank>``, the strip masters
+    wordline strips (``Xwl_<half>[_m<k><d|u>|_o]_<bank>``, the strip masters
     standing in its column) go with its tiles: left behind, a segmented 6T
     macro's other-bank strips drive wordlines nothing loads on either side,
     and the comparer leaves them unpaired.  What no view sees, a short
@@ -146,7 +146,7 @@ def bank_views(gds: Path, netlist: Path, cell: str, out: Path, *,
                 if not dropping:
                     kept.append(line)
                 continue
-            strip = re.match(r"Xwl_(?:lo|hi)(?:_m\d+[du])?_(\d+) ", line)
+            strip = re.match(r"Xwl_(?:lo|hi)(?:_m\d+[du]|_o)?_(\d+) ", line)
             dropping = bool(re.match(rf"X(?!{bank}_)\d+_\d+ |XE(?!{bank}_)\d+_[BT] ", line))
             if strip:
                 dropping = int(strip[1]) // banks_per_column != bank

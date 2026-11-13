@@ -491,29 +491,42 @@ std::string SpiceIntegrator::generate_wordline_strip_instances() const {
             + (segments > 1 ? "_s" + std::to_string(seg) : "") + "[" + std::to_string(bank) + "]\n+";
     };
     oss << "** Instantiate the wordline driver strips\n";
-    for (const char* half : {"lo", "hi"}) {
-        const unsigned band_seg = std::string(half) == "lo" ? segments - 1 : 0;
-        for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
-            oss << "Xwl_" << half << "_" << bank;
-            const std::vector<const char*> ports = cli_options_.bitcell_6t
-                ? std::vector<const char*>{"A"} : std::vector<const char*>{"A", "B"};
-            for (const char* port : ports) {
-                for (uint64_t k = 0; k < slices; ++k) {
-                    oss << " sel_hi_" << port << "[" << bank * slices + k << "]";
-                }
-                oss << "\n+";
-                for (int j = 0; j < 4; ++j) {
-                    oss << " sel_lo_" << port << "[" << j << "]";
-                }
-                oss << "\n+";
-                for (uint64_t i = 0; i < rows; ++i) {
-                    oss << " " << bus(static_cast<char>(std::tolower(port[0])), half, band_seg)
-                        << "[" << i + bank * rows << "]";
-                    if (i % 8 == 7 && i + 1 < rows) oss << "\n+";
-                }
-                oss << "\n+" << precharge(half, band_seg, bank);
+    // A strip pair `cell` (the one drawn facing down, `lo`, or up, `hi`) on
+    // segment `seg` of stack `half`.
+    auto pair = [&](const std::string& name, const char* cell, const char* half, unsigned seg, int bank) {
+        oss << name;
+        const std::vector<const char*> ports = cli_options_.bitcell_6t
+            ? std::vector<const char*>{"A"} : std::vector<const char*>{"A", "B"};
+        for (const char* port : ports) {
+            for (uint64_t k = 0; k < slices; ++k) {
+                oss << " sel_hi_" << port << "[" << bank * slices + k << "]";
             }
-            oss << " VDD VSS " << generator.wordline_strip_pair_name(half) << "\n";
+            oss << "\n+";
+            for (int j = 0; j < 4; ++j) {
+                oss << " sel_lo_" << port << "[" << j << "]";
+            }
+            oss << "\n+";
+            for (uint64_t i = 0; i < rows; ++i) {
+                oss << " " << bus(static_cast<char>(std::tolower(port[0])), half, seg)
+                    << "[" << i + bank * rows << "]";
+                if (i % 8 == 7 && i + 1 < rows) oss << "\n+";
+            }
+            oss << "\n+" << precharge(half, seg, bank);
+        }
+        oss << " VDD VSS " << generator.wordline_strip_pair_name(cell) << "\n";
+    };
+    for (const char* half : {"lo", "hi"}) {
+        const bool lower = std::string(half) == "lo";
+        const unsigned band_seg = lower ? segments - 1 : 0;
+        for (int bank = 0; bank < cli_options_.num_banks; ++bank) {
+            pair("Xwl_" + std::string(half) + "_" + std::to_string(bank), half, half, band_seg, bank);
+            // An outer strip at the stack's far end drives the segment
+            // there, facing back toward the band: the pair drawn for the
+            // band's other side.
+            if (cli_options_.outer_strips) {
+                pair("Xwl_" + std::string(half) + "_o_" + std::to_string(bank), lower ? "hi" : "lo", half,
+                     lower ? 0 : segments - 1, bank);
+            }
             for (unsigned seg = 1; seg < segments; ++seg) {
                 for (const char* side : {"d", "u"}) {
                     oss << "Xwl_" << half << "_m" << seg << side << "_" << bank;
