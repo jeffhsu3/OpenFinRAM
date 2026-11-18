@@ -666,6 +666,29 @@ TEST(SpiceTemplates6T, DividedWordlinesSizeTheSlicesForASegment) {
     EXPECT_FALSE(subckt_text(deck, "wl_strip_c8_x1").empty());
 }
 
+TEST(SpiceTemplates6T, OuterStripsSizeTheSlicesForHalfASegment) {
+    ScopedCurrentPath cwd(REPO_ROOT);
+    MainCliOptions config;
+    config.bitcell_6t = true;
+    config.num_wls = 2;
+    config.num_data_bits = 16;  // 8 a stack
+    config.num_banks = 1;
+    config.segment_bits = 4;    // 2 segments a stack, 16 cells a wordline
+    EXPECT_EQ(config.wordline_slice_cells(), 16U);
+    EXPECT_EQ(config.wordline_strips(), 6U);
+    EXPECT_FALSE(subckt_text(OpenFinRAM::SpiceGenerator(config).generate_spice_content(), "wl_strip_c16_x1").empty());
+    // A strip at each end of every segment: the slices of 8-cell segments.
+    config.outer_strips = true;
+    EXPECT_EQ(config.wordline_slice_cells(), 8U);
+    EXPECT_EQ(config.wordline_strips(), 8U);
+    const std::string deck = OpenFinRAM::SpiceGenerator(config).generate_spice_content();
+    EXPECT_FALSE(subckt_text(deck, "wl_strip_c8_x1").empty());
+    EXPECT_EQ(count_occurrences(deck, "wl_strip_c16_x1"), 0U);
+    for (const char* half : {"lo", "hi"}) {
+        EXPECT_FALSE(subckt_text(deck, std::string("wl_strips_") + half + "_c8_x1").empty()) << half;
+    }
+}
+
 TEST(SpiceTemplates6T, SelectBuffersRedriveThePredecodeLinesAGroupOfSlicesAtATime) {
     ScopedCurrentPath cwd(REPO_ROOT);
     MainCliOptions config;

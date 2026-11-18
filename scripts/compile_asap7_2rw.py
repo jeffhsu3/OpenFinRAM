@@ -446,7 +446,8 @@ def wordline_tracks(cell):
 
 
 def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_reach=0.0, segment_bits=None,
-                          mux=4, rail_on_grid=None, select_buffers=False, precharge_buffer=None):
+                          mux=4, rail_on_grid=None, select_buffers=False, precharge_buffer=None,
+                          both_ends=False):
     """The strip pair for each side of the controller band, in the tile's x.
 
     A strip is one slice per four of the tile's port-A wordlines, the slice's
@@ -478,9 +479,12 @@ def build_wordline_strips(lib, leaf, wordlines, bits, ports=("A", "B"), gate_rea
     rail instead of the slices' VSS.  `precharge_buffer` (a standard
     cell's name) adds that buffer to the row's IO end: the strip's ``PCH``
     pin its input, ``PCHL`` its output for the segment's IO blocks.
+
+    With `both_ends` every segment has a strip at each end (the macro's
+    outer strips, `--outer-strips`), and a slice is sized for half of one.
     """
     cells_along = mux * (segment_bits or bits // 2)
-    load = wl_slices.load_class(cells_along)
+    load = wl_slices.load_class((cells_along + 1) // 2 if both_ends else cells_along)
     ladder = {
         c.name: c
         for c in gdstk.read_gds(str(REPO / "tech/gds/sram_8t_wl_slices.gds")).cells
@@ -1721,6 +1725,8 @@ def run(args):
         return None if segments == 1 else index // segment
 
     banding = args.band is not None or args.plan_band is not None
+    if args.outer_strips and (not single or banding):
+        raise RuntimeError("outer strips are for the single-port macro's standard floorplan so far")
     variants = {}
     # The tiles' left boundary edge in the macro: the bank's margin, or just
     # past it where the tiles' gates meet the gate grid.
@@ -1809,6 +1815,7 @@ def run(args):
         segment_bits=segment if segments > 1 else None, mux=args.mux,
         rail_on_grid=0.0, select_buffers=args.select_buffers,
         precharge_buffer=precharge_buffer_cell(segment, args.mux) if args.precharge_buffers else None,
+        both_ends=args.outer_strips,
     )
     if shared_b:
         tile_width = columns.boundary_box(leaf)[2]
@@ -1982,7 +1989,14 @@ def run(args):
     if in_band:
         # The controller's frame starts at the band's edge (`y_band`).
         y_rules.append((TRACK_LATTICE, round(-(stack + HALF_NM - seam_lo) * 1000) % TRACK_LATTICE))
-    y_lo_tiles = snap(margin_y, y_rules)
+    lo_oy, hi_oy = (bbox_origin(strip_pairs[half])[1] for half in ("lo", "hi"))
+    # An outer strip at each stack's far end (`--outer-strips`): the pair
+    # that faces up under the lower stack, the one that faces down on the
+    # upper, each on its own grid.
+    outer = pair_height if args.outer_strips else 0.0
+    if args.outer_strips:
+        y_rules += offset_rules(grids["dp_wl_strips_hi"][1], hi_oy - outer)
+    y_lo_tiles = snap(margin_y + outer, y_rules)
     # A few places leave port B's via row no M4 track in reach: the next does.
     while not in_band and not strip_on_track("lo", y_lo_tiles + stack):
         y_lo_tiles = snap(y_lo_tiles + 0.001, y_rules)
@@ -2007,13 +2021,15 @@ def run(args):
     else:
         y_lo_strips = y_lo_tiles + stack
         y_ctrl = snap(y_lo_strips + pair_height + channel, grids["dp_controller"][1])
-        hi_oy = bbox_origin(strip_pairs["hi"])[1]
-        y_hi_strips = snap(y_ctrl + ctrl_size[1] + channel + hi_oy, grids["dp_wl_strips_hi"][1]) - hi_oy
+        hi_rules = list(grids["dp_wl_strips_hi"][1])
+        if args.outer_strips:
+            hi_rules += offset_rules(grids["dp_wl_strips_lo"][1], pair_height + stack + lo_oy - hi_oy)
+        y_hi_strips = snap(y_ctrl + ctrl_size[1] + channel + hi_oy, hi_rules) - hi_oy
         while not strip_on_track("hi", y_hi_strips):
-            y_hi_strips = snap(y_hi_strips + hi_oy + 0.001, grids["dp_wl_strips_hi"][1]) - hi_oy
+            y_hi_strips = snap(y_hi_strips + hi_oy + 0.001, hi_rules) - hi_oy
         y_hi_tiles = y_hi_strips + pair_height
         ctrl_origin = (ctrl_x, y_ctrl)
-    height = y_hi_tiles + stack + margin_y
+    height = y_hi_tiles + stack + outer + margin_y
     if in_band:
         # The band is the tiles' width; only the controller's side pins stand
         # out of it, into the margin.
@@ -2060,6 +2076,21 @@ def run(args):
                 segment=None if segments == 1 else (segments - 1 if half == "lo" else 0),
             )
             instances.append((inst, cell.name, origin, resolve))
+            for pin, info in cell_pins.items():
+                if info.get("private") or info.get("abutted"):
+                    continue
+                nets[resolve(info["net"])].append((inst, pin))
+        # An outer strip drives its stack's segment farthest from the band,
+        # facing back toward it: the pair drawn for the band's other side.
+        for half, drawn, y_pair, far in ((("lo", "hi", y_lo_tiles - outer, 0),
+                                          ("hi", "lo", y_hi_tiles + stack, segments - 1))
+                                         if args.outer_strips else ()):  # fmt: skip
+            cell, cell_pins, _, _ = pair_masters[drawn]
+            inst = f"WL_{half.upper()}_O_{bank}"
+            pox, poy = bbox_origin(strip_pairs[drawn])
+            resolve = functools.partial(strip_net, bank=bank, half=half, wordlines=args.wordlines,
+                                        segment=None if segments == 1 else far)  # fmt: skip
+            instances.append((inst, cell.name, (x_bank + pox, y_pair + poy), resolve))
             for pin, info in cell_pins.items():
                 if info.get("private") or info.get("abutted"):
                     continue
@@ -2389,6 +2420,7 @@ def run(args):
         "cells_along_wordline": args.mux * segment,
         "wordline_segments_per_stack": segments,
         "wordline_strip_pairs": 2 * args.banks * segments,
+        "outer_strips": 2 * args.banks if args.outer_strips else 0,
         "select_buffers": {
             "cell": select_buffer_cell(array_wordlines // 4),
             "slices_per_buffer": select_buffer_groups(array_wordlines // 4),
@@ -2396,7 +2428,7 @@ def run(args):
         } if args.select_buffers else None,
         "precharge_buffers": {
             "cell": precharge_buffer_cell(segment, args.mux),
-            "per_bank": 2 * (1 + 2 * (segments - 1)),
+            "per_bank": 2 * (1 + 2 * (segments - 1)) + (2 if args.outer_strips else 0),
             "segment_load_ff": round(segment * (args.mux * PRECHARGE_GATE_FF + PRECHARGE_WIRE_FF), 1),
         } if args.precharge_buffers else None,
         "checked_net_partitions": len(probes),
@@ -2414,7 +2446,8 @@ def run(args):
     )
     print(
         f"PASS: {top_name}: {units * args.bits} column tiles, {2 * args.banks * segments} strip pairs, "
-        f"{len(probes)} connected nets"
+        + (f"{2 * args.banks} outer strips, " if args.outer_strips else "")
+        + f"{len(probes)} connected nets"
     )
 
 
@@ -3198,6 +3231,10 @@ def main():
     parser.add_argument("--segment-bits", type=int, default=0,
                         help="divided wordlines: cut each stack into segments of this many data bits, "
                         "a mid strip pair between two (single-port macro)")
+    parser.add_argument("--outer-strips", action="store_true",
+                        help="a wordline driver strip at each stack's far end too: every segment is "
+                        "driven from both ends, by slices sized for half of it (single-port macro, "
+                        "standard floorplan; the deck built with the same option)")
     parser.add_argument("--select-buffers", action="store_true",
                         help="re-drive the predecode lines at every wordline strip, from a row of "
                         "standard buffers under its slices (single-port macro; the controller "

@@ -39,6 +39,14 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .default_value(unsigned{0})
         .scan<'u', unsigned>();
 
+    program.add_argument("--outer-strips")
+        .help("Generated 6T, standard floorplan: a wordline driver strip at each stack's far "
+              "end too, so every wordline segment is driven from both ends by slices sized for "
+              "half of it.  Segments twice as long (--segment-bits) then keep their wordline "
+              "delay with about half the strips.")
+        .default_value(false)
+        .implicit_value(true);
+
     program.add_argument("--select-buffers")
         .help("Generated 6T: re-drive the predecode lines (sel_lo) at every wordline strip, "
               "from a row of standard buffers under its slices.  auto (default): when one "
@@ -174,6 +182,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.bitcell_6t            = bitcell == "6t";
     options.segment_bits          = program.get<unsigned>("--segment-bits");
     options.strips_in_controller  = program.get<bool>("--strips-in-controller");
+    options.outer_strips          = program.get<bool>("--outer-strips");
     options.row_predecode_bits    = program.get<unsigned>("--row-predecode-bits");
     options.skip_characterization = program.get<bool>("--skip-characterization");
     options.num_wl_buf            = program.get<unsigned>("--num-wl-buf");
@@ -234,6 +243,11 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         }
     }
     if (options.segment_bits >= options.num_data_bits / 2) options.segment_bits = 0;
+    if (options.outer_strips && (!options.bitcell_6t || options.strips_in_controller)) {
+        LOGE << "Error: --outer-strips is for the generated 6T macro's standard floorplan "
+             << "(--bitcell 6t without --strips-in-controller).";
+        std::exit(1);
+    }
     if (options.bitcell_6t && options.num_rows_per_mux != 4 && options.num_rows_per_mux != 8 &&
         options.num_rows_per_mux != 16) {
         LOGE << "Error: --bitcell 6t's IO block is 4:1, 8:1 or 16:1 (--num-rows-per-mux).";
@@ -423,7 +437,7 @@ std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options)
     const unsigned slices = rows / 4;
     // A slice's predecode input is two NAND2 gates; the c64 slice (past 32
     // cells a wordline) doubles them (scripts/generate_asap7_8t_wl_slices.py).
-    const unsigned nand_fins = mux * options.wordline_segment_bits() > 32 ? 24 : 12;
+    const unsigned nand_fins = options.wordline_slice_cells() > 32 ? 24 : 12;
     const unsigned ios = options.num_data_bits;  // IO blocks a bank's port drives
     auto pf = [](double fins, double loads) {
         return (fins * kGateFfPerFin + loads * kWireFfPerLoad) / 1000.0;
@@ -463,4 +477,57 @@ std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options)
         loads["blprechn_A"] = strips * (input_ff + kWireFfPerLoad) / 1000.0;
     }
     return loads;
+}
+
+double wordline_far_end_ps(unsigned cells) {
+    // Select at half swing to the far cell's wordline at half swing, one
+    // slice driving from one end: per slice class, at the shortest line the
+    // class serves and at its full one.  The wire's share grows with the
+    // square of the length, so the straight line between the two is above
+    // the curve.
+    struct Class { unsigned cells; unsigned shortest; double shortest_ps; double full_ps; };
+    static const Class classes[] = {
+        {4, 3, 8.16, 8.66}, {8, 5, 9.15, 10.57}, {16, 9, 10.95, 12.96},
+        {32, 17, 14.62, 18.34}, {64, 33, 16.83, 28.12}};
+    const Class* entry = &classes[4];  // past 64 cells: the c64 line carried on
+    for (const Class& c : classes) {
+        if (cells <= c.cells) { entry = &c; break; }
+    }
+    if (cells <= entry->shortest) return entry->shortest_ps;
+    return entry->shortest_ps + (entry->full_ps - entry->shortest_ps) * double(cells - entry->shortest)
+        / double(entry->cells - entry->shortest);
+}
+
+double bitline_split_ps(unsigned cells) {
+    // Wordline at half swing to kSenseSplitMv between the pair at the IO
+    // block, by cells a bitline; straight lines between the measured
+    // lengths (above the curve, which bends upward), the last carried on.
+    static const std::pair<unsigned, double> points[] = {
+        {16, 10.0}, {32, 12.0}, {64, 17.0}, {128, 29.0}, {256, 55.0}, {512, 128.0}, {1024, 436.0}};
+    if (cells <= points[0].first) return points[0].second;
+    const size_t count = sizeof(points) / sizeof(points[0]);
+    size_t upper = 1;
+    while (upper + 1 < count && cells > points[upper].first) ++upper;
+    const auto& [x0, y0] = points[upper - 1];
+    const auto& [x1, y1] = points[upper];
+    return y0 + (y1 - y0) * double(cells - x0) / double(x1 - x0);
+}
+
+SenseGapNeed sense_gap_need(const MainCliOptions& options) {
+    SenseGapNeed need;
+    need.wordline_ps = wordline_far_end_ps(options.wordline_slice_cells());
+    need.bitline_ps = bitline_split_ps(2 * options.num_wls);
+    if (options.select_buffers) {
+        // The strip's buffer into its largest group of slices (the loads
+        // six_t_port_loads_pf counts a slice): BUFx8 35.5 ps + 0.52 ps/fF,
+        // BUFx4 37.8 ps + 0.93 ps/fF.
+        const unsigned slices = 2 * options.num_wls / 4;
+        unsigned most = 0;
+        for (unsigned group : select_buffer_groups(slices)) most = group > most ? group : most;
+        const unsigned nand_fins = options.wordline_slice_cells() > 32 ? 24 : 12;
+        const double load_ff = most * (nand_fins * kGateFfPerFin + kWireFfPerLoad);
+        need.select_buffer_ps = select_buffer_cell(slices) == "BUFx8_ASAP7_75t_R"
+            ? 35.5 + 0.52 * load_ff : 37.8 + 0.93 * load_ff;
+    }
+    return need;
 }

@@ -264,6 +264,65 @@ TEST(OpenRoadTclGeneratorUnitTest, FloorplanHeightRespectsUtilizationCap) {
     EXPECT_NEAR(h / 0.54, std::nearbyint(h / 0.54), 1e-9);  // even row count
 }
 
+// The generated 6T controller's floorplan counts the heavy output drivers,
+// which the synthesized area does not have.
+TEST(OpenRoadTclGeneratorUnitTest, FloorplanReservesRoomForThePortDrivers) {
+    const auto dir = std::filesystem::temp_directory_path() / "or_port_drivers_test";
+    std::filesystem::create_directories(dir);
+    {
+        std::ofstream netlist(dir / "netlist.v");
+        netlist << "module ctrl_decode(clk, A_A, sel_hi_A, sel_lo_A, sae_A, clk_out);\n"
+                   "  input clk;\n  input [10:0] A_A;\n"
+                   "  output [63:0] sel_hi_A;\n  wire [63:0] sel_hi_A;\n"
+                   "  output [3:0] sel_lo_A;\n  output [0:0] sae_A;\n  output clk_out;\n"
+                   "endmodule\n";
+    }
+    const std::string netlist = (dir / "netlist.v").string();
+    const std::string lef = std::string(REPO_ROOT) + "/tech/lef/asap7sc7p5t_28_R.lef";
+    const std::string x24 = "BUFx24_ASAP7_75t_R", x12 = "BUFx12f_ASAP7_75t_R";
+    OpenRoadTclGenerator gen;
+    gen.set_site_height(0.27);
+    gen.set_max_utilization(0.5);
+    ASSERT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+    gen.set_port_drivers({{"sel_hi_A", x24}, {"sae_A", x24}, {"sel_lo_A", x12}});
+    // 65 BUFx24 (1.62 x 0.27 um) and 4 BUFx12f (0.972 x 0.27); clk_out has no sized driver.
+    const double heavy = gen.port_driver_area(netlist, lef, x24);
+    EXPECT_NEAR(heavy, 65 * 1.62 * 0.27, 1e-6);
+    EXPECT_NEAR(gen.port_driver_area(netlist, lef, x12), 4 * 0.972 * 0.27, 1e-6);
+    EXPECT_NEAR(gen.port_driver_area(netlist, lef, "BUFx2_ASAP7_75t_R"), 0.0, 1e-12);
+    // A file that cannot be read is an error, not a quietly smaller die.
+    EXPECT_LT(gen.port_driver_area((dir / "absent.v").string(), lef, x24), 0.0);
+    EXPECT_LT(gen.port_driver_area(netlist, (dir / "absent.lef").string(), x24), 0.0);
+    EXPECT_LT(gen.port_driver_area(netlist, lef, "NO_SUCH_CELL"), 0.0);
+
+    // The logic at 50 % as before, and the drivers at 60 % on top.
+    const double logic_only = gen.calculate_floorplan_height(30.0);
+    EXPECT_NEAR(logic_only, 8.64, 1e-9);  // 123.45 / (30 * 0.5) = 8.23 um -> 32 rows
+    gen.set_reserved_core_area(heavy / 0.60);
+    const double h = gen.calculate_floorplan_height(30.0);
+    const double target = (123.45 / 0.5 + heavy / 0.60) / 30.0;
+    EXPECT_GE(h, target - 1e-9);
+    EXPECT_LT(h, target + 0.54);
+    EXPECT_GT(h, logic_only);
+    EXPECT_NEAR(gen.planned_height(30.0), h, 1e-9);
+    std::filesystem::remove_all(dir);
+}
+
+// A floor on the height is rounded up to whole row pairs, so a failed run's
+// height plus one row is the next pair (the flow's retry when pins bind).
+TEST(OpenRoadTclGeneratorUnitTest, MinimumHeightStepsByRowPairs) {
+    OpenRoadTclGenerator gen;
+    gen.set_site_height(0.27);
+    gen.set_max_utilization(0.5);
+    ASSERT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+    // 13 ordered inputs on the left edge: 1.28 + 0.192 * 13 = 3.776 um.
+    gen.set_min_height(1.28 + 0.192 * 13);
+    const double h = gen.planned_height(100.0);
+    EXPECT_NEAR(h, 3.78, 1e-9);
+    gen.set_min_height(h + 0.27);
+    EXPECT_NEAR(gen.planned_height(100.0), 4.32, 1e-9);
+}
+
 TEST(OpenRoadTclGeneratorUnitTest, FloorplanCommandFormat) {
     OpenRoadTclGenerator gen;
     gen.set_site_name("asap7sc7p5t");
@@ -426,6 +485,24 @@ TEST(SixTPortLoadsTest, SelLoCountsEverySliceOfEveryStrip) {
     EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sel_lo_A"), 14 * 16 * (12 * 0.103 + 0.1) / 1000, 1e-9);
     EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sel_hi_A"), 14 * (4 * 12 * 0.103 + 0.1) / 1000, 1e-9);
     EXPECT_EQ(tall.wordline_strips(), 2U);
+    // Outer strips: one more a stack.  128 kbit at 8:1 in 8-bit segments has
+    // 16 strips of slices sized for 32 cells (12 fins an input), where 4-bit
+    // segments without them have 30.
+    MainCliOptions outer;
+    outer.bitcell_6t = true;
+    outer.num_wls = 128;
+    outer.num_data_bits = 64;
+    outer.num_rows_per_mux = 8;
+    outer.segment_bits = 8;
+    EXPECT_EQ(outer.wordline_strips(), 14U);
+    EXPECT_EQ(outer.wordline_slice_cells(), 64U);
+    EXPECT_NEAR(six_t_port_loads_pf(outer).at("sel_hi_A"), 14 * (4 * 24 * 0.103 + 0.1) / 1000, 1e-9);
+    outer.outer_strips = true;
+    EXPECT_EQ(outer.wordline_strips(), 16U);
+    EXPECT_EQ(outer.wordline_slice_cells(), 32U);
+    EXPECT_NEAR(six_t_port_loads_pf(outer).at("sel_hi_A"), 16 * (4 * 12 * 0.103 + 0.1) / 1000, 1e-9);
+    tall.outer_strips = true;
+    EXPECT_EQ(tall.wordline_strips(), 4U);
     EXPECT_LT(six_t_port_loads_pf(small).at("sel_lo_A"), 0.005);
     // The IO controls scale with the IO blocks: one per data bit.
     EXPECT_NEAR(six_t_port_loads_pf(segmented).at("sae_A"), 64 * (18 * 0.103 + 0.1) / 1000, 1e-9);
@@ -462,6 +539,120 @@ TEST(OpenRoadTclGeneratorTest, PortDriversAreSizedAndFrozen) {
     ASSERT_NE(cts, std::string::npos);
     EXPECT_NE(script.find("string match delaybuf_*", cts), std::string::npos);
     EXPECT_EQ(script.find("remove_buffers", cts), std::string::npos);
+}
+
+// What a read needs between the wordline select and the sense enable, by the
+// macro's shape: the slice to the far end of its wordline, then the bitline.
+TEST(SenseGapNeedTest, GrowsWithTheWordlineASliceDrivesAndTheBitline) {
+    // The measured points themselves.
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(4), 8.66);
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(32), 18.34);
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(33), 16.83);  // the c64 slice's shortest line
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(64), 28.12);
+    EXPECT_DOUBLE_EQ(wordline_far_end_ps(1), 8.16);
+    EXPECT_NEAR(wordline_far_end_ps(24), 14.62 + (18.34 - 14.62) * 7 / 15, 1e-9);
+    EXPECT_DOUBLE_EQ(bitline_split_ps(8), 10.0);
+    EXPECT_DOUBLE_EQ(bitline_split_ps(256), 55.0);
+    EXPECT_DOUBLE_EQ(bitline_split_ps(384), (55.0 + 128.0) / 2);
+    EXPECT_DOUBLE_EQ(bitline_split_ps(2048), 436.0 + 2 * (436.0 - 128.0));
+
+    // x256x2x1: one bit a stack at 4:1, 256 cells a bitline.
+    MainCliOptions tall;
+    tall.bitcell_6t = true;
+    tall.num_wls = 128;
+    tall.num_data_bits = 2;
+    tall.num_rows_per_mux = 4;
+    SenseGapNeed need = sense_gap_need(tall);
+    EXPECT_DOUBLE_EQ(need.wordline_ps, 8.66);
+    EXPECT_DOUBLE_EQ(need.bitline_ps, 55.0);
+    EXPECT_DOUBLE_EQ(need.select_buffer_ps, 0.0);
+    EXPECT_NEAR(need.floor_ps(), 63.66, 1e-9);
+
+    // 128 kbit at 8:1: 4-bit segments are 32 cells from one end; 8-bit ones
+    // with outer strips are driven from both and need no more.
+    MainCliOptions big = tall;
+    big.num_data_bits = 64;
+    big.num_rows_per_mux = 8;
+    big.segment_bits = 4;
+    big.select_buffers = true;
+    need = sense_gap_need(big);
+    EXPECT_DOUBLE_EQ(need.wordline_ps, 18.34);
+    // A BUFx8 into 16 slices of two 6-fin NAND inputs each.
+    EXPECT_NEAR(need.select_buffer_ps, 35.5 + 0.52 * 16 * (12 * 0.103 + 0.1), 1e-9);
+    MainCliOptions outer = big;
+    outer.segment_bits = 8;
+    outer.outer_strips = true;
+    EXPECT_DOUBLE_EQ(sense_gap_need(outer).floor_ps(), need.floor_ps());
+    outer.outer_strips = false;  // 64 cells from one end: the c64 slice
+    EXPECT_DOUBLE_EQ(sense_gap_need(outer).wordline_ps, 28.12);
+    EXPECT_GT(sense_gap_need(outer).select_buffer_ps, need.select_buffer_ps);
+
+    // Twice the bitline more than doubles what the sense enable must wait.
+    MainCliOptions taller = tall;
+    taller.num_wls = 256;
+    EXPECT_DOUBLE_EQ(sense_gap_need(taller).bitline_ps, 128.0);
+}
+
+// The 6T controller's script times the read's clock edge to the wordline
+// selects and to the sense enable, and stops when they come out too close.
+TEST(OpenRoadTclGeneratorTest, SenseGapIsTimedThroughTheAccessGateAndHeldToTheArraysNeed) {
+    auto script_for = [](bool one_port, bool with_gap) {
+        OpenRoadTclGenerator gen;
+        gen.set_design_name("ctrl_decode");
+        gen.set_site_name("asap7sc7p5t");
+        gen.set_site_height(0.27);
+        gen.set_one_port(one_port);
+        if (with_gap) gen.set_sense_gap(/*wordline_ps=*/18.34, /*bitline_ps=*/55.0, /*split_mv=*/100.0,
+                                        /*select_buffer_ps=*/46.63);
+        EXPECT_TRUE(gen.parse_qor_report(golden_path("qor_report.txt")));
+        const std::string out =
+            (std::filesystem::temp_directory_path() / "or_run_tcl_sense_gap_test" / "run.tcl").string();
+        EXPECT_TRUE(gen.generate_run_tcl(
+            /*width=*/15.0, /*height=*/0.0, /*output_file=*/out,
+            /*num_wlt=*/8, /*num_wlb=*/8, /*num_ysel=*/4,
+            /*addr_width=*/6, /*num_mux=*/4,
+            /*spice_only=*/false, /*col_width=*/7.5,
+            /*platform_path=*/"/nonexistent/platform/asap7",
+            /*tech_root=*/std::string(REPO_ROOT) + "/tech",
+            /*single_port=*/false));
+        return read_file(out);
+    };
+    const std::string script = script_for(true, true);
+    // After the routed parasitics and the slack gates, before the verdict.
+    const auto routed = script.find("estimate_parasitics -global_routing");
+    const auto gate = script.find("set sense_gate [get_pins -quiet u_access_gate/A]");
+    const auto pass = script.find("puts \"PERIPHERY_STA_PASS");
+    ASSERT_NE(gate, std::string::npos);
+    EXPECT_LT(script.find("detailed_route"), routed);
+    EXPECT_LT(routed, gate);
+    EXPECT_LT(script.find("PERIPHERY_STA: hold timing violation"), gate);
+    EXPECT_LT(gate, pass);
+    // The rising clock edge as data: latest to the selects, earliest to the
+    // sense enable.
+    EXPECT_NE(script.find("set sel_hi_ps [periphery_edge_ps max [get_ports -quiet sel_hi_A*] -rise_through $sense_gate]"),
+              std::string::npos);
+    EXPECT_NE(script.find("set sel_lo_ps [periphery_edge_ps max [get_ports -quiet sel_lo_A*]]"), std::string::npos);
+    EXPECT_NE(script.find("set sae_ps [periphery_edge_ps min [get_ports -quiet sae_A*] -rise_through $sense_gate]"),
+              std::string::npos);
+    EXPECT_NE(script.find("find_timing_paths {*}$args -rise_to $ports -path_delay $pick"), std::string::npos);
+    // The wordline rises on the later select; sel_lo goes through its strip buffer.
+    EXPECT_NE(script.find("set select_ps [expr {max($sel_hi_ps, $sel_lo_ps + 46.6)}]"), std::string::npos);
+    EXPECT_NE(script.find("set sense_gap_ps [expr {$sae_ps - $select_ps}]"), std::string::npos);
+    // The report is written before the gate can stop the script.
+    const auto report = script.find("open sense_gap.rpt w");
+    const auto stop = script.find("if {$sense_gap_ps < 73.3} { error [format \"PERIPHERY_STA: the sense enable follows");
+    ASSERT_NE(report, std::string::npos);
+    ASSERT_NE(stop, std::string::npos);
+    EXPECT_LT(report, stop);
+    EXPECT_LT(script.find("close $sense_fd"), stop);
+    EXPECT_NE(script.find("(wordline 18.3 + bitline 55.0 to split 100.0 mV)", stop), std::string::npos);
+    EXPECT_NE(script.find("--num-sae-buf", stop), std::string::npos);
+    EXPECT_NE(script.find("PERIPHERY_SENSE_GAP sel_hi=%.1f sel_lo=%.1f sae=%.1f gap=%.1f needed=73.3 ps"),
+              std::string::npos);
+
+    // Only where it was asked for: the two-port controller's script has none.
+    EXPECT_EQ(script_for(true, false).find("sense_gap"), std::string::npos);
+    EXPECT_EQ(script_for(false, false).find("sense_gap"), std::string::npos);
 }
 
 // --strips-in-controller: the die is the band between the stacks, the strips

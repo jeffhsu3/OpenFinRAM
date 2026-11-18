@@ -58,6 +58,31 @@ public:
     // prefix -> cell.  repair_design leaves a 170 fF array-wide port on a
     // BUFx8 (OpenROAD does not grow a port's own buffer past its slew).
     void set_port_drivers(std::map<std::string, std::string> drivers) { port_drivers_ = std::move(drivers); }
+    // Cell area (um^2) of the output drivers above whose cell is `cell`: the
+    // netlist's output bits with that driver (Yosys's "output [63:0] x;")
+    // times the cell's LEF size.  Negative if a file cannot be read or the
+    // cell is not in the LEF.
+    double port_driver_area(const std::string& netlist_path, const std::string& lef_path,
+                            const std::string& cell) const;
+    // Core area (um^2) the derived floorplan keeps on top of the cells at
+    // the utilization cap: cells the synthesized area does not have.
+    void set_reserved_core_area(double area) { reserved_core_area_ = area; }
+    // Read margin of the generated single-port controller.  A read's clock
+    // edge goes through u_access_gate to the gated wordline selects and, a
+    // delay chain later, to the sense enable; placement, buffering and
+    // routing move the two apart or together.  After the final STA the
+    // script times that edge to sel_hi_A and sel_lo_A (latest; sel_lo_A plus
+    // select_buffer_ps) and to sae_A (earliest), writes sense_gap.rpt, and
+    // fails unless the sense enable follows by wordline_ps + bitline_ps:
+    // what the array needs to put split_mv on the sense amplifier
+    // (sense_gap_need in main_config_helpers.hpp).
+    void set_sense_gap(double wordline_ps, double bitline_ps, double split_mv, double select_buffer_ps) {
+        sense_gap_ = {true, wordline_ps, bitline_ps, split_mv, select_buffer_ps};
+    }
+    // The die height the run will use for `width`.
+    double planned_height(double width) const {
+        return band_.enabled ? band_die_height(width) : calculate_floorplan_height(width);
+    }
     // The band's die height for `width`: rows for the cells at the
     // utilization cap plus the strips' keep-outs, and the two insets.
     double band_die_height(double width) const;
@@ -112,7 +137,15 @@ private:
     BandPlan band_;
     bool one_port_ = false;
     double min_height_ = 0.0;
+    double reserved_core_area_ = 0.0;
     std::map<std::string, std::string> port_drivers_;
+    struct SenseGap {
+        bool enabled = false;
+        double wordline_ps = 0.0;
+        double bitline_ps = 0.0;
+        double split_mv = 0.0;
+        double select_buffer_ps = 0.0;
+    } sense_gap_;
 
     // helpers
     bool file_exists(const std::string& p) const;
