@@ -175,6 +175,26 @@ def test_data_delay_launches_d_alone_later():
                       load=1e-15, data_delay=150e-12)  # fmt: skip
 
 
+def test_a_probe_on_a_watched_node_is_printed_and_read_once(tmp_path: Path):
+    """`--probe sae_A[0]` names a node the deck already prints: a second column
+    of that name doubled its samples and slid the wave against TIME, so every
+    sense time was wrong and no Q edge was proven."""
+    g = sm.Geometry(wordlines=4, mux=4, bits=2, ports="A")
+    cells = [{"path": f"Xc{a}_{b}", "address": a, "bit": b, "stack": "lo"} for a in range(g.words) for b in range(g.bits)]
+    pins = ("clk", "rst_n", "ce_n", "we_n", "oe_n", *(f"A[{i}]" for i in range(5)), "D[0]", "D[1]", "Q[0]", "Q[1]")
+    program = [(sm.Op("W", 1, 0b11),), (sm.Op("R", 1),)]
+    deck, _ = sm.build_deck(Path("dut.sp"), Path("m.pm"), "top", pins, cells, g, program, period=1e-9,
+                            vdd=0.7, load=1e-15, probes=("SAE_A[0]", "blprechn_A[0]"))  # fmt: skip
+    printed = next(line for line in deck.splitlines() if line.startswith(".print")).lower().split()
+    assert printed.count("v(xdut:sae_a[0])") == 1
+    assert printed.count("v(xdut:blprechn_a[0])") == 1
+
+    # An older run's CSV may still carry the node twice: the reader keeps one column.
+    waves = tmp_path / "twice.csv"
+    waves.write_text("TIME,V(A),V(B),V(A)\n0,1,2,1\n1e-12,3,4,3\n")
+    assert sm.read_csv(waves) == {"TIME": [0.0, 1e-12], "V(A)": [1.0, 3.0], "V(B)": [2.0, 4.0]}
+
+
 def _result_dir() -> Path:
     given = os.environ.get("OPENFINRAM_MACRO_RESULT")
     built = [Path(given)] if given else sorted((REPO / "results").glob("sram_x4x2x1_*"))

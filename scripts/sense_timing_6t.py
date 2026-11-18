@@ -19,7 +19,11 @@ staggered IO block):
   other cell on its bitline the opposite one: their leakage works against
   the read;
 * the bitlines carry a wire capacitance per cell (``--wire-ff``; the deck
-  has none, the layout's M2 bar is ~0.1 um a cell);
+  has none, the layout's M2 bar is 0.108 um a cell) and, between one cell
+  and the next, the bar's resistance (``--wire-ohm``): a ladder from the IO
+  to the far cell, the split measured at the IO's end.  The bar is 18 nm
+  drawn, 233 ohm/um as the released xACT decks model M2 (25.2 ohm a cell);
+  ``--wire-ohm 0`` lumps the bitline into one node;
 * ideal sources: precharge released, the column selected, the wordline
   raised, the sense enable raised ``--window`` later, the output enabled;
   Q must still read the stored value (a check on the column).
@@ -33,6 +37,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures as futures
 import json
+import os
 import re
 import subprocess
 import sys
@@ -49,6 +54,20 @@ EDGE, T_WL = 20e-12, 240e-12
 NEEDED = ("sram_cell_6t_122", "dummy_sram_6t122", "dummy_topbot_v1", "dummy_topbot_v2")
 
 
+def xyce_env() -> dict[str, str]:
+    """The environment Xyce runs in: one BLAS/OpenMP thread unless the caller set a count.
+
+    This Xyce links a threaded OpenBLAS, which starts a thread per core; past
+    ~10k unknowns they spin on each other (most of the time in the kernel)
+    and a 256-cell column that takes a minute on one thread does not leave
+    the operating point in four.
+    """
+    env = dict(os.environ)
+    env.setdefault("OPENBLAS_NUM_THREADS", "1")
+    env.setdefault("OMP_NUM_THREADS", "1")
+    return env
+
+
 def subckt_text(deck: str, name: str) -> str:
     match = re.search(rf"^\.SUBCKT {re.escape(name)} .*?^\.ENDS[^\n]*\n", deck, re.M | re.S | re.I)
     if not match:
@@ -56,7 +75,13 @@ def subckt_text(deck: str, name: str) -> str:
     return match.group(0)
 
 
-def column_deck(cells: int, delay_ps: float, stored: int, deck: str, io: str, model: Path, wire_ff: float) -> str:
+#: A cell's length of bitline: 0.108 um of minimum-width M2 at 233 ohm/um
+#: (3.031 ohm/sq on the 13 nm conductor of an 18 nm line, the released xACT model).
+WIRE_OHM_PER_CELL = 25.2
+
+
+def column_deck(cells: int, delay_ps: float, stored: int, deck: str, io: str, model: Path, wire_ff: float,
+                wire_ohm: float = 0.0) -> str:  # fmt: skip
     """A deck reading row 0's cell `cells - 1` (the one farthest from the IO) with the sense enable `delay_ps` after its wordline."""
     read = cells - 1
     lines = [f"* 6T column: {cells} cells a bitline, read row 0 cell {read} (stores {stored}), SAE +{delay_ps} ps",
@@ -64,12 +89,19 @@ def column_deck(cells: int, delay_ps: float, stored: int, deck: str, io: str, mo
     lines += [subckt_text(deck, name) for name in NEEDED]
     lines += [io.replace(".END\n", "")]
     for r in range(MUX):
+        # Cell 0 is beside the IO (past the dummy), the last under the cap; with
+        # a wire resistance each cell has its own bitline nodes, a segment apart.
+        bl, bln = f"bl{r}", f"bln{r}"
         for i in range(cells):
-            lines.append(f"Xc{r}_{i} wl{i} bln{r} bl{r} vdd 0 sram_cell_6t_122")
-            lines.append(f"Cw{r}_{i} bl{r} 0 {wire_ff}f")
-            lines.append(f"Cwn{r}_{i} bln{r} 0 {wire_ff}f")
+            if wire_ohm:
+                near, near_n, bl, bln = bl, bln, f"bl{r}_{i}", f"bln{r}_{i}"
+                lines.append(f"Rw{r}_{i} {near} {bl} {wire_ohm}")
+                lines.append(f"Rwn{r}_{i} {near_n} {bln} {wire_ohm}")
+            lines.append(f"Xc{r}_{i} wl{i} {bln} {bl} vdd 0 sram_cell_6t_122")
+            lines.append(f"Cw{r}_{i} {bl} 0 {wire_ff}f")
+            lines.append(f"Cwn{r}_{i} {bln} 0 {wire_ff}f")
         lines.append(f"Xd{r} bln{r} vdd 0 dummy_sram_6t122")
-        lines.append(f"Xcap{r} bln{r} vdd 0 dummy_topbot_v{1 + r % 2}")
+        lines.append(f"Xcap{r} {bln} vdd 0 dummy_topbot_v{1 + r % 2}")
     io_nets = []
     for r in range(MUX):
         io_nets += [f"bl{r}", f"bln{r}", f"ysel{r}", f"yseln{r}"]
@@ -99,19 +131,22 @@ def column_deck(cells: int, delay_ps: float, stored: int, deck: str, io: str, mo
         for i in range(cells):
             value = stored if (r == 0 and i == read) else 1 - stored
             lines.append(f".IC V(Xc{r}_{i}:Q)={VDD * value} V(Xc{r}_{i}:QB)={VDD * (1 - value)}")
+    # Output every picosecond, interpolated: on a long bitline the solver's own
+    # steps are tens of picoseconds apart where the split crosses a margin.
     lines += [f".tran 1p {stop:.4g} NOOP", ".options timeint reltol=1e-3 abstol=1e-9",
+              ".options output initial_interval=1p",
               f".print tran format=csv V(q) V(bl0) V(bln0) V(sae)", ".end"]  # fmt: skip
     return "\n".join(lines) + "\n", stop
 
 
-def split_times(cells, stored, deck, io, model, wire_ff, window, margins, work: Path):
+def split_times(cells, stored, deck, io, model, wire_ff, window, margins, work: Path, wire_ohm=0.0):
     """(the bit Q settles to or None, {margin mV: ps from the wordline's VDD/2 to that split, or None})."""
     tag = f"c{cells}_s{stored}"
     work.mkdir(parents=True, exist_ok=True)
-    text, stop = column_deck(cells, window, stored, deck, io, model, wire_ff)
+    text, stop = column_deck(cells, window, stored, deck, io, model, wire_ff, wire_ohm)
     path = work / f"{tag}.cir"
     path.write_text(sm.for_xyce(text))
-    subprocess.run([str(sm.find_xyce()), path.name], cwd=work, stdout=subprocess.DEVNULL,
+    subprocess.run([str(sm.find_xyce()), path.name], cwd=work, stdout=subprocess.DEVNULL, env=xyce_env(),
                    stderr=subprocess.STDOUT, check=False, timeout=36000)  # fmt: skip
     waves = sm.read_csv(work / f"{tag}.cir.csv")
     time, bl, bln = waves["TIME"], waves["V(BL0)"], waves["V(BLN0)"]
@@ -126,9 +161,9 @@ def split_times(cells, stored, deck, io, model, wire_ff, window, margins, work: 
     return bit, found
 
 
-def measure(cells, deck, io, model, wire_ff, window, margins, work):
+def measure(cells, deck, io, model, wire_ff, window, margins, work, wire_ohm=0.0):
     """Per margin, the slower stored value's time; None if a value reads wrong or never splits that far."""
-    runs = {s: split_times(cells, s, deck, io, model, wire_ff, window, margins, work) for s in (0, 1)}
+    runs = {s: split_times(cells, s, deck, io, model, wire_ff, window, margins, work, wire_ohm) for s in (0, 1)}
     if runs[0][0] == runs[1][0] or None in (runs[0][0], runs[1][0]):
         return {mv: None for mv in margins}, {s: r[0] for s, r in runs.items()}
     times = {}
@@ -143,6 +178,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cells", default="16,32,64,128,256,512", help="bitline lengths (cells)")
     parser.add_argument("--deck", type=Path, default=None, help="a compiled 6T macro's .sp (default: the newest)")
     parser.add_argument("--wire-ff", type=float, default=0.02, help="bitline wire capacitance per cell, fF")
+    parser.add_argument("--wire-ohm", type=float, default=WIRE_OHM_PER_CELL,
+                        help="bitline wire resistance per cell, ohm (0: one lumped node)")
     parser.add_argument("--corner", choices=("TT", "SS", "FF"), default="TT")
     parser.add_argument("--out", type=Path, default=REPO / "tmp/sense_timing_6t")
     parser.add_argument("--margins-mv", default="25,50,100", help="bitline splits to time, mV")
@@ -164,8 +201,8 @@ def main(argv: list[str] | None = None) -> int:
     lengths = [int(c) for c in args.cells.split(",")]
     with futures.ThreadPoolExecutor(args.jobs) as pool:
         found = dict(zip(lengths, pool.map(lambda c: measure(c, deck, io, model, args.wire_ff, args.window,
-                                                             margins, args.out / f"c{c}"), lengths)))  # fmt: skip
-    result = {"corner": args.corner, "vdd": VDD, "wire_ff_per_cell": args.wire_ff, "deck": str(deck_path),
+                                                             margins, args.out / f"c{c}", args.wire_ohm), lengths)))  # fmt: skip
+    result = {"corner": args.corner, "vdd": VDD, "wire_ff_per_cell": args.wire_ff, "wire_ohm_per_cell": args.wire_ohm, "deck": str(deck_path),
               "window_ps": args.window, "reads": {str(c): bits for c, (_, bits) in found.items()},
               "wl_to_split_ps": {str(c): {f"{mv:g}mV": t for mv, t in times.items()}
                                  for c, (times, _) in found.items()}}  # fmt: skip

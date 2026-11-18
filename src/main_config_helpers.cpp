@@ -39,6 +39,27 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         .default_value(unsigned{0})
         .scan<'u', unsigned>();
 
+    program.add_argument("--outer-strips")
+        .help("Generated 6T, standard floorplan: a wordline driver strip at each stack's far "
+              "end too, so every wordline segment is driven from both ends by slices sized for "
+              "half of it.  Segments twice as long (--segment-bits) then keep their wordline "
+              "delay with about half the strips.")
+        .default_value(false)
+        .implicit_value(true);
+
+    program.add_argument("--select-buffers")
+        .help("Generated 6T: re-drive the predecode lines (sel_lo) at every wordline strip, "
+              "from a row of standard buffers under its slices.  auto (default): when one "
+              "controller output cannot drive them all; on; off.")
+        .default_value(std::string("auto"));
+
+    program.add_argument("--precharge-buffers")
+        .help("Generated 6T: re-drive the bitline precharge line (blprechn) at every wordline "
+              "strip for the strip's own wordline segment, from one more buffer in the select "
+              "buffers' row (turns --select-buffers on).  auto (default): when one controller "
+              "output cannot drive every column's precharge; on; off.")
+        .default_value(std::string("auto"));
+
     program.add_argument("--share-port-b")
         .help("Two-port: banks in pairs share port B's sense amplifier, write driver "
               "and output latch, the pair's arrays mirrored about one two-sided IO block. "
@@ -161,6 +182,7 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     options.bitcell_6t            = bitcell == "6t";
     options.segment_bits          = program.get<unsigned>("--segment-bits");
     options.strips_in_controller  = program.get<bool>("--strips-in-controller");
+    options.outer_strips          = program.get<bool>("--outer-strips");
     options.row_predecode_bits    = program.get<unsigned>("--row-predecode-bits");
     options.skip_characterization = program.get<bool>("--skip-characterization");
     options.num_wl_buf            = program.get<unsigned>("--num-wl-buf");
@@ -221,6 +243,11 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         }
     }
     if (options.segment_bits >= options.num_data_bits / 2) options.segment_bits = 0;
+    if (options.outer_strips && (!options.bitcell_6t || options.strips_in_controller)) {
+        LOGE << "Error: --outer-strips is for the generated 6T macro's standard floorplan "
+             << "(--bitcell 6t without --strips-in-controller).";
+        std::exit(1);
+    }
     if (options.bitcell_6t && options.num_rows_per_mux != 4 && options.num_rows_per_mux != 8 &&
         options.num_rows_per_mux != 16) {
         LOGE << "Error: --bitcell 6t's IO block is 4:1, 8:1 or 16:1 (--num-rows-per-mux).";
@@ -266,6 +293,74 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
         LOGE << "Error: --share-port-b needs the two-port macro and at least two banks.";
         std::exit(1);
     }
+    const std::string select_buffers = program.get<std::string>("--select-buffers");
+    if (select_buffers != "auto" && select_buffers != "on" && select_buffers != "off") {
+        LOGE << "Error: --select-buffers is auto, on or off, got " << select_buffers;
+        std::exit(1);
+    }
+    const bool can_buffer = options.bitcell_6t && 2 * options.num_wls / 4 >= kSelectBufferMinSlices;
+    if (select_buffers == "on" && !can_buffer) {
+        LOGE << "Error: --select-buffers on is for the generated 6T macro with at least "
+             << 4 * kSelectBufferMinSlices << " wordlines (--num-wls " << 2 * kSelectBufferMinSlices << ").";
+        std::exit(1);
+    }
+    if (options.bitcell_6t && select_buffers != "off") {
+        const double unbuffered = six_t_port_loads_pf(options).at("sel_lo_A");
+        options.select_buffers = select_buffers == "on" || (can_buffer && unbuffered > kSelectLineLimitPf);
+        if (options.select_buffers) {
+            LOGI << "Select buffers at every wordline strip: sel_lo would be " << unbuffered * 1000
+                 << " fF on one controller output, now " << six_t_port_loads_pf(options).at("sel_lo_A") * 1000
+                 << " fF";
+        } else if (unbuffered > kSelectLineLimitPf) {
+            LOGW << "sel_lo is " << unbuffered * 1000 << " fF on one controller output and the strips have "
+                 << "too few slices for select buffers";
+        }
+    }
+    const std::string precharge_buffers = program.get<std::string>("--precharge-buffers");
+    if (precharge_buffers != "auto" && precharge_buffers != "on" && precharge_buffers != "off") {
+        LOGE << "Error: --precharge-buffers is auto, on or off, got " << precharge_buffers;
+        std::exit(1);
+    }
+    if (precharge_buffers == "on" && !options.bitcell_6t) {
+        LOGE << "Error: --precharge-buffers on is for the generated 6T macro (--bitcell 6t).";
+        std::exit(1);
+    }
+    if (options.bitcell_6t && precharge_buffers != "off") {
+        const double unbuffered = six_t_port_loads_pf(options).at("blprechn_A");
+        if (precharge_buffers == "on" || unbuffered > kSelectLineLimitPf) {
+            // They stand in the select buffers' row, so they need it.
+            std::string blocker;
+            if (select_buffers == "off") {
+                blocker = "--select-buffers off leaves no row for them";
+            } else if (precharge_buffer_cell(options).empty()) {
+                blocker = "a wordline segment's precharge is "
+                    + std::to_string(int(precharge_segment_load_pf(options) * 1000 + 0.5))
+                    + " fF, past one buffer: use fewer bits a segment (--segment-bits)";
+            } else if (!precharge_buffer_fits(2 * options.num_wls / 4, precharge_buffer_cell(options))) {
+                blocker = "a strip of " + std::to_string(2 * options.num_wls / 4) + " slices has no room in its row for "
+                    + precharge_buffer_cell(options) + " (its select buffers come in groups of at most 16 slices, and "
+                    + "the smallest needs " + std::to_string(precharge_buffer_min_group(precharge_buffer_cell(options)))
+                    + ")";
+            }
+            if (blocker.empty()) {
+                options.precharge_buffers = true;
+                if (!options.select_buffers) {
+                    options.select_buffers = true;
+                    LOGI << "Select buffers at every wordline strip: the precharge buffers stand in their row";
+                }
+                LOGI << "Precharge buffers at every wordline strip (" << precharge_buffer_cell(options)
+                     << ", " << precharge_segment_load_pf(options) * 1000 << " fF a segment): blprechn would be "
+                     << unbuffered * 1000 << " fF on one controller output, now "
+                     << six_t_port_loads_pf(options).at("blprechn_A") * 1000 << " fF";
+            } else if (precharge_buffers == "on") {
+                LOGE << "Error: --precharge-buffers on: " << blocker << ".";
+                std::exit(1);
+            } else {
+                LOGW << "blprechn is " << unbuffered * 1000 << " fF on one controller output and cannot be "
+                     << "re-driven at the strips: " << blocker;
+            }
+        }
+    }
 
     LOGD << "Configuration: num_wls=" << options.num_wls
          << ", num_data_bits=" << options.num_data_bits
@@ -283,16 +378,66 @@ MainCliOptions parseMainCliOptions(int argc, char** argv) {
     return options;
 }
 
+std::vector<unsigned> select_buffer_groups(unsigned slices) {
+    const unsigned count = (slices + 15) / 16;
+    std::vector<unsigned> groups;
+    for (unsigned g = 0; g < count; ++g) groups.push_back(slices / count + (g < slices % count ? 1 : 0));
+    return groups;
+}
+
+std::string select_buffer_cell(unsigned slices) {
+    const std::vector<unsigned> groups = select_buffer_groups(slices);
+    unsigned least = slices;
+    for (unsigned group : groups) least = group < least ? group : least;
+    return least >= 8 ? "BUFx8_ASAP7_75t_R" : "BUFx4_ASAP7_75t_R";
+}
+
+namespace {
+constexpr double kGateFfPerFin = 0.103;  // INVx1_ASAP7: 0.62 fF on 3n+3p fins
+constexpr double kWireFfPerLoad = 0.1;
+// An IO block's bitline precharge gates: six fins a column.
+double precharge_fins_per_io(const MainCliOptions& options) { return 6.0 * options.num_rows_per_mux; }
+}  // namespace
+
+double precharge_segment_load_pf(const MainCliOptions& options) {
+    return options.wordline_segment_bits() * (precharge_fins_per_io(options) * kGateFfPerFin + kWireFfPerLoad)
+        / 1000.0;
+}
+
+std::string precharge_buffer_cell(const MainCliOptions& options) {
+    // Liberty (TT, 20 ps in): each near 100 ps of rise transition at its limit.
+    const double load = precharge_segment_load_pf(options);
+    if (load <= 0.080) return "BUFx8_ASAP7_75t_R";
+    if (load <= 0.115) return "BUFx12f_ASAP7_75t_R";
+    if (load <= kSelectLineLimitPf) return "BUFx24_ASAP7_75t_R";
+    return "";
+}
+
+unsigned precharge_buffer_min_group(const std::string& cell) {
+    // What the row has left past a group's four select buffers and its taps
+    // (scripts/compile_asap7_2rw.py, _select_buffer_row), by the cell's width.
+    if (cell == "BUFx8_ASAP7_75t_R") return 9;
+    if (cell == "BUFx12f_ASAP7_75t_R") return 10;
+    return 11;
+}
+
+bool precharge_buffer_fits(unsigned slices, const std::string& cell) {
+    if (slices < kSelectBufferMinSlices) return false;
+    unsigned least = slices;
+    for (unsigned group : select_buffer_groups(slices)) least = group < least ? group : least;
+    return least >= precharge_buffer_min_group(cell);
+}
+
 std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options) {
-    constexpr double kGateFfPerFin = 0.103;  // INVx1_ASAP7: 0.62 fF on 3n+3p fins
-    constexpr double kWireFfPerLoad = 0.1;
     const unsigned rows = 2 * options.num_wls;
     const unsigned mux = options.num_rows_per_mux;
-    const unsigned strips = 2 * options.wordline_segments();  // a strip per segment, both halves
+    // Every strip of the bank: a mid pair is two (the deck's Xwl_*_m<k>d/u),
+    // which "a strip per segment" undercounted by up to half.
+    const unsigned strips = options.wordline_strips();
     const unsigned slices = rows / 4;
     // A slice's predecode input is two NAND2 gates; the c64 slice (past 32
     // cells a wordline) doubles them (scripts/generate_asap7_8t_wl_slices.py).
-    const unsigned nand_fins = mux * options.wordline_segment_bits() > 32 ? 24 : 12;
+    const unsigned nand_fins = options.wordline_slice_cells() > 32 ? 24 : 12;
     const unsigned ios = options.num_data_bits;  // IO blocks a bank's port drives
     auto pf = [](double fins, double loads) {
         return (fins * kGateFfPerFin + loads * kWireFfPerLoad) / 1000.0;
@@ -302,6 +447,13 @@ std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options)
         {"sel_lo_A", pf(lo_loads * nand_fins, lo_loads)},
         {"sel_hi_A", pf(strips * 4.0 * nand_fins, strips)},
     };
+    if (options.select_buffers) {
+        // A buffer input a group of slices in every strip (Liberty: BUFx8's
+        // A is 0.85 fF, BUFx4's 0.54), on the strip's own rail.
+        const double buffers = double(select_buffer_groups(slices).size()) * strips * options.num_banks;
+        const double input_ff = select_buffer_cell(slices) == "BUFx8_ASAP7_75t_R" ? 0.85 : 0.54;
+        loads["sel_lo_A"] = buffers * (input_ff + kWireFfPerLoad) / 1000.0;
+    }
     // Fins per IO block (tech/spice/sram_6t_iocolumn.sp, iocol_block_6t*).
     // The compact block's 270 nm output latch drives Q through one 3-fin
     // tristate (every mux ratio).
@@ -315,8 +467,67 @@ std::map<std::string, double> six_t_port_loads_pf(const MainCliOptions& options)
     const std::map<std::string, double> io_fins = {
         {"ysel_A", predecode ? 24 : local_ysel ? 0 : 6},
         {"yseln_A", predecode ? 0 : local_ysel ? 12 : 6},
-        {"blprechn_A", 6.0 * mux}, {"sae_A", 18},
+        {"blprechn_A", precharge_fins_per_io(options)}, {"sae_A", 18},
         {"wrena_A", 6}, {"wrenan_A", 12}, {"oe_out_A", oe_fins}, {"oeb_out_A", oe_fins}};
     for (const auto& [pin, fins] : io_fins) loads[pin] = pf(fins * ios, ios);
+    if (options.precharge_buffers) {
+        // A buffer input a strip of the bank (Liberty: BUFx8's A is 0.85 fF,
+        // BUFx12f's and BUFx24's 2.3).
+        const double input_ff = precharge_buffer_cell(options) == "BUFx8_ASAP7_75t_R" ? 0.85 : 2.34;
+        loads["blprechn_A"] = strips * (input_ff + kWireFfPerLoad) / 1000.0;
+    }
     return loads;
+}
+
+double wordline_far_end_ps(unsigned cells) {
+    // Select at half swing to the far cell's wordline at half swing, one
+    // slice driving from one end: per slice class, at the shortest line the
+    // class serves and at its full one.  The wire's share grows with the
+    // square of the length, so the straight line between the two is above
+    // the curve.
+    struct Class { unsigned cells; unsigned shortest; double shortest_ps; double full_ps; };
+    static const Class classes[] = {
+        {4, 3, 8.16, 8.66}, {8, 5, 9.15, 10.57}, {16, 9, 10.95, 12.96},
+        {32, 17, 14.62, 18.34}, {64, 33, 16.83, 28.12}};
+    const Class* entry = &classes[4];  // past 64 cells: the c64 line carried on
+    for (const Class& c : classes) {
+        if (cells <= c.cells) { entry = &c; break; }
+    }
+    if (cells <= entry->shortest) return entry->shortest_ps;
+    return entry->shortest_ps + (entry->full_ps - entry->shortest_ps) * double(cells - entry->shortest)
+        / double(entry->cells - entry->shortest);
+}
+
+double bitline_split_ps(unsigned cells) {
+    // Wordline at half swing to kSenseSplitMv between the pair at the IO
+    // block, by cells a bitline; straight lines between the measured
+    // lengths (above the curve, which bends upward), the last carried on.
+    static const std::pair<unsigned, double> points[] = {
+        {16, 10.0}, {32, 12.0}, {64, 17.0}, {128, 29.0}, {256, 55.0}, {512, 128.0}, {1024, 436.0}};
+    if (cells <= points[0].first) return points[0].second;
+    const size_t count = sizeof(points) / sizeof(points[0]);
+    size_t upper = 1;
+    while (upper + 1 < count && cells > points[upper].first) ++upper;
+    const auto& [x0, y0] = points[upper - 1];
+    const auto& [x1, y1] = points[upper];
+    return y0 + (y1 - y0) * double(cells - x0) / double(x1 - x0);
+}
+
+SenseGapNeed sense_gap_need(const MainCliOptions& options) {
+    SenseGapNeed need;
+    need.wordline_ps = wordline_far_end_ps(options.wordline_slice_cells());
+    need.bitline_ps = bitline_split_ps(2 * options.num_wls);
+    if (options.select_buffers) {
+        // The strip's buffer into its largest group of slices (the loads
+        // six_t_port_loads_pf counts a slice): BUFx8 35.5 ps + 0.52 ps/fF,
+        // BUFx4 37.8 ps + 0.93 ps/fF.
+        const unsigned slices = 2 * options.num_wls / 4;
+        unsigned most = 0;
+        for (unsigned group : select_buffer_groups(slices)) most = group > most ? group : most;
+        const unsigned nand_fins = options.wordline_slice_cells() > 32 ? 24 : 12;
+        const double load_ff = most * (nand_fins * kGateFfPerFin + kWireFfPerLoad);
+        need.select_buffer_ps = select_buffer_cell(slices) == "BUFx8_ASAP7_75t_R"
+            ? 35.5 + 0.52 * load_ff : 37.8 + 0.93 * load_ff;
+    }
+    return need;
 }
